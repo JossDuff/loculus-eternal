@@ -491,9 +491,12 @@ publication** and are **not republished** when Pathoplexus reprocesses old entri
 newer pipeline; that keeps the stream strictly append-only and the cost proportional to new
 data. A `REPROCESSED` record type ID is reserved in the format for a future decision to
 republish processed fields; not implemented in v1.
-*Open sub-item found while pinning the schema:* the backend also serves `dataUseTermsUrl`
-(always the open-data terms URL for anything we publish) and `dataBecameOpenAt`. Default:
-remove `dataUseTermsUrl` with the other terms fields; keep `dataBecameOpenAt`.
+*Sub-item DECIDED 2026-09-30 (delegated: "whichever is best for recovering the data into a
+database"):* the backend also serves `dataUseTermsUrl` and `dataBecameOpenAt`.
+`dataUseTermsUrl` is **removed**: it is a constant derived from the instance configuration
+(the open-data terms URL for everything we publish) and a Loculus database does not store it.
+`dataBecameOpenAt` is **kept**: it is the only record of when the entry's terms changed to
+open, which a database restore needs to rebuild the data-use-terms history.
 
 **Compression — DECIDED 2026-09-30: zstd per batch body, no dictionary, codec ID recorded
 per batch.** Sequence NDJSON compresses very well and every blob avoided is money saved. Zstd

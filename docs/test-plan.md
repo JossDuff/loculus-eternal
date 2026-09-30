@@ -59,5 +59,5 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ## Process checks (in force from the groundwork phase)
 
-- **P1 — no numbered references.** `grep -rnE 'M[0-9]|§' README.md CLAUDE.md docs/ loculus-eternal-PLAN.md src/ tests/ contracts/src/` returns nothing.
+- **P1 — no numbered references.** No human-facing file (README, CLAUDE.md, docs, the plan file, source, tests, contract sources) contains a milestone reference (the letter M followed by a digit) or a section sign. The check is a grep for those two patterns and must return nothing.
 - **P2 — no secrets.** No private key, token, or password appears anywhere in the tree; the publisher key is read only from `LOCULUS_ETERNAL_PUBLISHER_KEY`.
