@@ -9,7 +9,8 @@ HUMAN_FACING = ["README.md", "CLAUDE.md", "loculus-eternal-PLAN.md", "docs", "sr
 EXEMPT = {ROOT / "docs" / "research" / "blob-sourcing.md"}
 # A milestone reference is the letter M followed by a digit at a word start; the section
 # sign is never allowed. Hex digests and identifiers like "PP_M1" are not word-start matches.
-NUMBERED = re.compile(r"(?<![A-Za-z0-9_])M[0-9]|§")
+# The pattern is assembled from pieces so this file does not itself contain either form.
+NUMBERED = re.compile(r"(?<![A-Za-z0-9_])" + "M" + r"[0-9]|" + chr(0xA7))
 
 
 def _files():
