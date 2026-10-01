@@ -22,6 +22,7 @@ from pathlib import Path
 
 from loculus_eternal import kzg
 from loculus_eternal.format.chunks import BLOB_BYTES, BLOB_DATA_BYTES, pack_blobs, unpack_blob
+from loculus_eternal.sources.local import LocalDirectorySource
 
 
 class StoreError(RuntimeError):
@@ -134,7 +135,7 @@ class BlobStore:
         for seq, vh in sorted(self.have.items()):
             blob = self.read_blob(seq)
             if blob is not None:
-                (out / (vh.hex() + ".blob")).write_bytes(blob)
+                (out / LocalDirectorySource.filename(vh)).write_bytes(blob)
                 n += 1
         return n
 

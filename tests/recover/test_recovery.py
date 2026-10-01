@@ -271,3 +271,68 @@ url = "{stub.url}"
     assert_recovered_matches(published, tmp_path / "out")
     run_report = json.loads((tmp_path / "data" / "run-report.json").read_text())
     assert run_report["missing"] == []
+
+
+def test_R4_missing_blob_zero_is_reported_not_a_crash(published, tmp_path):
+    stub = published["stub"]
+    first = kzg.blob_to_versioned_hash(published["blobs"][0])
+    stub.withhold.add(first)
+    try:
+        report = Recovery(config(published, tmp_path, [BlobscanSource(stub.url)])).run()
+    finally:
+        stub.withhold.discard(first)
+    assert [m["seq"] for m in report.missing] == [0]
+    assert report.blobs_present == len(published["blobs"]) - 1
+    assert "blob 0 is missing" in report.decode["skipped"] and report.decode["allArtifactsMatch"] is False
+
+
+def test_R10_unverified_run_does_not_overwrite_a_saved_manifest(published, tmp_path):
+    anvil = published["anvil"]
+    good = Recovery(config(published, tmp_path, [BlobscanSource(published["stub"].url)], decode=False)).run()
+    saved = tmp_path / "data" / "manifest.json"
+    before = saved.read_bytes()
+    assert good.missing == [] and json.loads(before)["blobs"]
+    # Logs gone and only a corrupt file offered: nothing verifies, and the saved copy survives.
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"blobs": []}))
+    flaky = FlakyProvider(Web3.HTTPProvider(anvil.url), fail_methods={"eth_getLogs"}, fail_count=10**6)
+    cfg = config(published, tmp_path, [BlobscanSource(published["stub"].url)], manifest_sources=[ManifestSource(logs=True), ManifestSource(file=bad)], decode=False)
+    failed = Recovery(cfg, w3=Web3(flaky)).run()
+    assert failed.manifest_source is None and len(failed.manifest_errors) == 2
+    assert saved.read_bytes() == before
+    # And the saved manifest rescues the next run with logs still gone.
+    cfg = config(published, tmp_path, [BlobscanSource(published["stub"].url)], manifest_sources=[ManifestSource(logs=True), ManifestSource(file=saved)])
+    rescued = Recovery(cfg, w3=Web3(flaky)).run()
+    assert rescued.manifest_source == f"file {saved}" and rescued.missing == []
+
+
+def test_R12_single_block_log_failures_are_retried_and_the_scan_advances(published):
+    anvil = published["anvil"]
+    # Every eth_getLogs fails on its first attempt, including single-block pages.
+    class Alternating(FlakyProvider):
+        def make_request(self, method, params):
+            self.calls.append(method)
+            if method == "eth_getLogs" and self.calls.count("eth_getLogs") % 2 == 1:
+                self.failures += 1
+                raise ConnectionError("every other logs call fails")
+            return self.inner.make_request(method, params)
+
+    flaky = Alternating(Web3.HTTPProvider(anvil.url), fail_methods=set(), fail_count=0)
+    reader = ChainReader(Web3(flaky), anvil.contract.address, max_page=1, sleep=lambda s: None)
+    state = reader.state_at_finalized()
+    refs = reader.blob_refs_from_logs(0, state.block_number)
+    verify_manifest(refs, state)
+    # Each block costs one failing and one succeeding call, never more.
+    assert flaky.calls.count("eth_getLogs") == 2 * (state.block_number + 1)
+
+
+def test_R4_adapter_exception_is_an_error_attempt(published, tmp_path):
+    class Broken:
+        name = "broken"
+
+        def fetch(self, ctx, wanted):
+            raise PermissionError("stale NFS handle")
+
+    report = Recovery(config(published, tmp_path, [Broken(), BlobscanSource(published["stub"].url)])).run()
+    assert report.missing == []
+    assert_recovered_matches(published, tmp_path / "out")

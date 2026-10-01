@@ -166,11 +166,11 @@ class ChainReader:
             try:
                 logs = event.get_logs(from_block=start, to_block=end)
             except Exception:
-                if page == 1:
-                    # Even a single block fails: give the provider a moment, then keep trying.
-                    self._retry(f"reading logs for block {start}", lambda: event.get_logs(from_block=start, to_block=start))
-                page = max(1, page // 2)
-                continue
+                if page > 1:
+                    page //= 2
+                    continue
+                # Even a single block fails: back off and retry that one block until it works.
+                logs = self._retry(f"reading logs for block {start}", lambda: event.get_logs(from_block=start, to_block=start))
             for log in logs:
                 refs.append(
                     BlobRef(

@@ -84,8 +84,12 @@ class SourceChain:
                 break
             try:
                 candidates = source.fetch(ctx, remaining)
-            except SourceError as e:
-                result.attempts.append(Attempt(source.name, "error", str(e)))
+            except Exception as e:
+                # SourceError is the adapter saying so; anything else (an unreadable file, a
+                # malformed URL, a bug in a response parser) is treated the same way, because
+                # one bad source must never stop the others from being asked.
+                kind = "" if isinstance(e, SourceError) else f"{type(e).__name__}: "
+                result.attempts.append(Attempt(source.name, "error", kind + str(e)))
                 continue
             accepted, rejected = verify_candidates(candidates, set(remaining))
             result.rejected += rejected

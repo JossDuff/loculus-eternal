@@ -10,9 +10,10 @@ from pathlib import Path
 
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, LocalDirectorySource
-from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT
+from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
+from loculus_eternal.sources.blobscan import PUBLIC_API
 
-KNOWN_GENESIS = {1: MAINNET_GENESIS_TIME, 11155111: 1655733600}
+KNOWN_GENESIS = {1: MAINNET_GENESIS_TIME, 11155111: SEPOLIA_GENESIS_TIME}
 
 
 def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) -> list:
@@ -23,7 +24,7 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         if kind == "beacon":
             out.append(BeaconSource(s["endpoints"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "blobscan":
-            out.append(BlobscanSource(s.get("url", "https://api.blobscan.com")))
+            out.append(BlobscanSource(s.get("url", PUBLIC_API)))
         elif kind == "blob-archiver":
             out.append(BlobArchiverSource(s["url"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "local":

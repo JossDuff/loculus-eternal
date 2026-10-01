@@ -19,6 +19,8 @@ from web3 import Web3
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
 from loculus_eternal.sources.base import BlobContext, BlobSource, SourceChain
+from loculus_eternal.format.chunks import ChunkError
+from loculus_eternal.format.records import FormatError
 from loculus_eternal.store import BlobStore, VerificationFailed
 
 
@@ -123,7 +125,10 @@ class Recovery:
                     continue
                 try:
                     store.write(r.seq, r.versioned_hash, blob)
-                except VerificationFailed as e:  # cannot happen after verify_candidates, kept as a guard
+                except (VerificationFailed, ChunkError) as e:
+                    # VerificationFailed cannot happen after verify_candidates; ChunkError can,
+                    # for a blob that is genuinely on-chain but has a non-zero element high
+                    # byte, which the stream format forbids. Either way: report, do not crash.
                     missing.append({**r.to_json(), "tried": [a.__dict__ for a in result.attempts], "error": str(e)})
                     continue
                 fetched += 1
@@ -134,11 +139,12 @@ class Recovery:
         out = self.cfg.out_dir
         out.mkdir(parents=True, exist_ok=True)
         verified = decoded.verify_artifacts()
+        digests = decoded.artifact_digests()
         files = {}
         for org in sorted(decoded.entries):
             path = out / f"{org}.ndjson"
             path.write_bytes(decoded.materialise(org))
-            files[org] = {"path": str(path), "entries": len(decoded.entries[org]), "sha256": decoded.artifact_digests()[org], "matchesManifest": verified.get(org)}
+            files[org] = {"path": str(path), "entries": len(decoded.entries[org]), "sha256": digests[org], "matchesManifest": verified.get(org)}
         report = {
             "header": None if decoded.header is None else {"chainId": decoded.header.chain_id, "contract": "0x" + decoded.header.contract.hex(), "schemaId": decoded.header.schema_id, "version": f"{decoded.header.major}.{decoded.header.minor}"},
             "batches": [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "blobCountAfter": b.blob_count_after, "entries": b.entry_count, "hasIndex": b.index is not None} for b in decoded.batches],
@@ -162,11 +168,23 @@ class Recovery:
         with BlobStore(self.cfg.data_dir) as store:
             present_before = store.count()
             fetched, rejected, missing = self.fetch_blobs(refs, store) if refs else (0, 0, [])
-            (self.cfg.data_dir / "missing.json").write_text(json.dumps(missing, indent=1))
-            (self.cfg.data_dir / "manifest.json").write_text(json.dumps({"blobCount": state.blob_count, "head": "0x" + state.head.hex(), "blockNumber": state.block_number, "blobs": [r.to_json() for r in refs]}, indent=0))
+            if manifest_source is not None:
+                # Only a verified list is worth keeping: the saved manifest is the natural
+                # fallback for a later run against a node that no longer serves old logs, so
+                # it must never be replaced by an empty or unverified one.
+                (self.cfg.data_dir / "missing.json").write_text(json.dumps(missing, indent=1))
+                (self.cfg.data_dir / "manifest.json").write_text(json.dumps({"blobCount": state.blob_count, "head": "0x" + state.head.hex(), "blockNumber": state.block_number, "blobs": [r.to_json() for r in refs]}, indent=0))
             decode_report = None
             if self.cfg.decode and refs:
-                _, decode_report = self.decode(store, len(refs))
+                if any(m["seq"] == 0 for m in missing):
+                    decode_report = {"skipped": "blob 0 is missing, so the stream header cannot be read; nothing can be decoded until it is recovered", "allArtifactsMatch": False}
+                    self.cfg.log(decode_report["skipped"])
+                else:
+                    try:
+                        _, decode_report = self.decode(store, len(refs))
+                    except FormatError as e:
+                        decode_report = {"skipped": f"decoding failed: {e}", "allArtifactsMatch": False}
+                        self.cfg.log(decode_report["skipped"])
             report = RecoveryReport(
                 chain={"contract": self.cfg.contract, "blockNumber": state.block_number, "blobCount": state.blob_count, "head": "0x" + state.head.hex(), "appPointer": "0x" + state.app_pointer.hex(), "publisher": state.publisher},
                 manifest_source=manifest_source,
