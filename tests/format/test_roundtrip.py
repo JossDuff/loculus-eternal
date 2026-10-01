@@ -55,23 +55,23 @@ def test_F13_encode_decode_round_trip(first, second, codec):
     b0 = enc.encode_batch(first, codec=codec)
     dec0 = StreamDecoder(b0.blobs).decode()
     assert not dec0.torn and all(dec0.verify_artifacts().values())
-    assert {o: set(items) for o, items in dec0.entries.items()} == _expected_keys(first)
+    assert {o: set(dec0.store.index[o]) for o in dec0.organisms()} == _expected_keys(first)
 
     if second:
-        b1 = enc.encode_batch(second, previous_entries=dec0.payloads, codec=codec)
+        b1 = enc.encode_batch(second, previous_entries=dec0.records, codec=codec)
         dec = StreamDecoder(b0.blobs + b1.blobs).decode()
         assert not dec.torn and all(dec.verify_artifacts().values())
-        assert {o: set(items) for o, items in dec.entries.items()} == _expected_keys(first + second)
+        assert {o: set(dec.store.index[o]) for o in dec.organisms()} == _expected_keys(first + second)
         # Every decoded payload is the canonical form of the input entry.
         for e in first + second:
             org, acc, ver = Entry.key(e)
-            assert dec.entries[org][(acc, ver)][0] == canonical.dumps(e)
+            assert dec.payload(org, acc, ver) == canonical.dumps(e)
         # Resuming an encoder from the decoded stream reproduces the encoder's own state.
         resumed = dec.encoder_state()
         assert resumed.next_batch == 2 and resumed.next_blob_seq == b1.blob_count_after
         assert resumed.previous_manifest_digest == b1.manifest_digest
         assert resumed.published == enc.state.published
-        for org in dec.entries:
+        for org in dec.organisms():
             assert hashlib.sha256(dec.materialise(org)).hexdigest() == b1.manifest["organisms"][org]["artifactSha256"]
 
 

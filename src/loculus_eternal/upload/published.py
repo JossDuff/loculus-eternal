@@ -37,13 +37,13 @@ class PublishedView:
     torn_blobs: int               # blobs on chain after the last complete batch
 
     def is_published(self, organism: str, accession: str, version: int) -> bool:
-        return (accession, version) in self.decoded.entries.get(organism, {})
+        return self.decoded.has(organism, accession, version)
 
     def previous_entries(self, organism: str):
-        return self.decoded.payloads(organism)
+        return self.decoded.records(organism)
 
 
-def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: BlobStore, *, deployment_block: int = 0, log=print) -> PublishedView:
+def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: BlobStore, *, deployment_block: int = 0, spill_dir: Path | None = None, log=print) -> PublishedView:
     reader = ChainReader(w3, contract)
     state = reader.state_at_finalized()
     refs = reader.blob_refs_from_logs(deployment_block, state.block_number) if state.blob_count else []
@@ -59,7 +59,7 @@ def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: Bl
             "The upload command needs the whole stream to know what is already published; add a source that has it."
         )
 
-    decoded = StreamDecoder(store.blobs(state.blob_count)).decode() if state.blob_count else StreamDecoder([]).decode()
+    decoded = StreamDecoder(store.blobs(state.blob_count), spill_dir=spill_dir).decode()
     enc_state = decoded.encoder_state()
     # The next batch starts after every blob the contract has recorded, including torn ones.
     enc_state.next_blob_seq = state.blob_count
