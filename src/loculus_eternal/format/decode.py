@@ -3,18 +3,30 @@
 The decoder trusts nothing about the stream beyond the bytes: every declared length and
 digest is recomputed, a batch that fails any check is torn and contributes nothing, and the
 decoder resynchronises at the next blob boundary that carries the batch it expects.
+
+Entries never sit in memory. Each batch body is decompressed as a stream, its entries are
+written to a sorted run file, and the cumulative digests are checked by merging that run
+with the runs already accepted. Only the keys are kept in memory.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
+import tempfile
 from dataclasses import dataclass, field
-from typing import Sequence
+from pathlib import Path
+from typing import BinaryIO, Iterator, Sequence
+
+import zstandard
 
 from loculus_eternal.format import canonical
 from loculus_eternal.format.chunks import BLOB_DATA_BYTES, unpack_blob
-from loculus_eternal.format.encode import EncoderState, Entry, sort_key_from_payload
+from loculus_eternal.format.encode import EncoderState, Entry
+from loculus_eternal.format.entrystore import EntryStore
 from loculus_eternal.format.records import (
+    CODEC_RAW,
+    CODEC_ZSTD,
     DIGEST_BYTES,
     INNER_MAX,
     INNER_MIN,
@@ -27,6 +39,7 @@ from loculus_eternal.format.records import (
     read_record,
     sha256,
 )
+from loculus_eternal.format.runs import BodyRecordReader, ExternalSorter, Record
 
 
 class Torn(FormatError):
@@ -58,27 +71,48 @@ class DecodedBatch:
 @dataclass
 class DecodedStream:
     header: Header | None
+    store: EntryStore
     batches: list[DecodedBatch] = field(default_factory=list)
     torn: list[TornBatch] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    # organism -> (accession, version) -> (payload, batch)
-    entries: dict[str, dict[tuple[str, int], tuple[bytes, int]]] = field(default_factory=dict)
     schemas: dict[str, dict] = field(default_factory=dict)
     tooling: dict[str, bytes] = field(default_factory=dict)
     blobs_consumed: int = 0
+    _cleanup: object = field(default=None, repr=False)
+
+    # --- entries ----------------------------------------------------------------------------
+
+    def organisms(self) -> list[str]:
+        return self.store.organisms()
+
+    def has(self, organism: str, accession: str, version: int) -> bool:
+        return self.store.has(organism, accession, version)
+
+    def count(self, organism: str) -> int:
+        return self.store.count(organism)
+
+    def records(self, organism: str) -> Iterator[Record]:
+        """(accession, version, payload) in materialisation order, streamed from disk."""
+        return self.store.iter_records(organism)
 
     def payloads(self, organism: str) -> list[bytes]:
-        """An organism's entry payloads in materialisation order."""
-        return _payloads(self.entries.get(organism, {}))
+        """Every payload in materialisation order, in memory. For tests and small streams."""
+        return [p for _, _, p in self.records(organism)]
+
+    def payload(self, organism: str, accession: str, version: int) -> bytes | None:
+        return self.store.payload(organism, accession, version)
+
+    def materialise_to(self, organism: str, out: BinaryIO) -> str:
+        return self.store.materialise_to(organism, out)
 
     def materialise(self, organism: str) -> bytes:
-        return _materialise(self.entries.get(organism, {}))
+        return self.store.materialise(organism)
 
     def artifact_digests(self) -> dict[str, str]:
-        return {o: hashlib.sha256(self.materialise(o)).hexdigest() for o in sorted(self.entries)}
+        return {o: self.store.digest(o) for o in self.organisms()}
 
     def verify_artifacts(self) -> dict[str, bool]:
-        """Compare materialised files against the last manifest's cumulative digests."""
+        """Compare the materialised files against the last manifest's cumulative digests."""
         if not self.batches:
             return {}
         last = self.batches[-1].manifest["organisms"]
@@ -87,8 +121,8 @@ class DecodedStream:
 
     def published(self) -> dict[str, dict[str, list[list[int]]]]:
         out: dict[str, dict[str, list[list[int]]]] = {}
-        for org, items in self.entries.items():
-            for (acc, ver), (_, batch) in items.items():
+        for org, idx in self.store.index.items():
+            for (acc, ver), batch in idx.items():
                 out.setdefault(org, {}).setdefault(acc, []).append([ver, batch])
         for accs in out.values():
             for vs in accs.values():
@@ -111,18 +145,21 @@ class DecodedStream:
             previous_manifest_digest=last.manifest_digest,
             published=self.published(),
             schemas=dict(self.schemas),
-            entries_total={o: len(items) for o, items in self.entries.items()},
+            entries_total={o: self.store.count(o) for o in self.organisms()},
             bytes_since_index=bytes_since_index,
         )
 
+    def close(self) -> None:
+        """Remove the spill directory if the decoder created a temporary one."""
+        if self._cleanup is not None:
+            self._cleanup.cleanup()
+            self._cleanup = None
 
-def _payloads(items: dict[tuple[str, int], tuple[bytes, int]]) -> list[bytes]:
-    """Payloads sorted by accession (bytewise) then numeric version."""
-    return [p for (_, _), (p, _) in sorted(items.items(), key=lambda kv: kv[0])]
+    def __enter__(self):
+        return self
 
-
-def _materialise(items: dict[tuple[str, int], tuple[bytes, int]]) -> bytes:
-    return b"".join(p + b"\n" for p in _payloads(items))
+    def __exit__(self, *exc):
+        self.close()
 
 
 class _Cursor:
@@ -142,7 +179,6 @@ class _Cursor:
 
     def record(self) -> tuple[int, bytes]:
         try:
-            # Peek enough for the length prefix, then validate the whole extent.
             self._check(self.pos, min(self.pos + 11, len(self.data)))
             record_type, payload, end = read_record(self.data, self.pos)
         except FormatError as e:
@@ -152,9 +188,22 @@ class _Cursor:
         return record_type, payload
 
 
+def _body_stream(codec: int, body: bytes) -> BinaryIO:
+    if codec == CODEC_RAW:
+        return io.BytesIO(body)
+    if codec == CODEC_ZSTD:
+        return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(body), read_across_frames=False)
+    raise Torn(f"unknown codec {codec}")
+
+
 class StreamDecoder:
-    def __init__(self, blobs: Sequence[bytes | None]):
-        """blobs[i] is blob i's 131,072 bytes, or None if it could not be obtained."""
+    def __init__(self, blobs: Sequence[bytes | None], spill_dir: Path | None = None, sort_buffer_bytes: int | None = None):
+        """blobs[i] is blob i's 131,072 bytes, or None if it could not be obtained.
+
+        Entries are spilled under `spill_dir` (a fresh temporary directory by default, removed
+        when the returned stream is closed). `sort_buffer_bytes` bounds the memory used to sort
+        a batch whose entries are not already in order.
+        """
         parts = []
         self.missing: set[int] = set()
         for i, b in enumerate(blobs):
@@ -165,9 +214,16 @@ class StreamDecoder:
                 parts.append(unpack_blob(b))
         self.data = b"".join(parts)
         self.blob_count = len(blobs)
+        self._tmp = None
+        if spill_dir is None:
+            self._tmp = tempfile.TemporaryDirectory(prefix="loculus-eternal-decode-")
+            spill_dir = Path(self._tmp.name)
+        self.spill_dir = Path(spill_dir)
+        self.sort_buffer_bytes = sort_buffer_bytes
 
     def decode(self) -> DecodedStream:
-        out = DecodedStream(header=None)
+        store = EntryStore(self.spill_dir / "entries")
+        out = DecodedStream(header=None, store=store, _cleanup=self._tmp)
         cur = _Cursor(self.data, self.missing)
         if self.blob_count == 0:
             return out
@@ -192,7 +248,6 @@ class StreamDecoder:
             try:
                 decoded = self._decode_batch(cur, expected_batch, previous_digest, blob, out)
             except Torn as e:
-                # Resynchronise: scan following blob boundaries for the batch we expect.
                 next_blob = self._find_resync(blob + 1, expected_batch, previous_digest)
                 last = (next_blob if next_blob is not None else self.blob_count) - 1
                 out.torn.append(TornBatch(expected_batch, blob, last, str(e)))
@@ -243,10 +298,6 @@ class StreamDecoder:
             raise Torn(f"expected a body record, found record type {t:#x}")
         if len(body) != begin.compressed_length or sha256(body) != begin.body_digest:
             raise Torn("body length or digest does not match the batch header")
-        try:
-            inner = decompress(begin.codec, body, begin.uncompressed_length)
-        except FormatError as e:
-            raise Torn(str(e)) from e
 
         t, payload = cur.record()
         index = None
@@ -283,59 +334,73 @@ class StreamDecoder:
         if any(self.data[cur.pos:pad_end]):
             raise Torn("bytes after the manifest are not zero")
 
-        # Everything structural verified; now take the inner records into the result.
+        # Everything structural verified. Stream the body: schemas and tooling are small and
+        # kept in memory; entries go to one staged sorted run per organism.
         schemas: dict[str, dict] = {}
         tooling: dict[str, bytes] = {}
+        sorters: dict[str, ExternalSorter] = {}
+        keys: dict[str, list[tuple[str, int]]] = {}
+        warnings: list[str] = []
         count = 0
-        staged: list[tuple[str, str, int, bytes]] = []
-        pos = 0
-        while pos < len(inner):
-            try:
-                it, ipayload, pos = read_record(inner, pos)
-            except FormatError as e:
-                raise Torn(f"inner records are malformed: {e}") from e
-            if it == RecordType.ENTRY:
-                try:
-                    entry = canonical.loads(ipayload)
-                    Entry.validate(entry)
-                except (ValueError, FormatError) as e:
-                    raise Torn(f"entry is invalid: {e}") from e
-                if not canonical.is_canonical(ipayload):
-                    raise Torn("entry is not canonical JSON")
-                org, acc, ver = Entry.key(entry)
-                staged.append((org, acc, ver, ipayload))
-            elif it == RecordType.SCHEMA:
-                s = canonical.loads(ipayload)
-                schemas[s["organism"]] = s
-            elif it == RecordType.TOOLING:
-                p, c = decode_tooling(ipayload)
-                tooling[p] = c
-            elif INNER_MIN <= it <= INNER_MAX:
-                out.warnings.append(f"batch {expected_batch}: skipped unknown inner record type {it:#x}")
-            else:
-                raise Torn(f"outer record type {it:#x} inside a body")
+        sorter_kwargs = {"buffer_bytes": self.sort_buffer_bytes} if self.sort_buffer_bytes else {}
+        try:
+            reader = BodyRecordReader(_body_stream(begin.codec, body))
+            for it, ipayload in reader:
+                if it == RecordType.ENTRY:
+                    try:
+                        entry = canonical.loads(ipayload)
+                        Entry.validate(entry)
+                    except (ValueError, FormatError) as e:
+                        raise Torn(f"entry is invalid: {e}") from e
+                    if not canonical.is_canonical(ipayload):
+                        raise Torn("entry is not canonical JSON")
+                    org, acc, ver = Entry.key(entry)
+                    if org not in sorters:
+                        sorters[org] = ExternalSorter(out.store.directory / org / f"sort-{expected_batch}", **sorter_kwargs)
+                        keys[org] = []
+                    sorters[org].add(acc, ver, ipayload)
+                    keys[org].append((acc, ver))
+                    count += 1
+                elif it == RecordType.SCHEMA:
+                    s = canonical.loads(ipayload)
+                    schemas[s["organism"]] = s
+                elif it == RecordType.TOOLING:
+                    p, c = decode_tooling(ipayload)
+                    tooling[p] = c
+                elif INNER_MIN <= it <= INNER_MAX:
+                    warnings.append(f"batch {expected_batch}: skipped unknown inner record type {it:#x}")
+                else:
+                    raise Torn(f"outer record type {it:#x} inside a body")
+            if reader.consumed != begin.uncompressed_length:
+                raise Torn(f"decoded length {reader.consumed} differs from declared {begin.uncompressed_length}")
+        except (zstandard.ZstdError, EOFError, ValueError) as e:
+            raise Torn(f"body does not decode: {e}") from e
 
-        # Build the entry set as it would stand with this batch, check every cumulative
-        # digest against it, and only then commit. A batch whose manifest disagrees with the
-        # accumulated entries is torn and leaves nothing behind.
-        candidate: dict[str, dict[tuple[str, int], tuple[bytes, int]]] = {o: dict(items) for o, items in out.entries.items()}
-        duplicates: list[str] = []
-        for org, acc, ver, p in staged:
-            bucket = candidate.setdefault(org, {})
-            if (acc, ver) in bucket:
-                duplicates.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
-                continue
-            bucket[(acc, ver)] = (p, expected_batch)
-            count += 1
-        organisms_in_manifest = manifest.get("organisms", {})
-        if set(organisms_in_manifest) != set(candidate):
-            raise Torn("manifest organisms do not match the entries published so far")
-        for org, info in organisms_in_manifest.items():
-            digest = hashlib.sha256(_materialise(candidate[org])).hexdigest()
-            if info.get("artifactSha256") != digest or info.get("entriesTotal") != len(candidate[org]):
-                raise Torn(f"cumulative digest for {org} does not match the materialised entries")
-        out.entries = candidate
-        out.warnings.extend(duplicates)
+        # Stage each organism's run, check every cumulative digest and count against the store
+        # as it would stand with this batch, and only then accept. A failing batch leaves nothing.
+        staged: dict[str, Path] = {}
+        try:
+            for org, sorter in sorters.items():
+                path = out.store.staging_path(org, expected_batch)
+                sorter.finish(path)
+                staged[org] = path
+            organisms_in_manifest = manifest.get("organisms", {})
+            if set(organisms_in_manifest) != set(out.store.index) | set(staged):
+                raise Torn("manifest organisms do not match the entries published so far")
+            for org, info in organisms_in_manifest.items():
+                extra = (expected_batch, staged[org]) if org in staged else None
+                digest, total = _digest_and_count(out.store, org, extra)
+                if info.get("artifactSha256") != digest or info.get("entriesTotal") != total:
+                    raise Torn(f"cumulative digest for {org} does not match the materialised entries")
+        except Torn:
+            for path in staged.values():
+                out.store.discard(path)
+            raise
+        for org, path in staged.items():
+            duplicates = out.store.accept(org, expected_batch, path, keys[org])
+            for acc, ver in duplicates:
+                warnings.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
+        out.warnings.extend(warnings)
         out.schemas.update(schemas)
         out.tooling.update(tooling)
         return DecodedBatch(
@@ -350,3 +415,14 @@ class StreamDecoder:
             tooling=tooling,
             entry_count=count,
         )
+
+
+def _digest_and_count(store: EntryStore, organism: str, extra: tuple[int, Path] | None) -> tuple[str, int]:
+    """The materialised file's digest and line count with a staged run merged in."""
+    h = hashlib.sha256()
+    n = 0
+    for _, (_, _, payload) in store.iter_sorted(organism, extra):
+        h.update(payload)
+        h.update(b"\n")
+        n += 1
+    return h.hexdigest(), n

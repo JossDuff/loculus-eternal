@@ -118,11 +118,10 @@ class SyncStats:
     new: int = 0
 
 
-def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple[list[dict], SyncStats]:
-    """Project every eligible, not-yet-published line. `is_published(accession, version)` is
-    answered from the chain-derived set."""
-    stats = SyncStats(organism)
-    out: list[dict] = []
+def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats) -> Iterator[dict]:
+    """Yield the projection of every eligible, not-yet-published line, filling `stats` as it
+    goes. `is_published(accession, version)` is answered from the chain-derived set. Nothing
+    is held: the caller consumes the entries as they are produced."""
     for line in iter_lines(feed):
         stats.total += 1
         check_shape(organism, line)
@@ -135,8 +134,14 @@ def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple
             stats.already_published += 1
             continue
         try:
-            out.append(Entry.from_released_line(organism, line))
+            entry = Entry.from_released_line(organism, line)
         except FormatError as e:
             raise SyncError(f"{organism} {m.get('accessionVersion')}: {e}") from e
         stats.new += 1
-    return out, stats
+        yield entry
+
+
+def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple[list[dict], SyncStats]:
+    """The in-memory form of iter_new_entries, for tests and small feeds."""
+    stats = SyncStats(organism)
+    return list(iter_new_entries(organism, feed, is_published, stats)), stats

@@ -106,16 +106,18 @@ class Recovery:
         return fill_store(store, self.chain, refs, log=self.cfg.log)
 
     def decode(self, store: BlobStore, count: int) -> tuple[DecodedStream, dict]:
-        decoded = StreamDecoder(store.blobs(count)).decode()
+        decoded = StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill").decode()
         out = self.cfg.out_dir
         out.mkdir(parents=True, exist_ok=True)
-        verified = decoded.verify_artifacts()
-        digests = decoded.artifact_digests()
+        last = decoded.batches[-1].manifest["organisms"] if decoded.batches else {}
         files = {}
-        for org in sorted(decoded.entries):
+        digests = {}
+        for org in decoded.organisms():
             path = out / f"{org}.ndjson"
-            path.write_bytes(decoded.materialise(org))
-            files[org] = {"path": str(path), "entries": len(decoded.entries[org]), "sha256": digests[org], "matchesManifest": verified.get(org)}
+            with open(path, "wb", buffering=1 << 20) as f:
+                digests[org] = decoded.materialise_to(org, f)
+            files[org] = {"path": str(path), "entries": decoded.count(org), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
+        verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
         report = {
             "header": None if decoded.header is None else {"chainId": decoded.header.chain_id, "contract": "0x" + decoded.header.contract.hex(), "schemaId": decoded.header.schema_id, "version": f"{decoded.header.major}.{decoded.header.minor}"},
             "batches": [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "blobCountAfter": b.blob_count_after, "entries": b.entry_count, "hasIndex": b.index is not None} for b in decoded.batches],
