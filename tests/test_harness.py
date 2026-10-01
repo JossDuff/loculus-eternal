@@ -110,7 +110,7 @@ def test_K7_end_to_end_publish_vectors_read_events_decode_from_stub():
         enc = StreamEncoder(fresh.chain_id, contract)
         b0 = enc.encode_batch(genesis_entries(), tooling=tooling(), codec=CODEC_ZSTD)
         dec0 = StreamDecoder(b0.blobs).decode()
-        b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.payloads, codec=CODEC_ZSTD, force_index=True)
+        b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.records, codec=CODEC_ZSTD, force_index=True)
 
         published = {}
         for batch in (b0, b1):
