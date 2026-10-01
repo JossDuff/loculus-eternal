@@ -522,11 +522,23 @@ machine, survives lost local state, and cannot drift from what is actually on-ch
 source are published into the stream as `TOOLING` records at genesis and on each tagged
 release. Cost is a handful of blobs per release.
 
-**Index cadence — DECIDED 2026-09-30: by size threshold.** An `INDEX` is emitted when the
-compressed bytes appended since the last index exceed a threshold set in the container spec,
-so a reader never replays more than a bounded amount. Rationale: with one-off uploads a
-count-based cadence ("every 30 batches") could mean never. The threshold is proposed from
-the groundwork sizing.
+**Index cadence — DECIDED 2026-09-30: by size threshold; threshold DECIDED 2026-10-01:
+16 MiB.** An `INDEX` is emitted in a batch when the compressed body bytes appended since the
+last index, counting the current batch, reach 16 MiB (16,777,216 bytes), so a reader never
+replays more than that plus one index. Rationale: with one-off uploads a count-based cadence
+("every 30 batches") could mean never; at 16 MiB the index overhead is at most about a fifth
+of the data while replay stays around 125 blobs.
+
+**Manifest digests — DECIDED 2026-10-01: cumulative.** Each batch manifest carries, per
+organism, the sha256 of the complete materialised output file as it stands after that batch.
+A verifier hashes their recovered files and compares with the last manifest. The upload
+command therefore decodes the whole stream on every run, which it needs to do anyway to be
+robust against lost local state; today that is about 40 MB compressed.
+
+**Permanent state instead of blobs — REJECTED 2026-10-01.** Writing the 39 MB dataset into
+contract storage would cost on the order of $70,000 at 1 gwei, or about $25,000 as contract
+bytecode, against about $126 in blobs; every future upload would pay the same per-byte rate.
+Blobs it is.
 
 **Who pins on IPFS — default kept 2026-09-30:** pinning targets are configuration in the
 upload command. The runbook recommends at least two team-operated Kubo nodes plus one pinning
