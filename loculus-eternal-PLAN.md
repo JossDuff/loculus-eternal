@@ -376,9 +376,12 @@ Rules (adopted from blobsitter, still correct; the full text is in `CLAUDE.md`):
 - Stack (decided): **Python 3.12+** for everything off-chain, one package managed with
   `uv`/`pyproject.toml`, pinned lockfile (resolved 2026-09-30: `ckzg` 2.1.8, `web3` 8.0.0,
   `eth-account` 0.14.0, `zstandard` 0.25.0, `rfc8785` 0.1.4, `httpx` 0.28.1); **Solidity +
-  Foundry** for the contract. Whether the locked `web3`/`eth-account` sign post-Fusaka blob
-  transactions is verified in the anvil harness phase. The blobsitter Rust code is reference
-  reading only.
+  Foundry** for the contract. Toolchain verified 2026-10-01 in the anvil harness phase:
+  `eth-account` 0.14 signs type-3 transactions with the post-Fusaka sidecar (wrapper version 1,
+  cell proofs) and `web3` 8 sends them; anvil 1.7.1 defaults to its latest hardfork and
+  accepts them; `ckzg` 2.1.8 builds and runs on Python 3.14; the mainnet trusted setup is
+  vendored at `src/loculus_eternal/kzg_trusted_setup.txt` with its digest pinned in `kzg.py`.
+  The blobsitter Rust code is reference reading only.
 
 ---
 

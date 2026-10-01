@@ -72,7 +72,13 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### K — KZG and harness
 
-*To be filled in during the anvil harness and KZG phase.*
+- **K1 — real blob.** The wrapper recomputes the commitment and versioned hash of a real Ethereum mainnet blob (fixture in `tests/fixtures/`) and they match what the network recorded; a flipped bit, a short blob, or a non-canonical element does not verify; the vendored trusted setup matches its pinned digest.
+- **K2 — packed blobs are polynomials.** Every blob produced by the chunk packer is a valid blob (all elements canonical) with a version-1 versioned hash.
+- **K3 — openings.** A single-element opening proof verifies against the commitment at the element's evaluation point and fails for a wrong value or a wrong index; cell proofs have the post-Fusaka shape (128 cells of 2,048 bytes, 128 proofs).
+- **K4 — harness.** The anvil harness starts a chain with the contract deployed and the publisher funded; the finalized block is two behind the latest; time can be warped.
+- **K5 — real blob transactions.** A type-3 transaction built from blob bytes is included; the node's versioned hashes equal the locally computed ones; a batch larger than six blobs spans several transactions in order with only the last one committing the batch. (Covers C14.)
+- **K6 — beacon stub.** The stub serves `GET /eth/v1/beacon/blobs/{slot}` in the real response shape, honours the `versioned_hashes` filter, returns 404 for an unknown slot and 400 for a non-numeric block id, and stops serving a slot once told to forget it.
+- **K7 — end to end.** Two batches encoded from the vector entries are published on anvil, the blob list is rebuilt from events and verified against `head`, every blob is fetched from the stub by slot and verified, and the decoded stream reproduces the entries, tooling and index with verifying manifests.
 
 ### R — recovery command
 
