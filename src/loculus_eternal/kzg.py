@@ -80,14 +80,19 @@ def compute_opening(blob: bytes, element_index: int) -> tuple[bytes, bytes]:
     commitment without the rest of the blob.
     """
     _check_blob(blob)
-    if not 0 <= element_index < 4096:
+    if not 0 <= element_index < FIELD_ELEMENTS_PER_BLOB:
         raise KzgError("element index out of range")
     z = _evaluation_point(element_index)
-    proof, y = ckzg.compute_kzg_proof(blob, z, settings())
+    try:
+        proof, y = ckzg.compute_kzg_proof(blob, z, settings())
+    except Exception as e:
+        raise KzgError(f"blob is not a valid polynomial: {e}") from e
     return bytes(proof), bytes(y)
 
 
 def verify_opening(commitment: bytes, element_index: int, y: bytes, proof: bytes) -> bool:
+    if not 0 <= element_index < FIELD_ELEMENTS_PER_BLOB:
+        return False
     try:
         return bool(ckzg.verify_kzg_proof(commitment, _evaluation_point(element_index), y, proof, settings()))
     except Exception:
@@ -97,7 +102,10 @@ def verify_opening(commitment: bytes, element_index: int, y: bytes, proof: bytes
 def cells_and_proofs(blob: bytes) -> tuple[list[bytes], list[bytes]]:
     """The 128 cells and cell proofs a post-Fusaka blob transaction carries."""
     _check_blob(blob)
-    cells, proofs = ckzg.compute_cells_and_kzg_proofs(blob, settings())
+    try:
+        cells, proofs = ckzg.compute_cells_and_kzg_proofs(blob, settings())
+    except Exception as e:
+        raise KzgError(f"blob is not a valid polynomial: {e}") from e
     return [bytes(c) for c in cells], [bytes(p) for p in proofs]
 
 

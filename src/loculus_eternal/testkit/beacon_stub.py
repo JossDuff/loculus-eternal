@@ -34,7 +34,7 @@ class BeaconStub:
                 if not url.path.startswith(prefix):
                     return self._reply(404, {"code": 404, "message": "not found"})
                 block_id = url.path[len(prefix) :]
-                if not block_id.isdigit():
+                if not (block_id.isascii() and block_id.isdigit()):
                     return self._reply(400, {"code": 400, "message": "block_id must be a slot number in this stub"})
                 wanted = {h.lower() for h in parse_qs(url.query).get("versioned_hashes", [])}
                 with stub._lock:

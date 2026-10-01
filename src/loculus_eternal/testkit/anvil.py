@@ -64,10 +64,15 @@ class Anvil:
         self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.url = f"http://127.0.0.1:{self.port}"
         self.w3 = Web3(Web3.HTTPProvider(self.url, request_kwargs={"timeout": 30}))
-        self._wait_ready()
-        self.deployer = dev_account(0)
-        self.publisher = dev_account(1)
-        self.contract = self._deploy()
+        try:
+            self._wait_ready()
+            self.deployer = dev_account(0)
+            self.publisher = dev_account(1)
+            self.contract = self._deploy()
+        except BaseException:
+            # __exit__ never runs when __init__ raises, so stop the process here.
+            self.close()
+            raise
 
     def _wait_ready(self, timeout: float = 15.0) -> None:
         deadline = time.time() + timeout
@@ -78,7 +83,6 @@ class Anvil:
             except Exception:
                 pass
             time.sleep(0.1)
-        self.close()
         raise RuntimeError("anvil did not start")
 
     def _deploy(self):
@@ -94,7 +98,10 @@ class Anvil:
     # --- chain control --------------------------------------------------------------------
 
     def rpc(self, method: str, params: list | None = None):
-        return self.w3.provider.make_request(method, params or [])
+        response = self.w3.provider.make_request(method, params or [])
+        if "error" in response:
+            raise RuntimeError(f"{method} failed: {response['error']}")
+        return response["result"]
 
     def mine(self, blocks: int = 1) -> None:
         self.rpc("anvil_mine", [hex(blocks)])

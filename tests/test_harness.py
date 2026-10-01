@@ -1,4 +1,4 @@
-"""K4 to K7 and C14: real blob transactions against anvil, and the beacon-shaped stub."""
+"""Real blob transactions against anvil, and the beacon-shaped stub."""
 
 import json
 
@@ -44,8 +44,8 @@ def test_K4_anvil_starts_with_contract_deployed_and_finality_two_behind(anvil):
 
 
 def test_K5_real_blob_transaction_records_the_right_versioned_hashes(anvil):
-    """Also C14: the contract, fed by a real type-3 transaction, records exactly the hashes
-    computed off-chain from the blob bytes."""
+    """The contract, fed by a real type-3 transaction, records exactly the hashes computed
+    off-chain from the blob bytes."""
     enc = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:]))
     batch = enc.encode_batch(genesis_entries(), tooling=tooling(), codec=CODEC_RAW)
     results = publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True, app_pointer=b"\x11" * 32)
@@ -62,40 +62,24 @@ def test_K5_real_blob_transaction_records_the_right_versioned_hashes(anvil):
     assert anvil.contract.functions.blobCount().call() == 1
     assert bytes(anvil.contract.functions.head().call()) == chain_head(hashes)
     assert bytes(anvil.contract.functions.appPointer().call()) == b"\x11" * 32
-    # Execution nodes do not serve blob bytes, so later tests on this chain get them from here.
-    _remember_blobs(anvil, batch.blobs)
 
 
-def test_K5_multi_blob_batch_spans_transactions_and_keeps_order(anvil):
-    seq_before = anvil.contract.functions.blobCount().call()
-    dec = StreamDecoder(_fetch_all_blobs_from_chain_state(anvil)).decode() if seq_before else None
-    state = dec.encoder_state() if dec else None
-    enc = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:]), state=state)
+def test_K5_multi_blob_batch_spans_transactions_and_keeps_order():
     from loculus_eternal.format.gen_vectors import sample_entry
 
-    big = [sample_entry("mpox", f"PP_00090{i}", 1, seq_len=110000) for i in range(4)]  # about 0.9 MB raw: seven blobs
-    batch = enc.encode_batch(big, previous_entries=(dec.payloads if dec else None), codec=CODEC_RAW)
-    assert len(batch.blobs) > 6
-    results = publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True)
-    assert len(results) == -(-len(batch.blobs) // 6)
-    all_hashes = [h for _, hs in results for h in hs]
-    assert all_hashes == [kzg.blob_to_versioned_hash(b) for b in batch.blobs]
-    assert anvil.contract.functions.blobCount().call() == seq_before + len(batch.blobs)
-    # Only the last transaction committed the batch.
-    commits = [len(anvil.contract.events.BatchCommitted().process_receipt(r, errors=DISCARD)) for r, _ in results]
-    assert commits == [0] * (len(results) - 1) + [1]
-    _remember_blobs(anvil, batch.blobs)
-
-
-_PUBLISHED: dict[int, list[bytes]] = {}
-
-
-def _remember_blobs(anvil, blobs):
-    _PUBLISHED.setdefault(anvil.port, []).extend(blobs)
-
-
-def _fetch_all_blobs_from_chain_state(anvil):
-    return list(_PUBLISHED.get(anvil.port, []))
+    with Anvil() as fresh:
+        enc = StreamEncoder(fresh.chain_id, bytes.fromhex(fresh.contract.address[2:]))
+        big = [sample_entry("mpox", f"PP_00090{i}", 1, seq_len=110000) for i in range(4)]  # about 0.9 MB raw: seven blobs
+        batch = enc.encode_batch(big, codec=CODEC_RAW)
+        assert len(batch.blobs) > 6
+        results = publish_blobs(fresh, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True)
+        assert len(results) == -(-len(batch.blobs) // 6)
+        all_hashes = [h for _, hs in results for h in hs]
+        assert all_hashes == [kzg.blob_to_versioned_hash(b) for b in batch.blobs]
+        assert fresh.contract.functions.blobCount().call() == len(batch.blobs)
+        # Only the last transaction committed the batch.
+        commits = [len(fresh.contract.events.BatchCommitted().process_receipt(r, errors=DISCARD)) for r, _ in results]
+        assert commits == [0] * (len(results) - 1) + [1]
 
 
 def test_K6_beacon_stub_serves_by_slot_with_filter_and_forgets():
@@ -113,11 +97,12 @@ def test_K6_beacon_stub_serves_by_slot_with_filter_and_forgets():
         assert r.json()["data"] == ["0x" + blob_b.hex()]
         assert httpx.get(f"{stub.url}/eth/v1/beacon/blobs/1").status_code == 404
         assert httpx.get(f"{stub.url}/eth/v1/beacon/blobs/head").status_code == 400
+        assert httpx.get(f"{stub.url}/eth/v1/beacon/blobs/%C2%B2").status_code == 400
         stub.forget(1700)
         assert httpx.get(f"{stub.url}/eth/v1/beacon/blobs/1700").status_code == 404
 
 
-def test_K7_end_to_end_publish_vectors_read_events_decode_from_stub(anvil):
+def test_K7_end_to_end_publish_vectors_read_events_decode_from_stub():
     """Publish two batches through real transactions, rebuild the blob list from events,
     check the chain head, fetch the bytes from the stub by slot, and decode."""
     with Anvil() as fresh, BeaconStub() as stub:

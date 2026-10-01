@@ -53,13 +53,17 @@ def publish_blobs(anvil, blobs: list[bytes], *, last_blob_chunk_count: int, is_b
     for start in range(0, len(blobs), MAX_BLOBS_PER_TX):
         group = blobs[start : start + MAX_BLOBS_PER_TX]
         last = start + len(group) == len(blobs)
-        call = anvil.contract.functions.publish(
-            expected_seq,
-            last_blob_chunk_count if last else 4096,
-            is_batch_end and last,
-            app_pointer if (is_batch_end and last) else b"\x00" * 32,
+        data = bytes.fromhex(
+            anvil.contract.encode_abi(
+                "publish",
+                args=[
+                    expected_seq,
+                    last_blob_chunk_count if last else 4096,
+                    is_batch_end and last,
+                    app_pointer if (is_batch_end and last) else b"\x00" * 32,
+                ],
+            )[2:]
         )
-        data = bytes.fromhex(call._encode_transaction_data()[2:])
         receipt, hashes = send_blob_transaction(anvil.w3, anvil.publisher, anvil.contract.address, data, group)
         if receipt["status"] != 1:
             raise RuntimeError(f"publish reverted in transaction {receipt['transactionHash'].hex()}")

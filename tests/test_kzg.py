@@ -1,4 +1,4 @@
-"""K1 to K3: the KZG wrapper against a real mainnet blob and against packed stream blobs."""
+"""The KZG wrapper against a real mainnet blob and against packed stream blobs."""
 
 import json
 from pathlib import Path
@@ -74,3 +74,23 @@ def test_K3_cell_proofs_have_the_post_fusaka_shape(mainnet_blob):
     cells, proofs = kzg.cells_and_proofs(blob)
     assert len(cells) == 128 and len(proofs) == 128
     assert all(len(c) == 2048 for c in cells) and all(len(p) == 48 for p in proofs)
+
+
+def test_K3_opening_index_out_of_range_is_refused(mainnet_blob):
+    blob, meta = mainnet_blob
+    commitment = bytes.fromhex(meta["commitment"][2:])
+    proof, y = kzg.compute_opening(blob, 4095)
+    assert not kzg.verify_opening(commitment, -1, y, proof)
+    assert not kzg.verify_opening(commitment, 4096, y, proof)
+    with pytest.raises(kzg.KzgError):
+        kzg.compute_opening(blob, 4096)
+
+
+def test_K3_non_canonical_blob_raises_kzg_error_everywhere(mainnet_blob):
+    blob, _ = mainnet_blob
+    bad = bytearray(blob)
+    bad[0] = 0xFF
+    with pytest.raises(kzg.KzgError):
+        kzg.compute_opening(bytes(bad), 0)
+    with pytest.raises(kzg.KzgError):
+        kzg.cells_and_proofs(bytes(bad))
