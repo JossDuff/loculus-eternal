@@ -1,0 +1,67 @@
+{
+ "invalid": {
+  "above 2^64-1": [
+   "ffffffffffffffffff02",
+   "80808080808080808002"
+  ],
+  "longer than ten bytes": [
+   "ffffffffffffffffffff7f",
+   "8080808080808080808000"
+  ],
+  "redundant trailing zero group": [
+   "8000",
+   "ff00",
+   "818000"
+  ],
+  "truncated": [
+   "80",
+   "ffff"
+  ]
+ },
+ "valid": [
+  {
+   "hex": "00",
+   "value": "0"
+  },
+  {
+   "hex": "01",
+   "value": "1"
+  },
+  {
+   "hex": "7f",
+   "value": "127"
+  },
+  {
+   "hex": "8001",
+   "value": "128"
+  },
+  {
+   "hex": "ff01",
+   "value": "255"
+  },
+  {
+   "hex": "ac02",
+   "value": "300"
+  },
+  {
+   "hex": "ff7f",
+   "value": "16383"
+  },
+  {
+   "hex": "808001",
+   "value": "16384"
+  },
+  {
+   "hex": "ffffffff0f",
+   "value": "4294967295"
+  },
+  {
+   "hex": "80808080808080808001",
+   "value": "9223372036854775808"
+  },
+  {
+   "hex": "ffffffffffffffffff01",
+   "value": "18446744073709551615"
+  }
+ ]
+}

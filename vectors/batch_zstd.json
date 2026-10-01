@@ -1,0 +1,209 @@
+{
+ "artifacts": {
+  "mpox": {
+   "ndjson": "{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000003\",\"accessionVersion\":\"PP_000003.1\",\"authors\":\"Müller, A.; 山田, 太郎\",\"clade\":\"IIb\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":1},\"nucleotideInsertions\":{\"main\":[]},\"organism\":\"mpox\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}\n",
+   "sha256": "5a6f17428f55b3fe1c96e9b629f423560361efc63c9974c32238961e078e7758"
+  },
+  "zika": {
+   "ndjson": "{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000001\",\"accessionVersion\":\"PP_000001.1\",\"authors\":\"Müller, A.; 山田, 太郎\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":1},\"nucleotideInsertions\":{\"main\":[]},\"organism\":\"zika\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}\n{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000001\",\"accessionVersion\":\"PP_000001.2\",\"authors\":\"Müller, A.; 山田, 太郎\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":2},\"nucleotideInsertions\":{\"main\":[\"12:AC\"]},\"organism\":\"zika\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}\n{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000002\",\"accessionVersion\":\"PP_000002.1\",\"authors\":\"Müller, A.; 山田, 太郎\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":1},\"nucleotideInsertions\":{\"main\":[]},\"organism\":\"zika\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}\n",
+   "sha256": "e5d9c63108388ceb94448609501419f9dda4ae06ecc2cba226ed0387b3619e61"
+  }
+ },
+ "decodeOnly": true,
+ "expected": {
+  "batch": 0,
+  "blobCountAfter": 1,
+  "blobSha256": [
+   "692b11a8a718eeeca6548e5b4abb269c90255deb1f35bf4f3d6ca64c8461e267"
+  ],
+  "bodyDigest": "9e599ad45ec7515132286f0e87249da91a88be5a5bfed334952b252c1fb64be8",
+  "firstBlobSeq": 0,
+  "index": null,
+  "lastBlobChunkCount": 41,
+  "manifest": {
+   "batch": 0,
+   "blobCountAfter": 1,
+   "bodyDigest": "9e599ad45ec7515132286f0e87249da91a88be5a5bfed334952b252c1fb64be8",
+   "firstBlobSeq": 0,
+   "hasIndex": false,
+   "organisms": {
+    "mpox": {
+     "artifactSha256": "5a6f17428f55b3fe1c96e9b629f423560361efc63c9974c32238961e078e7758",
+     "entriesInBatch": 1,
+     "entriesTotal": 1
+    },
+    "zika": {
+     "artifactSha256": "e5d9c63108388ceb94448609501419f9dda4ae06ecc2cba226ed0387b3619e61",
+     "entriesInBatch": 3,
+     "entriesTotal": 3
+    }
+   },
+   "previousManifestDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "manifestDigest": "ed445bb90e07bd5c722c7c507fe958e97a6c802be44b942a0ec71187b4435163",
+  "schemasPublished": [
+   "mpox",
+   "zika"
+  ],
+  "streamHex": "3a014c4f43554c55532d455445524e414c01000000000000aa36a711111111111111111111111111111111111111110b706174686f706c657875736202000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000c7c00000000000002519e599ad45ec7515132286f0e87249da91a88be5a5bfed334952b252c1fb64be8d2040328b52ffd607c0b3d1200469c5f3660573ad4ae9220088dc01f12a01ac3b9e1214629957a4b39c3d4b64949dac7826a493a96b53583545bb437217b7f5dea00f8425a87054b004d0052006e9dfe74ee390c6325718dfbda856f0dc9f8311c9d584c73c5621d55d77a6a9770c69efada1a82b3758ea969fd7b3d4628a77f05c45042ec5b4f1e5d95483d354577bcbe4e5deb140280961d8584ce83bc07f320c88d8acedd8f75fa10d31a413756695020d13514799495ae4d2ab7f5ebed3e859aad0f374c7dd3bce4f271f5193325e9a9ad63fcdb478e3e67c57c721bbc184e48bfd06715c510ca3232fa751e1dd62f15f5c685596c902cb0ab1f69eae6ccf42d8c382e30faa544ea79c44bf2e355e96f9774aafd849d3220a0d2e9eeee138eca32fcf4b30c3421b58e3dbb79e6582728da7b50400596d5d8f5acaa2d2ba7aa0270ba0d9a7beaaa777386af6bf4b3282ffd7e21864f44e8f36085ac7e10cfef8420cfb21ca8878627299cd651f09794fa7d8844fd58546e605e6a3c538c8b8d8c4c8d4782ba3c93f5396768024d20600299a9b1ba0181a872c52bc12735045a62768e0ec5e0a744cac04559e0d7330a1a3a44e64424caed23fa5f126b39c4a541701edc05069be0c64c3eb61019366f012081690e1d8e63afd650df6c039a138598bc4fe553abb53adfad45e10d05b9d040f2b2500eb800b440c1f6a8167c1b0efa21cba582fba05cef1836417f7f459683d7fbe21263a9cc0c178e08cfc1f3a378601b662a5cd989973d8002fa022884893bfde0696b7f8f5410b88d343bf830377f724e1585ec2dce17674fc6b3dea0354ffd03047b226261746368223a302c22626c6f62436f756e744166746572223a312c22626f6479446967657374223a2239653539396164343565633735313531333232383666306538373234396461393161383862653561356266656433333439353262323532633166623634626538222c226669727374426c6f62536571223a302c22686173496e646578223a66616c73652c226f7267616e69736d73223a7b226d706f78223a7b226172746966616374536861323536223a2235613666313734323866353562336665316339366539623632396634323335363033363165666336336339393734633332323338393631653037386537373538222c22656e7472696573496e4261746368223a312c22656e7472696573546f74616c223a317d2c227a696b61223a7b226172746966616374536861323536223a2265356439633633313038333838636562393434343836303935303134313966396464613461653036656363326362613232366564303338376233363139653631222c22656e7472696573496e4261746368223a332c22656e7472696573546f74616c223a337d7d2c2270726576696f75734d616e6966657374446967657374223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030227d",
+  "streamLength": 126976,
+  "streamSha256": "9d93480ae2b2a44dce606e246837612368b224497e9a09c7a6e0d1a291da45f2"
+ },
+ "input": {
+  "chainId": 11155111,
+  "codec": 1,
+  "contract": "1111111111111111111111111111111111111111",
+  "entries": [
+   {
+    "alignedAminoAcidSequences": {
+     "E": "MKVL*",
+     "NS1": null
+    },
+    "alignedNucleotideSequences": {
+     "main": "ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    },
+    "aminoAcidInsertions": {
+     "E": [],
+     "NS1": []
+    },
+    "metadata": {
+     "accession": "PP_000002",
+     "accessionVersion": "PP_000002.1",
+     "authors": "Müller, A.; 山田, 太郎",
+     "geoLocCountry": "Switzerland",
+     "geoLocLatitude": 46.52,
+     "hostAge": 42,
+     "isRevocation": false,
+     "pipelineVersion": 7,
+     "releasedDate": "2026-09-30",
+     "sampleCollectionDate": null,
+     "submitter": "insdc_ingest_user",
+     "version": 1
+    },
+    "nucleotideInsertions": {
+     "main": []
+    },
+    "organism": "zika",
+    "unalignedNucleotideSequences": {
+     "main": "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    }
+   },
+   {
+    "alignedAminoAcidSequences": {
+     "E": "MKVL*",
+     "NS1": null
+    },
+    "alignedNucleotideSequences": {
+     "main": "ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    },
+    "aminoAcidInsertions": {
+     "E": [],
+     "NS1": []
+    },
+    "metadata": {
+     "accession": "PP_000001",
+     "accessionVersion": "PP_000001.1",
+     "authors": "Müller, A.; 山田, 太郎",
+     "geoLocCountry": "Switzerland",
+     "geoLocLatitude": 46.52,
+     "hostAge": 42,
+     "isRevocation": false,
+     "pipelineVersion": 7,
+     "releasedDate": "2026-09-30",
+     "sampleCollectionDate": null,
+     "submitter": "insdc_ingest_user",
+     "version": 1
+    },
+    "nucleotideInsertions": {
+     "main": []
+    },
+    "organism": "zika",
+    "unalignedNucleotideSequences": {
+     "main": "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    }
+   },
+   {
+    "alignedAminoAcidSequences": {
+     "E": "MKVL*",
+     "NS1": null
+    },
+    "alignedNucleotideSequences": {
+     "main": "ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    },
+    "aminoAcidInsertions": {
+     "E": [],
+     "NS1": []
+    },
+    "metadata": {
+     "accession": "PP_000001",
+     "accessionVersion": "PP_000001.2",
+     "authors": "Müller, A.; 山田, 太郎",
+     "geoLocCountry": "Switzerland",
+     "geoLocLatitude": 46.52,
+     "hostAge": 42,
+     "isRevocation": false,
+     "pipelineVersion": 7,
+     "releasedDate": "2026-09-30",
+     "sampleCollectionDate": null,
+     "submitter": "insdc_ingest_user",
+     "version": 2
+    },
+    "nucleotideInsertions": {
+     "main": [
+      "12:AC"
+     ]
+    },
+    "organism": "zika",
+    "unalignedNucleotideSequences": {
+     "main": "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    }
+   },
+   {
+    "alignedAminoAcidSequences": {
+     "E": "MKVL*",
+     "NS1": null
+    },
+    "alignedNucleotideSequences": {
+     "main": "ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    },
+    "aminoAcidInsertions": {
+     "E": [],
+     "NS1": []
+    },
+    "metadata": {
+     "accession": "PP_000003",
+     "accessionVersion": "PP_000003.1",
+     "authors": "Müller, A.; 山田, 太郎",
+     "clade": "IIb",
+     "geoLocCountry": "Switzerland",
+     "geoLocLatitude": 46.52,
+     "hostAge": 42,
+     "isRevocation": false,
+     "pipelineVersion": 7,
+     "releasedDate": "2026-09-30",
+     "sampleCollectionDate": null,
+     "submitter": "insdc_ingest_user",
+     "version": 1
+    },
+    "nucleotideInsertions": {
+     "main": []
+    },
+    "organism": "mpox",
+    "unalignedNucleotideSequences": {
+     "main": "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    }
+   }
+  ],
+  "tooling": [
+   {
+    "contentHex": "2320436f6e7461696e65722073706563696669636174696f6e0a2873616d706c65290a",
+    "path": "docs/container-spec.md"
+   },
+   {
+    "contentHex": "22222273616d706c652222220a",
+    "path": "src/loculus_eternal/__init__.py"
+   }
+  ]
+ },
+ "note": "codec 1 streams are decode vectors: compressed bytes are not canonical"
+}

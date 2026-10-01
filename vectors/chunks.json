@@ -1,0 +1,44 @@
+{
+ "blobCount": 2,
+ "blobDataBytes": 126976,
+ "blobSha256": [
+  "147a3a0d7f2bfd091c15f5b1a0b960bd5dab14bad0f1465e020055067c1ae0a9",
+  "227ee57f26fa5abf53cfaaef6f33f18d95d0ac605d72caf4a2b6f65162e4e8a1"
+ ],
+ "elementSamples": [
+  {
+   "blob": 0,
+   "element": 0,
+   "hex": "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+  },
+  {
+   "blob": 0,
+   "element": 1,
+   "hex": "001f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d"
+  },
+  {
+   "blob": 0,
+   "element": 4095,
+   "hex": "00e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+  },
+  {
+   "blob": 1,
+   "element": 0,
+   "hex": "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+  },
+  {
+   "blob": 1,
+   "element": 858,
+   "hex": "00e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0000000000"
+  },
+  {
+   "blob": 1,
+   "element": 859,
+   "hex": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "lastBlobChunkCount": 859,
+ "streamLength": 153600,
+ "streamRule": "bytes 0x00..0xff repeated 600 times",
+ "streamSha256": "41dae6b28c30ab57faaf5c4707cb4bcda0dcff3057a394447eaad9a67d06ad82"
+}
