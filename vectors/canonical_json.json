@@ -1,0 +1,69 @@
+{
+ "samples": [
+  {
+   "canonical": "{\"a\":[1,1e+21,0.000001,0,10],\"b\":1,\"t\":true,\"z\":null,\"é\":\"ü\"}",
+   "input": {
+    "a": [
+     1.0,
+     1e+21,
+     1e-06,
+     -0.0,
+     10
+    ],
+    "b": 1,
+    "t": true,
+    "z": null,
+    "é": "ü"
+   }
+  },
+  {
+   "canonical": "{\"n\":9007199254740991,\"nested\":{\"x\":\" \\u0007\\\"\\\\\",\"y\":{\"k\":\"v\"}}}",
+   "input": {
+    "n": 9007199254740991,
+    "nested": {
+     "x": " \u0007\"\\",
+     "y": {
+      "k": "v"
+     }
+    }
+   }
+  },
+  {
+   "canonical": "{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000001\",\"accessionVersion\":\"PP_000001.1\",\"authors\":\"Müller, A.; 山田, 太郎\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":1},\"nucleotideInsertions\":{\"main\":[]},\"organism\":\"zika\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}",
+   "input": {
+    "alignedAminoAcidSequences": {
+     "E": "MKVL*",
+     "NS1": null
+    },
+    "alignedNucleotideSequences": {
+     "main": "ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    },
+    "aminoAcidInsertions": {
+     "E": [],
+     "NS1": []
+    },
+    "metadata": {
+     "accession": "PP_000001",
+     "accessionVersion": "PP_000001.1",
+     "authors": "Müller, A.; 山田, 太郎",
+     "geoLocCountry": "Switzerland",
+     "geoLocLatitude": 46.52,
+     "hostAge": 42,
+     "isRevocation": false,
+     "pipelineVersion": 7,
+     "releasedDate": "2026-09-30",
+     "sampleCollectionDate": null,
+     "submitter": "insdc_ingest_user",
+     "version": 1
+    },
+    "nucleotideInsertions": {
+     "main": []
+    },
+    "organism": "zika",
+    "unalignedNucleotideSequences": {
+     "main": "ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA"
+    }
+   }
+  }
+ ]
+}

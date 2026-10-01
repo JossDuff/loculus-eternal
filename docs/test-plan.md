@@ -35,7 +35,23 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### F — container format
 
-*To be filled in during the container format phase.*
+- **F1 — minimal varint.** `uvarint` encodes the minimal LEB128 form; decoding rejects a redundant trailing zero group, more than ten bytes, or a value above 2⁶⁴ − 1.
+- **F2 — record framing.** A record's length prefix covers the type byte and the payload; a record truncated by the end of the stream is an error, not a silent stop.
+- **F3 — header.** The header is at position 0 with the fixed magic; a different magic or an unknown major version is refused; any minor version of a known major is accepted; chain ID and contract address round-trip.
+- **F4 — canonical JSON.** Entry, schema, manifest and index payloads are RFC 8785 canonical JSON: sorted keys, no whitespace, shortest number form, UTF-8; re-canonicalising a payload leaves it unchanged.
+- **F5 — chunk packing.** Every field element is a zero byte followed by 31 stream bytes; a partially filled last blob is zero past its data; the last-blob chunk count equals the number of elements that carry data; unpacking inverts packing.
+- **F6 — batch layout.** A batch begins at chunk 0 of a blob (after the header in batch 0); its body's length and digest equal the values declared in the batch header; the manifest is the last record; bytes from the manifest to the end of the blob are zero.
+- **F7 — codecs.** Codec 0 is identity; codec 1 is a zstd frame without dictionary; an unknown codec is refused; a decoded body whose length differs from the declared uncompressed length is refused.
+- **F8 — manifest.** The manifest repeats the batch number, first blob sequence, previous manifest digest and body digest from the batch header, states the blob count after the batch, and carries one cumulative artifact digest per organism published so far; a decoder recomputes every one of these and refuses the batch on any mismatch.
+- **F9 — materialisation.** Each organism's file is its entry payloads, one per line, sorted by accession (bytewise) then version (numeric); it contains nothing else; a duplicate accessionVersion keeps the first occurrence and is reported.
+- **F10 — index.** An index lists every accessionVersion published up to and including its own batch, grouped by organism and accession with versions sorted; it is itself codec-encoded; the encoder emits one when the compressed body bytes since the last index reach 16 MiB; a reader that starts from the latest index and the bodies after it obtains the same published set as a full replay.
+- **F11 — torn batch.** A batch without a complete, verifying manifest contributes nothing; the decoder resumes at the first following blob boundary that holds a batch header with the expected batch number and previous-manifest digest; the skipped blobs are reported.
+- **F12 — unknown inner records.** An inner record of unknown type within a known major version is skipped by its length and reported; an unknown outer record type makes the batch torn.
+- **F13 — round trip.** For any list of entries, encoding to blobs and decoding back yields the same entries, the same materialised files and a verifying manifest (property test).
+- **F14 — vectors regenerate.** Running the generator reproduces every file in `vectors/` byte-for-byte.
+- **F15 — projection.** An entry carries `organism` and the six data keys; its metadata carries `accession`, `version` and `accessionVersion` and none of the four removed fields; an encoder refuses an entry that violates this.
+- **F16 — schema records.** The first batch that publishes an organism carries a schema record for it; a later batch carries one only if the field set, segments or genes changed; the record lists each sorted.
+- **F17 — tooling records.** A tooling record carries a relative path and the file's bytes and round-trips exactly.
 
 ### C — contract
 

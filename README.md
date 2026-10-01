@@ -4,7 +4,7 @@ Permanent, verifiable backup of [Pathoplexus](https://pathoplexus.org) released 
 Ethereum blobs for publication, an immutable contract for the record of what was published,
 and IPFS plus public blob archives for keeping the bytes around.
 
-**Status: groundwork.** Nothing has been published yet. The design is in
+**Status: container format in progress.** Nothing has been published yet. The design is in
 [`docs/design.md`](docs/design.md); the roadmap and every decision so far are in
 [`loculus-eternal-PLAN.md`](loculus-eternal-PLAN.md).
 
