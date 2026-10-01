@@ -82,7 +82,19 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### R — recovery command
 
-*To be filled in during the recovery command phase.*
+- **R1 — verified blob list.** The ordered list of versioned hashes obtained from event logs reproduces the contract's `head` and `blobCount` at a finalized block; a list with a swapped pair, a dropped entry or a changed hash is rejected; a rejected manifest source is followed by the next one.
+- **R2 — verify before write.** Bytes offered for a blob are written to the store only after their recomputed versioned hash matches; a source returning corrupted bytes is counted as rejected and the next source is tried; the store on disk contains nothing from a rejected candidate.
+- **R3 — wrong blob.** A valid blob served under another blob's hash is not accepted for that hash.
+- **R4 — withholding.** When no source supplies a blob, the run continues, the store keeps everything else, and `missing.json` lists the blob with every source tried and each outcome; a source outage is recorded as an error attempt, not a crash.
+- **R5 — RPC flaps.** Transient failures of chain reads during a run are retried with backoff and the run completes.
+- **R6 — resume.** A run interrupted after a partial store resumes without refetching what is already verified; a region in `chunks.dat` not recorded in `have.json` is treated as absent; the store refuses a second concurrent opener.
+- **R7 — decode step.** The materialised per-organism files are byte-identical to the encoder's and the report lists batches, torn batches, per-file digests against the last manifest, warnings and tooling paths.
+- **R8 — recovered copy is a source.** A store exported to the local-directory layout serves a second recovery completely.
+- **R9 — single-source recovery.** With every source but one disabled (beacon, Blobscan, blob-archiver, or local), the recovered files are byte-identical.
+- **R10 — history expiry.** A manifest file handed over out of band verifies against `head` and the run completes without ever asking the node for logs.
+- **R11 — adapter shapes.** The beacon, Blobscan and blob-archiver adapters each return the verified blob from their respective response shapes; the beacon adapter sends the `versioned_hashes` filter and derives the slot from the block timestamp.
+- **R12 — adaptive log paging.** `eth_getLogs` paging halves after an error and doubles after a success, and still covers the whole range.
+- **R13 — command line.** `loculus-eternal recover --config file.toml` runs the whole recovery from a TOML file and exits non-zero when blobs are missing or the list cannot be verified.
 
 ### U — upload command
 

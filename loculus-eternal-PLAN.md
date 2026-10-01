@@ -433,7 +433,11 @@ runbook. Round-trip test: upload on anvil → recover → digests match. Deliver
 in the recovery command. Test against a local Kubo (Docker). Deliverable: recovery succeeds
 from IPFS alone.
 
-**Sepolia campaign.** Deploy to Sepolia. Publish a genesis batch of the full eligible dataset
+**Sepolia campaign.** Prerequisite found 2026-10-01: the decoder and the upload command's
+cumulative-digest computation hold every entry in memory, which is fine for tests and small
+deltas but not for a genesis batch of 14 GB of decompressed entries; a streaming
+materialisation pass (per-organism sorted spill files, merged on the fly) is needed before
+the campaign's genesis. Deploy to Sepolia. Publish a genesis batch of the full eligible dataset
 and several one-off deltas over a week or two. Run the recovery command from a clean machine
 using only public sources. Record costs, timings, and every operational surprise in
 `docs/testnet-report.md`. Freeze the format, the contract, and the IPFS profile.
