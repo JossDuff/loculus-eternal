@@ -1,0 +1,13 @@
+{
+ "source": "Blobscan public API, fetched 2026-10-01",
+ "network": "Ethereum mainnet",
+ "versionedHash": "0x0147d7803550fd02cd590fa11f07164e85479c3b07b57be8fad6fb66555cc990",
+ "commitment": "0x92f46b56bb9cd2a6ae9d98624b943ae2907ebc8e07cb4e910dcaa8657c8700efb611f85280e74c36b64a679bfacc86fe",
+ "blockNumber": 26098053,
+ "blockHash": "0x8fc6370611160b5a089336660831853bc8ee0b7a3e81e6b0b3ac4003b9e49502",
+ "txHash": "0xba4fbc695767818bfa396cc5c3cc9e639baa0a348d786b027aa17b8e9bc1bb54",
+ "index": 4,
+ "usageSize": 122593,
+ "blobSha256": "0bce5b72987c35d10c340b352c4404588a3dc57aaede9c1fd3aeb81008ac9766",
+ "note": "Post-Fusaka blob: Blobscan reports no per-blob proof (all zero), which is expected under EIP-7594 cell proofs."
+}
