@@ -98,7 +98,17 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### U — upload command
 
-*To be filled in during the upload command phase.*
+- **U1 — sync and eligibility.** The release feed is fetched with `compression=zstd`, cached by ETag and reused on 304; only entries whose terms are OPEN are eligible and a restricted entry becomes eligible when it opens; eligible lines are projected to the published form; a line whose top-level shape differs from the pinned schema stops the run before anything is published; the real released lines in `tests/fixtures/released/` pass the check.
+- **U2 — published set from the chain.** A fresh data directory on another machine derives what is published from the contract and the stream, publishes only the delta, and a rerun with nothing new sends no transaction and exits 0; the recovered files afterwards contain exactly the published entries.
+- **U3 — check and dry run.** `--check` reports the pending count and estimated cost and `--dry-run` additionally encodes, simulates and checks fees and balance; neither sends anything or leaves a journal behind.
+- **U4 — refusals.** The dry run refuses, with a maintainer-readable reason and nothing spent, when the key is not the publisher, when the wallet cannot cover the maximum fee, and when the blob base fee is above the configured limit.
+- **U5 — journal resume.** A run interrupted after a transaction was sent resumes from the journal, sends only the remaining transactions, and the recovered stream has no torn batch and no duplicate entry.
+- **U6 — fee escalation.** A transaction not included within the window is replaced at the same nonce with both fees raised, a bounded number of times, and the attempts are recorded.
+- **U7 — finality before anything counts.** Blobs enter the local store and the report only after the including block is finalized.
+- **U8 — torn batch, lost journal.** When the journal is lost after a partial batch, the next run reports the torn blobs, starts a fresh batch at the next blob boundary, and the recovered stream decodes with the torn range reported and every entry present.
+- **U9 — concurrent upload.** If the contract's blob count moves between planning and sending, the simulation reports the sequence mismatch and nothing is sent.
+- **U10 — command line.** `loculus-eternal upload --config file.toml` reads the key only from `LOCULUS_ETERNAL_PUBLISHER_KEY`, refuses without it, publishes with it, and is a no-op the second time; `--check` works without the key.
+- **U11 — tooling.** The spec and source files are published with the first batch and again only when the package version in the published set differs from the current one.
 
 ### I — IPFS
 

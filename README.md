@@ -4,7 +4,7 @@ Permanent, verifiable backup of [Pathoplexus](https://pathoplexus.org) released 
 Ethereum blobs for publication, an immutable contract for the record of what was published,
 and IPFS plus public blob archives for keeping the bytes around.
 
-**Status: recovery command in progress.** Nothing has been published yet. The design is in
+**Status: upload command in progress.** Nothing has been published yet. The design is in
 [`docs/design.md`](docs/design.md); the roadmap and every decision so far are in
 [`loculus-eternal-PLAN.md`](loculus-eternal-PLAN.md).
 
@@ -17,6 +17,13 @@ and IPFS plus public blob archives for keeping the bytes around.
 - `loculus-eternal recover` — rebuilds the whole released dataset from nothing but the contract
   address and network access, fetching blob bytes from anyone who has them and verifying every
   byte against the chain before trusting it.
+
+## How to publish
+
+See [`docs/runbook.md`](docs/runbook.md). In short: a config file naming the chain, the
+contract, the backend and the organisms; the publisher key in the environment variable
+`LOCULUS_ETERNAL_PUBLISHER_KEY`; then `loculus-eternal upload --config loculus-eternal.toml`,
+with `--check` first to see what would be published and what it costs.
 
 ## How to recover
 
