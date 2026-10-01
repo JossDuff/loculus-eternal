@@ -1,0 +1,352 @@
+"""Decoding a stream of blobs back into batches, entries and materialised files.
+
+The decoder trusts nothing about the stream beyond the bytes: every declared length and
+digest is recomputed, a batch that fails any check is torn and contributes nothing, and the
+decoder resynchronises at the next blob boundary that carries the batch it expects.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from typing import Sequence
+
+from loculus_eternal.format import canonical
+from loculus_eternal.format.chunks import BLOB_DATA_BYTES, unpack_blob
+from loculus_eternal.format.encode import EncoderState, Entry, sort_key_from_payload
+from loculus_eternal.format.records import (
+    DIGEST_BYTES,
+    INNER_MAX,
+    INNER_MIN,
+    BatchBegin,
+    FormatError,
+    Header,
+    RecordType,
+    decode_tooling,
+    decompress,
+    read_record,
+    sha256,
+)
+
+
+class Torn(FormatError):
+    """Raised inside batch decoding when the batch cannot be completed."""
+
+
+@dataclass
+class TornBatch:
+    expected_batch: int
+    first_blob: int
+    last_blob: int
+    reason: str
+
+
+@dataclass
+class DecodedBatch:
+    batch: int
+    first_blob_seq: int
+    blob_count_after: int
+    begin: BatchBegin
+    manifest: dict
+    manifest_digest: bytes
+    index: dict | None
+    schemas: dict[str, dict]
+    tooling: dict[str, bytes]
+    entry_count: int
+
+
+@dataclass
+class DecodedStream:
+    header: Header | None
+    batches: list[DecodedBatch] = field(default_factory=list)
+    torn: list[TornBatch] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    # organism -> (accession, version) -> (payload, batch)
+    entries: dict[str, dict[tuple[str, int], tuple[bytes, int]]] = field(default_factory=dict)
+    schemas: dict[str, dict] = field(default_factory=dict)
+    tooling: dict[str, bytes] = field(default_factory=dict)
+    blobs_consumed: int = 0
+
+    def payloads(self, organism: str) -> list[bytes]:
+        """An organism's entry payloads in materialisation order."""
+        return _payloads(self.entries.get(organism, {}))
+
+    def materialise(self, organism: str) -> bytes:
+        return _materialise(self.entries.get(organism, {}))
+
+    def artifact_digests(self) -> dict[str, str]:
+        return {o: hashlib.sha256(self.materialise(o)).hexdigest() for o in sorted(self.entries)}
+
+    def verify_artifacts(self) -> dict[str, bool]:
+        """Compare materialised files against the last manifest's cumulative digests."""
+        if not self.batches:
+            return {}
+        last = self.batches[-1].manifest["organisms"]
+        actual = self.artifact_digests()
+        return {o: last.get(o, {}).get("artifactSha256") == actual.get(o) for o in sorted(set(last) | set(actual))}
+
+    def published(self) -> dict[str, dict[str, list[list[int]]]]:
+        out: dict[str, dict[str, list[list[int]]]] = {}
+        for org, items in self.entries.items():
+            for (acc, ver), (_, batch) in items.items():
+                out.setdefault(org, {}).setdefault(acc, []).append([ver, batch])
+        for accs in out.values():
+            for vs in accs.values():
+                vs.sort()
+        return out
+
+    def encoder_state(self) -> EncoderState:
+        """The state an encoder needs to append the next batch after this stream."""
+        if not self.batches:
+            return EncoderState()
+        last = self.batches[-1]
+        bytes_since_index = 0
+        for b in reversed(self.batches):
+            if b.index is not None:
+                break
+            bytes_since_index += b.begin.compressed_length
+        return EncoderState(
+            next_batch=last.batch + 1,
+            next_blob_seq=last.blob_count_after,
+            previous_manifest_digest=last.manifest_digest,
+            published=self.published(),
+            schemas=dict(self.schemas),
+            entries_total={o: len(items) for o, items in self.entries.items()},
+            bytes_since_index=bytes_since_index,
+        )
+
+
+def _payloads(items: dict[tuple[str, int], tuple[bytes, int]]) -> list[bytes]:
+    """Payloads sorted by accession (bytewise) then numeric version."""
+    return [p for (_, _), (p, _) in sorted(items.items(), key=lambda kv: kv[0])]
+
+
+def _materialise(items: dict[tuple[str, int], tuple[bytes, int]]) -> bytes:
+    return b"".join(p + b"\n" for p in _payloads(items))
+
+
+class _Cursor:
+    """Reads records from the stream while refusing to cross a missing blob."""
+
+    def __init__(self, data: bytes, missing: set[int]):
+        self.data = data
+        self.missing = missing
+        self.pos = 0
+
+    def _check(self, start: int, end: int) -> None:
+        if end > len(self.data):
+            raise Torn("stream ends inside a record")
+        for blob in range(start // BLOB_DATA_BYTES, (max(end, start + 1) - 1) // BLOB_DATA_BYTES + 1):
+            if blob in self.missing:
+                raise Torn(f"blob {blob} is missing")
+
+    def record(self) -> tuple[int, bytes]:
+        try:
+            # Peek enough for the length prefix, then validate the whole extent.
+            self._check(self.pos, min(self.pos + 11, len(self.data)))
+            record_type, payload, end = read_record(self.data, self.pos)
+        except FormatError as e:
+            raise Torn(str(e)) from e
+        self._check(self.pos, end)
+        self.pos = end
+        return record_type, payload
+
+
+class StreamDecoder:
+    def __init__(self, blobs: Sequence[bytes | None]):
+        """blobs[i] is blob i's 131,072 bytes, or None if it could not be obtained."""
+        parts = []
+        self.missing: set[int] = set()
+        for i, b in enumerate(blobs):
+            if b is None:
+                self.missing.add(i)
+                parts.append(b"\x00" * BLOB_DATA_BYTES)
+            else:
+                parts.append(unpack_blob(b))
+        self.data = b"".join(parts)
+        self.blob_count = len(blobs)
+
+    def decode(self) -> DecodedStream:
+        out = DecodedStream(header=None)
+        cur = _Cursor(self.data, self.missing)
+        if self.blob_count == 0:
+            return out
+
+        try:
+            t, payload = cur.record()
+            if t != RecordType.HEADER:
+                raise FormatError("stream does not start with a header record")
+            out.header = Header.decode(payload)
+        except Torn as e:
+            raise FormatError(f"cannot read the stream header: {e}") from e
+
+        expected_batch = 0
+        previous_digest = b"\x00" * DIGEST_BYTES
+        blob = 0
+        after_header = True
+        while blob < self.blob_count:
+            # Batch 0 follows the header inside blob 0; every other batch starts at chunk 0.
+            if not after_header:
+                cur.pos = blob * BLOB_DATA_BYTES
+            after_header = False
+            try:
+                decoded = self._decode_batch(cur, expected_batch, previous_digest, blob, out)
+            except Torn as e:
+                # Resynchronise: scan following blob boundaries for the batch we expect.
+                next_blob = self._find_resync(blob + 1, expected_batch, previous_digest)
+                last = (next_blob if next_blob is not None else self.blob_count) - 1
+                out.torn.append(TornBatch(expected_batch, blob, last, str(e)))
+                if next_blob is None:
+                    out.blobs_consumed = self.blob_count
+                    return out
+                blob = next_blob
+                continue
+            out.batches.append(decoded)
+            expected_batch += 1
+            previous_digest = decoded.manifest_digest
+            blob = decoded.blob_count_after
+            out.blobs_consumed = blob
+        return out
+
+    def _find_resync(self, from_blob: int, expected_batch: int, previous_digest: bytes) -> int | None:
+        for b in range(from_blob, self.blob_count):
+            if b in self.missing:
+                continue
+            try:
+                t, payload, _ = read_record(self.data, b * BLOB_DATA_BYTES)
+                if t != RecordType.BATCH_BEGIN:
+                    continue
+                begin = BatchBegin.decode(payload)
+            except FormatError:
+                continue
+            if begin.batch == expected_batch and begin.previous_manifest_digest == previous_digest and begin.first_blob_seq == b:
+                return b
+        return None
+
+    def _decode_batch(self, cur: _Cursor, expected_batch: int, previous_digest: bytes, first_blob: int, out: DecodedStream) -> DecodedBatch:
+        t, payload = cur.record()
+        if t != RecordType.BATCH_BEGIN:
+            raise Torn(f"expected a batch header, found record type {t:#x}")
+        try:
+            begin = BatchBegin.decode(payload)
+        except FormatError as e:
+            raise Torn(str(e)) from e
+        if begin.batch != expected_batch:
+            raise Torn(f"batch number {begin.batch}, expected {expected_batch}")
+        if begin.previous_manifest_digest != previous_digest:
+            raise Torn("previous manifest digest does not match")
+        if begin.first_blob_seq != first_blob:
+            raise Torn(f"batch claims to start at blob {begin.first_blob_seq} but is at blob {first_blob}")
+
+        t, body = cur.record()
+        if t != RecordType.BODY:
+            raise Torn(f"expected a body record, found record type {t:#x}")
+        if len(body) != begin.compressed_length or sha256(body) != begin.body_digest:
+            raise Torn("body length or digest does not match the batch header")
+        try:
+            inner = decompress(begin.codec, body, begin.uncompressed_length)
+        except FormatError as e:
+            raise Torn(str(e)) from e
+
+        t, payload = cur.record()
+        index = None
+        if t == RecordType.INDEX:
+            try:
+                index = canonical.loads(decompress(payload[0], payload[1:]))
+            except (FormatError, ValueError, IndexError) as e:
+                raise Torn(f"index does not decode: {e}") from e
+            t, payload = cur.record()
+        if t != RecordType.BATCH_MANIFEST:
+            raise Torn(f"expected a manifest, found record type {t:#x}")
+        try:
+            manifest = canonical.loads(payload)
+        except ValueError as e:
+            raise Torn(f"manifest is not JSON: {e}") from e
+        if not canonical.is_canonical(payload):
+            raise Torn("manifest is not canonical JSON")
+
+        # The batch ends in the blob that holds the manifest's last byte.
+        blob_count_after = -(-cur.pos // BLOB_DATA_BYTES)
+        checks = {
+            "batch": expected_batch,
+            "firstBlobSeq": first_blob,
+            "blobCountAfter": blob_count_after,
+            "previousManifestDigest": previous_digest.hex(),
+            "bodyDigest": begin.body_digest.hex(),
+            "hasIndex": index is not None,
+        }
+        for k, v in checks.items():
+            if manifest.get(k) != v:
+                raise Torn(f"manifest field {k} is {manifest.get(k)!r}, expected {v!r}")
+        pad_end = blob_count_after * BLOB_DATA_BYTES
+        cur._check(cur.pos, pad_end)
+        if any(self.data[cur.pos:pad_end]):
+            raise Torn("bytes after the manifest are not zero")
+
+        # Everything structural verified; now take the inner records into the result.
+        schemas: dict[str, dict] = {}
+        tooling: dict[str, bytes] = {}
+        count = 0
+        staged: list[tuple[str, str, int, bytes]] = []
+        pos = 0
+        while pos < len(inner):
+            try:
+                it, ipayload, pos = read_record(inner, pos)
+            except FormatError as e:
+                raise Torn(f"inner records are malformed: {e}") from e
+            if it == RecordType.ENTRY:
+                try:
+                    entry = canonical.loads(ipayload)
+                    Entry.validate(entry)
+                except (ValueError, FormatError) as e:
+                    raise Torn(f"entry is invalid: {e}") from e
+                if not canonical.is_canonical(ipayload):
+                    raise Torn("entry is not canonical JSON")
+                org, acc, ver = Entry.key(entry)
+                staged.append((org, acc, ver, ipayload))
+            elif it == RecordType.SCHEMA:
+                s = canonical.loads(ipayload)
+                schemas[s["organism"]] = s
+            elif it == RecordType.TOOLING:
+                p, c = decode_tooling(ipayload)
+                tooling[p] = c
+            elif INNER_MIN <= it <= INNER_MAX:
+                out.warnings.append(f"batch {expected_batch}: skipped unknown inner record type {it:#x}")
+            else:
+                raise Torn(f"outer record type {it:#x} inside a body")
+
+        # Build the entry set as it would stand with this batch, check every cumulative
+        # digest against it, and only then commit. A batch whose manifest disagrees with the
+        # accumulated entries is torn and leaves nothing behind.
+        candidate: dict[str, dict[tuple[str, int], tuple[bytes, int]]] = {o: dict(items) for o, items in out.entries.items()}
+        duplicates: list[str] = []
+        for org, acc, ver, p in staged:
+            bucket = candidate.setdefault(org, {})
+            if (acc, ver) in bucket:
+                duplicates.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
+                continue
+            bucket[(acc, ver)] = (p, expected_batch)
+            count += 1
+        organisms_in_manifest = manifest.get("organisms", {})
+        if set(organisms_in_manifest) != set(candidate):
+            raise Torn("manifest organisms do not match the entries published so far")
+        for org, info in organisms_in_manifest.items():
+            digest = hashlib.sha256(_materialise(candidate[org])).hexdigest()
+            if info.get("artifactSha256") != digest or info.get("entriesTotal") != len(candidate[org]):
+                raise Torn(f"cumulative digest for {org} does not match the materialised entries")
+        out.entries = candidate
+        out.warnings.extend(duplicates)
+        out.schemas.update(schemas)
+        out.tooling.update(tooling)
+        return DecodedBatch(
+            batch=expected_batch,
+            first_blob_seq=first_blob,
+            blob_count_after=blob_count_after,
+            begin=begin,
+            manifest=manifest,
+            manifest_digest=sha256(payload),
+            index=index,
+            schemas=schemas,
+            tooling=tooling,
+            entry_count=count,
+        )
