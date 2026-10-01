@@ -18,10 +18,9 @@ from web3 import Web3
 
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
-from loculus_eternal.sources.base import BlobContext, BlobSource, SourceChain
-from loculus_eternal.format.chunks import ChunkError
+from loculus_eternal.sources.base import BlobSource, SourceChain
 from loculus_eternal.format.records import FormatError
-from loculus_eternal.store import BlobStore, VerificationFailed
+from loculus_eternal.store import BlobStore, fill_store
 
 
 @dataclass
@@ -104,35 +103,7 @@ class Recovery:
 
     def fetch_blobs(self, refs: list[BlobRef], store: BlobStore) -> tuple[int, int, list[dict]]:
         """Fill the store from the sources. Returns (fetched, rejected, missing report)."""
-        fetched = rejected = 0
-        missing: list[dict] = []
-        # Group by block so one beacon request can serve several blobs.
-        groups: dict[tuple, list[BlobRef]] = {}
-        for r in refs:
-            if store.has(r.seq):
-                continue
-            groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
-        for (block_number, block_timestamp), group in sorted(groups.items(), key=lambda kv: kv[1][0].seq):
-            ctx = BlobContext(block_number=block_number, block_timestamp=block_timestamp)
-            wanted = [r.versioned_hash for r in group]
-            result = self.chain.acquire(ctx, wanted)
-            rejected += result.rejected
-            for r in group:
-                blob = result.blobs.get(r.versioned_hash)
-                if blob is None:
-                    missing.append({**r.to_json(), "tried": [a.__dict__ for a in result.attempts]})
-                    self.cfg.log(f"blob {r.seq} missing from every source")
-                    continue
-                try:
-                    store.write(r.seq, r.versioned_hash, blob)
-                except (VerificationFailed, ChunkError) as e:
-                    # VerificationFailed cannot happen after verify_candidates; ChunkError can,
-                    # for a blob that is genuinely on-chain but has a non-zero element high
-                    # byte, which the stream format forbids. Either way: report, do not crash.
-                    missing.append({**r.to_json(), "tried": [a.__dict__ for a in result.attempts], "error": str(e)})
-                    continue
-                fetched += 1
-        return fetched, rejected, missing
+        return fill_store(store, self.chain, refs, log=self.cfg.log)
 
     def decode(self, store: BlobStore, count: int) -> tuple[DecodedStream, dict]:
         decoded = StreamDecoder(store.blobs(count)).decode()

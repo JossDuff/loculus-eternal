@@ -108,6 +108,8 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **U8 — torn batch, lost journal.** When the journal is lost after a partial batch, the next run reports the torn blobs, starts a fresh batch at the next blob boundary, and the recovered stream decodes with the torn range reported and every entry present.
 - **U9 — concurrent upload.** If the contract's blob count moves between planning and sending, the simulation reports the sequence mismatch and nothing is sent.
 - **U10 — command line.** `loculus-eternal upload --config file.toml` reads the key only from `LOCULUS_ETERNAL_PUBLISHER_KEY`, refuses without it, publishes with it, and is a no-op the second time; `--check` works without the key.
+- **U12 — pointer carried forward.** A batch end rewrites the on-chain pointer with the value it already has, so a pointer set by hand or by a snapshot is never wiped by a data upload.
+- **U13 — chain mismatch.** A configured chain id that differs from the RPC endpoint's is a configuration error before anything is read or sent.
 - **U11 — tooling.** The spec and source files are published with the first batch and again only when the package version in the published set differs from the current one.
 
 ### I — IPFS

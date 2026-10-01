@@ -20,8 +20,8 @@ from web3 import Web3
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, verify_manifest
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
 from loculus_eternal.format.encode import EncoderState
-from loculus_eternal.sources.base import BlobContext, SourceChain
-from loculus_eternal.store import BlobStore
+from loculus_eternal.sources.base import SourceChain
+from loculus_eternal.store import BlobStore, fill_store
 
 
 class PublishedSetError(RuntimeError):
@@ -50,21 +50,14 @@ def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: Bl
     verify_manifest(refs, state)
 
     # Fill the store with whatever is not already there, verifying every byte.
-    groups: dict[tuple, list[BlobRef]] = {}
-    for r in refs:
-        if not store.has(r.seq):
-            groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
-    for (block_number, block_timestamp), group in groups.items():
-        result = sources.acquire(BlobContext(block_number, block_timestamp), [r.versioned_hash for r in group])
-        for r in group:
-            blob = result.blobs.get(r.versioned_hash)
-            if blob is None:
-                tried = ", ".join(f"{a.source}: {a.outcome}" for a in result.attempts) or "no sources configured"
-                raise PublishedSetError(
-                    f"blob {r.seq} of the published stream could not be obtained from any source ({tried}). "
-                    "The upload command needs the whole stream to know what is already published; add a source that has it."
-                )
-            store.write(r.seq, r.versioned_hash, blob)
+    _, _, missing = fill_store(store, sources, refs, log=log)
+    if missing:
+        m = missing[0]
+        tried = ", ".join(f"{a['source']}: {a['outcome']}" for a in m["tried"]) or "no sources configured"
+        raise PublishedSetError(
+            f"blob {m['seq']} of the published stream could not be obtained from any source ({tried}). "
+            "The upload command needs the whole stream to know what is already published; add a source that has it."
+        )
 
     decoded = StreamDecoder(store.blobs(state.blob_count)).decode() if state.blob_count else StreamDecoder([]).decode()
     enc_state = decoded.encoder_state()

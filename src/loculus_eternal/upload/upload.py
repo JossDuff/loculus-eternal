@@ -28,10 +28,8 @@ from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
 from loculus_eternal.upload.published import PublishedView, load_published_view
-from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, SubmitError, Submitter, current_fees
+from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
 from loculus_eternal.upload.sync import BackendClient, SyncStats, select_new_entries
-
-ZERO_POINTER = bytes(32)
 
 
 @dataclass
@@ -73,9 +71,12 @@ class Uploader:
             policy.poll_interval = poll_interval
         self.policy = policy
         self.sleep = sleep
+        self.journal_path = self.data_dir / "journal.json"
         self.submitter: Submitter | None = None
         if account is not None:
-            self.submitter = Submitter(self.w3, account, config.chain.contract, self.data_dir / "journal.json", self.data_dir / "pending", policy, log=log, sleep=sleep)
+            self.submitter = Submitter(self.w3, account, config.chain.contract, self.journal_path, self.data_dir / "pending", policy, log=log, sleep=sleep)
+        if config.chain.chain_id is not None and self.w3.eth.chain_id != config.chain.chain_id:
+            raise SystemExit(f"configuration error: the config says chain_id {config.chain.chain_id} but the RPC endpoint serves chain {self.w3.eth.chain_id}")
 
     @classmethod
     def with_key(cls, config: Config, key: str, **kw) -> "Uploader":
@@ -109,9 +110,13 @@ class Uploader:
             for p in sorted(base.glob(pattern)):
                 if p.is_file():
                     files.append((p.relative_to(base).as_posix(), p.read_bytes()))
-        current_version = _version_of(dict(files))
+        if not files:
+            self.log("tooling_paths matched no files; nothing to publish as tooling")
+            return []
+        current_version = _version_of(dict(files)) or _installed_version()
         published_version = _version_of(view.decoded.tooling)
-        if view.decoded.tooling and published_version == current_version:
+        # Republish unless the stream already carries tooling with a readable, identical version.
+        if view.decoded.tooling and published_version is not None and published_version == current_version:
             return []
         self.log(f"tooling will be published: {len(files)} file(s), version {current_version}" + (f" (stream has {published_version})" if view.decoded.tooling else " (none in the stream yet)"))
         return files
@@ -153,16 +158,18 @@ class Uploader:
             # An interrupted batch comes first, before the chain is even read: its blobs are in
             # the journal, not yet in the store or necessarily in any archive, so finishing it
             # (which also stores its blobs) is what makes the published view computable.
-            if self.submitter is not None:
-                journal = self.submitter.existing_journal()
-                if journal is not None and not journal.finished:
-                    if mode != "publish":
-                        report.outcome = "refused"
-                        report.message = f"an interrupted batch (batch {journal.batch}, blobs from {journal.first_blob_seq}) is waiting in {self.submitter.journal_path}; run without --check/--dry-run to finish it"
-                        self.log(report.message)
-                        return self._done(report, started)
-                    if not self._resume(journal, store, report):
-                        return self._done(report, started)
+            if self.journal_path.exists():
+                journal = Journal.load(self.journal_path)
+                if mode != "publish" or self.submitter is None:
+                    report.outcome = "refused"
+                    report.message = f"an interrupted batch (batch {journal.batch}, blobs from {journal.first_blob_seq}) is waiting in {self.journal_path}; run a plain publish with the key to finish it"
+                    self.log(report.message)
+                    return self._done(report, started)
+                if journal.finished:
+                    # Every transaction reached finality but the run died before bookkeeping.
+                    self._finish(journal, store, report)
+                elif not self._resume(journal, store, report):
+                    return self._done(report, started)
 
             view = self._view(store)
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
@@ -186,7 +193,7 @@ class Uploader:
 
             encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state)
             batch = encoder.encode_batch(entries, previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD)
-            report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // 6), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
+            report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
             self.log(f"planned batch {batch.batch}: {len(entries)} entries in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
             if mode == "check":
@@ -205,7 +212,9 @@ class Uploader:
 
             if self.submitter is None:
                 raise SystemExit("configuration error: publishing needs the publisher key")
-            journal = self.submitter.plan(batch, batch.blobs, ZERO_POINTER)
+            # The pointer is carried forward unchanged until the IPFS snapshot sets a new one;
+            # a batch end always writes it, so passing zero here would wipe a pointer set by hand.
+            journal = self.submitter.plan(batch, batch.blobs, view.state.app_pointer)
             try:
                 report.dry_run = self.submitter.dry_run(journal)
             except Refused as e:
@@ -222,6 +231,12 @@ class Uploader:
 
             try:
                 self.submitter.run(journal)
+            except RevertedOnChain as e:
+                report.outcome = "failed"
+                report.message = f"{e}; the batch has been set aside and the next run will start a fresh one after the torn blobs"
+                self.log(f"publishing stopped: {report.message}")
+                self._abandon(journal)
+                return self._done(report, started)
             except SubmitError as e:
                 report.outcome = "failed"
                 report.message = str(e)
@@ -238,9 +253,10 @@ class Uploader:
         self.log(f"resuming interrupted batch {journal.batch} (blobs from {journal.first_blob_seq}): " + ", ".join(f"tx {t.index} {t.status}" for t in journal.txs))
         try:
             self.submitter.run(journal)
-        except Refused as e:
-            # The simulation of the next transaction says the contract has moved on: another
-            # upload ran in between. Set this batch aside; the run goes on with a fresh view.
+        except (Refused, RevertedOnChain) as e:
+            # The contract has moved past what this batch assumed, either because another
+            # upload ran in between or because one of our transactions reverted. Set the
+            # batch aside; the run goes on with a fresh view and a fresh batch.
             self.log(f"the interrupted batch cannot be finished ({e}); setting it aside")
             self._abandon(journal)
             report.message = f"abandoned interrupted batch {journal.batch}: {e}"
@@ -270,13 +286,17 @@ class Uploader:
 
 
 def _version_of(files: dict[str, bytes]) -> str | None:
-    """The package version named in a tooling set's pyproject.toml, if present."""
+    """The package version named in a tooling set's pyproject.toml, or None if absent/unreadable."""
     for path, content in files.items():
         if path.endswith("pyproject.toml"):
             try:
                 return tomllib.loads(content.decode("utf-8"))["project"]["version"]
             except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError):
                 return None
+    return None
+
+
+def _installed_version() -> str | None:
     try:
         return importlib.metadata.version("loculus-eternal")
     except importlib.metadata.PackageNotFoundError:

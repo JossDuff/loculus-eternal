@@ -18,10 +18,12 @@ from typing import Callable
 import rlp
 from eth_utils import keccak
 from web3 import Web3
+from web3.exceptions import TransactionNotFound
 
 from loculus_eternal import kzg
 from loculus_eternal.chain import ABI
 from loculus_eternal.format.chunks import ELEMENTS_PER_BLOB
+from loculus_eternal.store import _write_atomic
 
 MAX_BLOBS_PER_TX = 6
 BLOB_GAS_PER_BLOB = 131_072
@@ -46,6 +48,11 @@ class SubmitError(RuntimeError):
 
 class Refused(SubmitError):
     """The dry run found a reason not to send anything. Nothing was spent."""
+
+
+class RevertedOnChain(SubmitError):
+    """A sent transaction was included but reverted. Its blob gas is gone; the batch cannot
+    continue, because the contract's record has moved past what this batch assumed."""
 
 
 @dataclass
@@ -92,9 +99,8 @@ class Journal:
         return all(t.status == "finalized" for t in self.txs)
 
     def save(self, path: Path) -> None:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=1))
-        tmp.replace(path)
+        # The journal is the crash-safety record; it must survive a power failure too.
+        _write_atomic(path, json.dumps(asdict(self), indent=1).encode())
 
     @classmethod
     def load(cls, path: Path) -> "Journal":
@@ -250,13 +256,15 @@ class Submitter:
         return journal
 
     def _send(self, journal: Journal, tx: PlannedTx, escalation: int = 0) -> None:
-        if escalation and self._receipt_for_any(tx) is not None:
+        if tx.attempts and self._receipt_for_any(tx) is not None:
+            tx.status = "sent"
             return  # an earlier attempt landed after all; the inclusion loop will record it
         fees = self.fees()
         try:
             gas = self.simulate(tx, fees)
         except Refused:
-            if escalation and self._receipt_for_any(tx) is not None:
+            if tx.attempts and self._receipt_for_any(tx) is not None:
+                tx.status = "sent"
                 return
             raise
         factor = 1.25**escalation
@@ -287,32 +295,41 @@ class Submitter:
         }
         signed = self.account.sign_transaction(txn, blobs=self.blobs_for(journal, tx))
         tx_hash = blob_transaction_hash(bytes(signed.raw_transaction))
+        # Record the attempt before broadcasting. If the broadcast's response is lost, the
+        # node may still have the transaction; a resume then waits for this hash at this
+        # nonce instead of sending a second copy at a fresh nonce.
+        tx.attempts.append(SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"]))
+        tx.status = "sent"
+        journal.save(self.journal_path)
         if self.drop_sends > 0:
             self.drop_sends -= 1
         else:
             try:
                 reported = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+            except Exception as e:
+                self.log(f"transaction {tx.index}: broadcast of {tx_hash} failed ({e}); it is journaled and will be waited for or replaced")
+            else:
                 if "0x" + bytes(reported).hex() != tx_hash:
                     raise SubmitError(f"the node reports transaction hash 0x{bytes(reported).hex()} but the signed payload hashes to {tx_hash}")
-            except SubmitError:
-                raise
-            except Exception as e:
-                if escalation and self._receipt_for_any(tx) is not None:
-                    return
-                raise SubmitError(f"the node rejected transaction {tx.index}: {e}") from e
-        tx.attempts.append(SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"]))
-        tx.status = "sent"
-        journal.save(self.journal_path)
         self.log(f"transaction {tx.index}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
         if self.after_send:
             self.after_send(tx)
 
     def _receipt_for_any(self, tx: PlannedTx):
+        """The receipt of whichever attempt landed, or None. A transport failure is retried
+        and then raised, never mistaken for 'not included'."""
         for attempt in tx.attempts:
-            try:
-                receipt = self.w3.eth.get_transaction_receipt(attempt.tx_hash)
-            except Exception:
-                continue
+            for retry in range(5):
+                try:
+                    receipt = self.w3.eth.get_transaction_receipt(attempt.tx_hash)
+                    break
+                except TransactionNotFound:
+                    receipt = None
+                    break
+                except Exception as e:
+                    if retry == 4:
+                        raise SubmitError(f"cannot reach the node to look up transaction {attempt.tx_hash}: {e}") from e
+                    self.sleep(0.5 * 2**retry)
             if receipt is not None:
                 return receipt
         return None
@@ -324,7 +341,7 @@ class Submitter:
             receipt = self._receipt_for_any(tx)
             if receipt is not None:
                 if receipt["status"] != 1:
-                    raise SubmitError(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain; the blob gas is lost and the journal is kept for inspection")
+                    raise RevertedOnChain(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
                 tx.status = "included"
                 tx.included_block = receipt["blockNumber"]
                 tx.included_tx = receipt["transactionHash"].hex()

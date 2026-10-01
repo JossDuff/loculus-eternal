@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 
 from loculus_eternal import kzg
-from loculus_eternal.format.chunks import BLOB_BYTES, BLOB_DATA_BYTES, pack_blobs, unpack_blob
+from loculus_eternal.format.chunks import BLOB_BYTES, BLOB_DATA_BYTES, ChunkError, pack_blobs, unpack_blob
 from loculus_eternal.sources.local import LocalDirectorySource
 
 
@@ -150,3 +150,40 @@ class BlobStore:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def fill_store(store: BlobStore, sources, refs, *, log=lambda s: None) -> tuple[int, int, list[dict]]:
+    """Fetch every blob in refs that the store lacks, one block at a time, verifying each.
+
+    Shared by the recovery command and the upload command's published view. Returns
+    (fetched, candidates rejected, missing), where each missing entry carries the blob's
+    reference and every source attempt, so the caller can report or refuse as it sees fit.
+    """
+    from loculus_eternal.sources.base import BlobContext
+
+    fetched = rejected = 0
+    missing: list[dict] = []
+    groups: dict[tuple, list] = {}
+    for r in refs:
+        if not store.has(r.seq):
+            groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
+    for (block_number, block_timestamp), group in sorted(groups.items(), key=lambda kv: kv[1][0].seq):
+        result = sources.acquire(BlobContext(block_number=block_number, block_timestamp=block_timestamp), [r.versioned_hash for r in group])
+        rejected += result.rejected
+        for r in group:
+            blob = result.blobs.get(r.versioned_hash)
+            entry = {**r.to_json(), "tried": [a.__dict__ for a in result.attempts]}
+            if blob is None:
+                missing.append(entry)
+                log(f"blob {r.seq} missing from every source")
+                continue
+            try:
+                store.write(r.seq, r.versioned_hash, blob)
+            except (VerificationFailed, ChunkError) as e:
+                # VerificationFailed cannot happen after the sources verified the candidate;
+                # ChunkError can, for a blob that is genuinely on-chain but breaks the
+                # stream's packing rule. Either way it is reported, not fatal.
+                missing.append({**entry, "error": str(e)})
+                continue
+            fetched += 1
+    return fetched, rejected, missing

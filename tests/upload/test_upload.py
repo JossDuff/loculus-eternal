@@ -340,3 +340,151 @@ def test_U11_tooling_is_republished_when_the_version_changes(world):
     world["backend"].add("zika", released_line("zika", "PP_8", 1))
     bumped = uploader(world).run()
     assert bumped.outcome == "published" and bumped.tooling_published
+
+
+def test_U12_batch_end_carries_the_existing_pointer_forward(world):
+    anvil = world["anvil"]
+    pointer = b"\x42" * 32
+    tx = anvil.contract.functions.setAppPointer(pointer).build_transaction({"from": anvil.publisher.address, "nonce": anvil.w3.eth.get_transaction_count(anvil.publisher.address), "chainId": anvil.chain_id})
+    anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.publisher.sign_transaction(tx).raw_transaction))
+    anvil.mine(3)
+    report = uploader(world).run()
+    assert report.outcome == "published"
+    assert bytes(anvil.contract.functions.appPointer().call()) == pointer
+
+
+def test_U3_check_refuses_while_an_interrupted_batch_is_waiting(world):
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_C{i}") for i in range(9)])
+    up = uploader(world)
+
+    def crash(tx):
+        if tx.index == 0:
+            raise KeyboardInterrupt
+
+    up.submitter.after_send = crash
+    with pytest.raises(KeyboardInterrupt):
+        up.run()
+    checked = Uploader(configuration.load(world["cfg_path"]), log=lambda s: None).run("check")
+    assert checked.outcome == "refused" and "interrupted batch" in checked.message
+    dry = uploader(world).run("dry-run")
+    assert dry.outcome == "refused" and "interrupted batch" in dry.message
+    resumed = uploader(world).run()
+    assert resumed.outcome in ("resumed", "nothing-to-publish") and len(resumed.transactions) == 2
+
+
+def test_U5_lost_broadcast_response_does_not_send_a_second_copy(world):
+    """The node accepts the transaction but the response never arrives: the journal already
+    holds the attempt, so the resume waits for that hash instead of using a new nonce."""
+    anvil = world["anvil"]
+    up = uploader(world)
+    real_send = up.w3.eth.send_raw_transaction
+
+    def send_then_lose_response(raw):
+        real_send(raw)
+        raise ConnectionError("response lost")
+
+    up.w3.eth.send_raw_transaction = send_then_lose_response
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert report.transactions[0]["attempts"] == 1
+    assert anvil.w3.eth.get_transaction_count(anvil.publisher.address) == 1 + 0  # one publish, nothing else from this key
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+
+
+def test_U5_finished_journal_left_by_a_crash_is_completed_not_an_error(world):
+    up = uploader(world)
+    original_finish = up._finish
+
+    def crash_before_bookkeeping(journal, store, report):
+        raise KeyboardInterrupt
+
+    up._finish = crash_before_bookkeeping
+    with pytest.raises(KeyboardInterrupt):
+        up.run()
+    journal = json.loads((up.data_dir / "journal.json").read_text())
+    assert all(t["status"] == "finalized" for t in journal["txs"])
+    again = uploader(world).run()
+    assert again.outcome in ("resumed", "nothing-to-publish") and len(again.transactions) == 1
+    assert not (up.data_dir / "journal.json").exists()
+    have = json.loads((up.data_dir / "stream" / "have.json").read_text())
+    assert len(have) == journal["blob_count_after"]
+
+
+def test_U9_transaction_reverted_on_chain_sets_the_batch_aside(world):
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_R{i}") for i in range(9)])
+    up = uploader(world)
+
+    def race_after_first(tx):
+        # Between our two transactions, someone else appends a blob: our second transaction
+        # is already signed with the old expected sequence and will revert when mined.
+        if tx.index == 0:
+            from loculus_eternal.format.chunks import pack_blobs
+            from loculus_eternal.testkit import publish_blobs
+
+            time.sleep(0.5)
+            publish_blobs(anvil, pack_blobs(b"\x09" * 500), last_blob_chunk_count=17, is_batch_end=True)
+
+    stranger_results = []
+
+    def race_after_first_and_record(tx):
+        if tx.index == 0:
+            from loculus_eternal.format.chunks import pack_blobs
+            from loculus_eternal.testkit import publish_blobs
+
+            time.sleep(0.5)
+            blobs = pack_blobs(b"\x09" * 500)
+            stranger_results.append((blobs, publish_blobs(anvil, blobs, last_blob_chunk_count=17, is_batch_end=True)))
+
+    up.submitter.after_send = race_after_first_and_record
+    # The second transaction is simulated before sending and refused instead; force the
+    # on-chain revert by skipping the simulation for it.
+    original_simulate = up.submitter.simulate
+    up.submitter.simulate = lambda tx, fees: 100_000 if tx.index == 1 else original_simulate(tx, fees)
+    report = up.run()
+    assert report.outcome == "failed" and "reverted on chain" in report.message
+    assert not (up.data_dir / "journal.json").exists()
+    aside = list((up.data_dir / "abandoned").glob("*.json"))
+    assert aside
+
+    # The torn blobs (ours and the stranger's) are on chain; the next run needs them from a
+    # source. The archive would have them from the network; here we hand them over.
+    journal = json.loads(aside[0].read_text())
+    first = journal["txs"][0]
+    receipt = anvil.w3.eth.get_transaction_receipt(first["included_tx"])
+    slot = anvil.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
+    from loculus_eternal import kzg as _kzg
+
+    assert not Path(journal["blobs_dir"]).exists(), "abandoning removes the pending blob files"
+    for blobs, results in stranger_results:
+        s_receipt, s_hashes = results[0]
+        s_slot = anvil.w3.eth.get_block(s_receipt["blockNumber"])["timestamp"]
+        world["archive"].add(s_slot, list(zip(s_hashes, blobs)))
+    # Our own six blobs are gone with the pending files; regenerate them deterministically
+    # from the same inputs, exactly as the encoder did.
+    from loculus_eternal.format.encode import StreamEncoder
+    from loculus_eternal.format.records import CODEC_ZSTD
+    from loculus_eternal.upload.sync import BackendClient, select_new_entries
+
+    client = BackendClient(world["backend"].url, up.data_dir / "feeds")
+    entries = []
+    for org in ("zika", "mpox"):
+        new, _ = select_new_entries(org, client.fetch(org), lambda a, v: False)
+        entries.extend(new)
+    cfg = configuration.load(world["cfg_path"])
+    tooling_files = [(p.relative_to(cfg.path.parent).as_posix(), p.read_bytes()) for pat in cfg.upload.tooling_paths for p in sorted(cfg.path.parent.glob(pat))]
+    regenerated = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:])).encode_batch(entries, tooling=tooling_files, codec=CODEC_ZSTD)
+    ours = [(_kzg.blob_to_versioned_hash(b), b) for b in regenerated.blobs[:6]]
+    assert ["0x" + vh.hex() for vh, _ in ours] == first["versioned_hashes"], "regenerated blobs match what was published"
+    world["archive"].add(slot, ours)
+
+    fresh = uploader(world).run()
+    assert fresh.outcome == "published", fresh.message
+    assert fresh.chain["tornBlobs"] == 7 and fresh.batch["firstBlobSeq"] == 7
+
+
+def test_U13_chain_id_mismatch_is_a_configuration_error(world):
+    text = world["cfg_path"].read_text().replace(f"chain_id = {world['anvil'].chain_id}", "chain_id = 1")
+    world["cfg_path"].write_text(text)
+    with pytest.raises(SystemExit, match="chain_id 1"):
+        uploader(world)
