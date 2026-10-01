@@ -4,7 +4,7 @@ Permanent, verifiable backup of [Pathoplexus](https://pathoplexus.org) released 
 Ethereum blobs for publication, an immutable contract for the record of what was published,
 and IPFS plus public blob archives for keeping the bytes around.
 
-**Status: container format in progress.** Nothing has been published yet. The design is in
+**Status: recovery command in progress.** Nothing has been published yet. The design is in
 [`docs/design.md`](docs/design.md); the roadmap and every decision so far are in
 [`loculus-eternal-PLAN.md`](loculus-eternal-PLAN.md).
 
@@ -17,6 +17,53 @@ and IPFS plus public blob archives for keeping the bytes around.
 - `loculus-eternal recover` — rebuilds the whole released dataset from nothing but the contract
   address and network access, fetching blob bytes from anyone who has them and verifying every
   byte against the chain before trusting it.
+
+## How to recover
+
+Recovery needs an Ethereum RPC endpoint, the contract address, and a list of places to try
+for blob bytes. Put them in a TOML file:
+
+```toml
+[chain]
+rpc_url = "https://your-ethereum-rpc"
+contract = "0x…"                 # the LoculusEternal instance
+chain_id = 1                     # 1 mainnet, 11155111 Sepolia; sets the beacon genesis time
+deployment_block = 0             # optional: where to start scanning event logs
+
+[recover]
+data_dir = "recovery-data"       # verified blobs land here; safe to interrupt and rerun
+out_dir = "recovered"            # one NDJSON file per organism plus recovery-report.json
+# manifest_sources = ["logs", "manifest.json"]   # where to get the blob list; each is verified against the chain
+
+[[sources]]                      # tried in order; every byte is verified, so order is about speed
+type = "beacon"                  # a consensus node or hosted beacon API (recent blobs only)
+endpoints = ["https://beacon.example"]
+
+[[sources]]
+type = "blobscan"                # public archive, looked up by versioned hash
+url = "https://api.blobscan.com"
+
+[[sources]]
+type = "blob-archiver"           # anything serving the beacon sidecar shape
+url = "https://archive.example"
+
+[[sources]]
+type = "local"                   # a directory of <versioned hash>.blob files, e.g. from another recovery
+path = "/mnt/blobs"
+```
+
+Then:
+
+```
+loculus-eternal recover --config recover.toml
+```
+
+The command reads the contract at a finalized block, obtains the ordered list of blob hashes
+and checks it against the contract's `head`, fetches every blob it does not already hold,
+verifies each one against its hash before writing it, decodes the stream, writes the
+per-organism files, and compares their digests with the publisher's manifest. Missing blobs
+are listed in `recovery-data/missing.json` with every source that was tried. Exit status is 0
+only when nothing is missing and every digest matches.
 
 ## Why
 
