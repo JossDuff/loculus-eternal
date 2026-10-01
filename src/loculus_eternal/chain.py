@@ -139,6 +139,9 @@ class ChainReader:
     def state_at_finalized(self) -> ChainState:
         block = self._retry("reading the finalized block", lambda: self.w3.eth.get_block("finalized"))
         n = block["number"]
+        code = self._retry("reading the contract code", lambda: self.w3.eth.get_code(self.contract.address, block_identifier=n))
+        if not code:
+            raise ChainError(f"no contract code at {self.contract.address} in finalized block {n}: wrong address, wrong chain, or the deployment is not final yet")
         f = self.contract.functions
         return ChainState(
             block_number=n,
