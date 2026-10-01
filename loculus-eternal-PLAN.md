@@ -566,7 +566,13 @@ CLI with file and environment configuration so it can run anywhere. Likely answe
 maintainer's machine or Pathoplexus's existing infrastructure with the key in their secret
 store.
 
-**Donation pot — OPEN (parked 2026-09-30, revisit before the contract phase).**
+**Donation pot — DEFERRED 2026-10-01: a TODO for a later point; the contract is built
+without it.** Consequence, stated so nobody is surprised later: since `LoculusEternal` is
+immutable, a pot added afterwards must be a separate contract. A separate contract can hold
+donations and pay the publisher, but it cannot refund inside `publish` and so cannot bind
+its ETH to upload gas as tightly as the proposal below would. If that tightness matters,
+the pot has to be in `LoculusEternal` before mainnet genesis.
+Original requirement and proposal, kept for that later decision:
 Requirement from the human: an address anyone can send ETH to whose only purpose is covering
 the gas of uploading; no refund mechanic; the ETH cannot be taken out of the contract for any
 other purpose; contract ETH is used first and the wallet covers any shortfall.

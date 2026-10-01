@@ -55,7 +55,20 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### C — contract
 
-*To be filled in during the contract phase.*
+- **C1 — append order.** `publish` appends every attached blob in transaction order, emits one `BlobPublished(seq, versionedHash)` per blob with consecutive sequence numbers, and advances `blobCount` by the number of blobs.
+- **C2 — head is the chain.** After any sequence of publishes, `head` equals keccak256 folded over every published versioned hash in order, starting from zero.
+- **C3 — zero blobs.** A call with no attached blobs reverts and changes nothing.
+- **C4 — chunk count bounds.** `lastBlobChunkCount` of 0 or above 4096 reverts; 1 and 4096 are accepted.
+- **C5 — sequence guard.** A call whose `expectedFirstSeq` differs from `blobCount` reverts and changes nothing.
+- **C6 — authorization.** Only the current publisher can call `publish`, `setAppPointer`, `setSuccessor` or `setPublisher`.
+- **C7 — write-once successor.** `setSuccessor` rejects the zero address, succeeds once, and reverts forever after.
+- **C8 — batch end.** With `isBatchEnd` true the call sets `appPointer` and emits `BatchCommitted(firstSeq, lastSeq, lastBlobChunkCount, appPointer)`; with it false the pointer is untouched and no commit event is emitted.
+- **C9 — publisher rotation.** `setPublisher` rejects the zero address, emits `PublisherChanged(previous, current)`, and the previous key loses access immediately.
+- **C10 — standalone re-point.** `setAppPointer` updates the pointer and emits `AppPointerSet` without touching the record.
+- **C11 — constructor.** Deployment rejects a zero publisher and emits `PublisherChanged(0, publisher)`; the record starts empty with `head` zero.
+- **C12 — invariant.** Under random publishes, rotations and rejected calls, `head` always equals the chain over the blobs the contract accepted and `blobCount` equals their number (handler-based invariant test).
+- **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `docs/contract.md`.
+- **C14 — real blob transactions.** On anvil, `publish` called from a real type-3 transaction records the blobs' versioned hashes exactly as computed off-chain from the blob bytes (covered in the anvil harness phase).
 
 ### K — KZG and harness
 
