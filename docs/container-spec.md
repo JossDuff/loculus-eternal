@@ -77,8 +77,10 @@ MUST treat the batch as malformed.
 Binary payloads use fixed-width big-endian unsigned integers (`u8`, `u64`). JSON payloads
 are **canonical JSON** as defined by RFC 8785 (JSON Canonicalization Scheme): UTF-8, object
 keys sorted by UTF-16 code units, no whitespace, numbers in the shortest round-trip form.
-A "digest" is always SHA-256 and, inside JSON, is written as 64 lowercase hexadecimal
-characters. The **digest of a record** means the digest of its payload bytes only.
+Numbers in canonical JSON are IEEE 754 doubles, so any number whose canonical form is an
+integer literal MUST lie within ±(2⁵³ − 1); an encoder MUST refuse an entry whose canonical
+form does not parse and re-serialise to the same bytes. A "digest" is always SHA-256 and,
+inside JSON, is written as 64 lowercase hexadecimal characters. The **digest of a record** means the digest of its payload bytes only.
 
 ### Codecs
 
