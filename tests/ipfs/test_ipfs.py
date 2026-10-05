@@ -202,3 +202,25 @@ def test_I6_snapshot_that_does_not_match_the_pointer_is_refused(world):
     genuine = IpfsSource([a.api_url], report.ipfs["snapshotCid"])
     genuine.set_app_pointer(bytes(anvil.contract.functions.appPointer().call()))
     assert len(genuine.blob_refs()) == report.batch["blobCountAfter"]
+
+
+def test_I7_previous_snapshot_is_unpinned_once_the_new_batch_is_final(world):
+    a, b = world["kubo"]
+    first = uploader(world).run()
+    assert first.outcome == "published"
+    old = first.ipfs["snapshotCid"]
+    assert a.is_pinned(old) and b.is_pinned(old)
+    world["backend"].add("zika", released_line("zika", "PP_1", 2))
+    second = uploader(world).run()
+    assert second.outcome == "published"
+    new = second.ipfs["snapshotCid"]
+    assert new != old
+    assert second.ipfs["previousSnapshotCid"] == old and sorted(second.ipfs["previousUnpinnedOn"]) == sorted([a.api_url, b.api_url])
+    for node in (a, b):
+        assert node.is_pinned(new) and not node.is_pinned(old)
+        # Every blob object, old and new, keeps its own pin.
+        manifest = parse_manifest(node.cat(f"{new}/manifest.json"))
+        assert all(node.is_pinned(entry["cid"]) for entry in manifest["blobs"])
+    # A third run with nothing new leaves everything as it is.
+    third = uploader(world).run()
+    assert third.outcome == "nothing-to-publish" and a.is_pinned(new)

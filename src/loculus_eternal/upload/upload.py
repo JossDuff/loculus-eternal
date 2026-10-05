@@ -27,7 +27,7 @@ from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
-from loculus_eternal.ipfs import IpfsError
+from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
@@ -143,6 +143,23 @@ class Uploader:
                     "isBatchEnd": tx.is_batch_end,
                 }
             )
+        # The batch is final, so the chain now points at the new snapshot: record it and let
+        # go of the previous one on every endpoint that holds the new one. The blob objects
+        # have their own pins and stay. Old blocks leave at the node's next garbage collection.
+        if journal.snapshot_cid:
+            (self.data_dir / "snapshot-cid.txt").write_text(journal.snapshot_cid + "\n")
+            unpinned = []
+            if journal.previous_snapshot_cid and journal.previous_snapshot_cid != journal.snapshot_cid:
+                for url in journal.snapshot_endpoints:
+                    try:
+                        KuboClient(url).pin_rm(journal.previous_snapshot_cid)
+                        unpinned.append(url)
+                    except IpfsError as e:
+                        self.log(f"could not unpin the previous snapshot on {url}: {e}")
+            if report.ipfs is None:
+                report.ipfs = {"snapshotCid": journal.snapshot_cid}
+            report.ipfs["previousSnapshotCid"] = journal.previous_snapshot_cid
+            report.ipfs["previousUnpinnedOn"] = unpinned
         done_dir = self.data_dir / "done"
         done_dir.mkdir(exist_ok=True)
         self.submitter.journal_path.replace(done_dir / f"batch-{journal.batch}-from-{journal.first_blob_seq}.json")
@@ -235,7 +252,15 @@ class Uploader:
             report.ipfs = snap.to_json()
             if snap.pointer is not None:
                 pointer = snap.pointer
-        journal = self.submitter.plan(batch, batch.blobs, pointer)
+        previous_cid = self._current_snapshot_cid()
+        journal = self.submitter.plan(
+            batch,
+            batch.blobs,
+            pointer,
+            snapshot_cid=report.ipfs["snapshotCid"] if report.ipfs else None,
+            previous_snapshot_cid=previous_cid,
+            snapshot_endpoints=[e["url"] for e in (report.ipfs or {}).get("endpoints", []) if e.get("snapshot") == "ok"],
+        )
         try:
             report.dry_run = self.submitter.dry_run(journal)
         except Refused as e:
@@ -264,8 +289,6 @@ class Uploader:
             self.log(f"publishing stopped: {e}")
             return self._done(report, started)
         self._finish(journal, store, report)
-        if report.ipfs and report.ipfs.get("snapshotCid"):
-            (self.data_dir / "snapshot-cid.txt").write_text(report.ipfs["snapshotCid"] + "\n")
         report.outcome = "published"
         report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f"; snapshot {report.ipfs['snapshotCid']}" if report.ipfs and report.ipfs.get("snapshotCid") else "")
         self.log(report.message)
@@ -291,6 +314,10 @@ class Uploader:
             return False
         self._finish(journal, store, report)
         return True
+
+    def _current_snapshot_cid(self) -> str | None:
+        path = self.data_dir / "snapshot-cid.txt"
+        return path.read_text().strip() or None if path.exists() else None
 
     def _abandon(self, journal: Journal) -> None:
         aside = self.data_dir / "abandoned"

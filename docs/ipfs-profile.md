@@ -79,6 +79,12 @@ The recovery command does this when an `ipfs` source with a `snapshot_cid` is co
 ## Who pins
 
 Pinning targets are configuration in the upload command's `[ipfs]` section: every listed
-Kubo endpoint receives every blob object and the snapshot. The runbook recommends at least
-two team-operated nodes and one pinning service. IPFS is a hedge beside consensus retention,
-public archives and local copies, never the only place the bytes live.
+Kubo endpoint receives every blob object and the snapshot. Each blob object carries its own
+pin and is never unpinned. Snapshots are kept one at a time: once the batch whose pointer
+names a new snapshot is final, the upload command unpins the previous snapshot on every
+endpoint that holds the new one, so a node carries every blob object plus the latest
+snapshot and nothing accumulates. An old snapshot's blocks leave the node at its next
+garbage collection; nothing in them is lost, since every file is rebuildable from the blob
+objects. The runbook recommends at least two team-operated nodes and one pinning service.
+IPFS is a hedge beside consensus retention, public archives and local copies, never the
+only place the bytes live.

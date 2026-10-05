@@ -331,7 +331,9 @@ Every pinner must derive identical CIDs from identical bytes, so the profile is 
   sha2-256. The `appPointer` on-chain is the sha256 of the snapshot CID's bytes. The current
   snapshot CID is announced off-chain (run report, public page) and verified against the
   pointer; the per-blob CIDs cannot be derived from versioned hashes, so IPFS-only recovery
-  starts from the snapshot.
+  starts from the snapshot. Decided 2026-10-05: once the batch carrying a new pointer is
+  final, the previous snapshot is unpinned on every endpoint that holds the new one, so a
+  node carries every blob object and one snapshot.
 - Implementation: Kubo RPC API. Pinning targets are configuration.
 
 ---

@@ -115,6 +115,10 @@ class KuboClient:
     def pin_add(self, cid: str) -> None:
         self._post("pin/add", params={"arg": cid, "recursive": "true"})
 
+    def pin_rm(self, cid: str) -> None:
+        """Drop a recursive pin. The blocks stay until the node's next garbage collection."""
+        self._post("pin/rm", params={"arg": cid, "recursive": "true"})
+
     def is_pinned(self, cid: str) -> bool:
         try:
             self._post("pin/ls", params={"arg": cid, "type": "all"})

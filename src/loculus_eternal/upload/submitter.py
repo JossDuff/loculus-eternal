@@ -93,6 +93,9 @@ class Journal:
     created_at: float
     blobs_dir: str
     txs: list[PlannedTx]
+    snapshot_cid: str | None = None             # the snapshot this batch's pointer names
+    previous_snapshot_cid: str | None = None    # the one to unpin once this batch is final
+    snapshot_endpoints: list[str] = field(default_factory=list)   # endpoints that took the new snapshot
 
     @property
     def finished(self) -> bool:
@@ -141,7 +144,7 @@ class Submitter:
     def existing_journal(self) -> Journal | None:
         return Journal.load(self.journal_path) if self.journal_path.exists() else None
 
-    def plan(self, batch, blobs: list[bytes], app_pointer: bytes) -> Journal:
+    def plan(self, batch, blobs: list[bytes], app_pointer: bytes, *, snapshot_cid: str | None = None, previous_snapshot_cid: str | None = None, snapshot_endpoints: list[str] | None = None) -> Journal:
         """Write the journal and the blob files for a freshly encoded batch."""
         if self.journal_path.exists():
             raise SubmitError(f"a journal already exists at {self.journal_path}; resume or abandon it first")
@@ -173,6 +176,9 @@ class Submitter:
             created_at=time.time(),
             blobs_dir=str(blobs_dir),
             txs=txs,
+            snapshot_cid=snapshot_cid,
+            previous_snapshot_cid=previous_snapshot_cid,
+            snapshot_endpoints=list(snapshot_endpoints or []),
         )
         journal.save(self.journal_path)
         return journal

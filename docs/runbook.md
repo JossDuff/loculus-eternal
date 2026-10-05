@@ -138,9 +138,10 @@ Every run adds the batch's blobs and a snapshot (the blob list with IPFS address
 container spec, and each organism's file compressed with zstd) to each endpoint in `[ipfs]`,
 and the batch's final transaction records a pointer to that snapshot on the chain. The
 snapshot's address is printed at the end of the run and kept in `upload-data/snapshot-cid.txt`;
-publish it on the public page so anyone can recover from IPFS alone. If no endpoint is
-reachable the run still publishes and says so; set `required = true` if you would rather
-it refused.
+publish it on the public page so anyone can recover from IPFS alone. Once the new batch is
+final the previous snapshot is unpinned, so each node keeps every blob plus the latest
+snapshot only; the blobs are the permanent part. If no endpoint is reachable the run still
+publishes and says so; set `required = true` if you would rather it refused.
 
 ## Rotating the publisher key
 

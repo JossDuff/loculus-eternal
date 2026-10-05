@@ -121,6 +121,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **I4 — recovery from IPFS alone.** With only an IPFS source and the snapshot's manifest as the blob list, and event logs unavailable, the recovered files are byte-identical and the snapshot's compressed files decompress to them.
 - **I5 — IPFS is a hedge.** When no endpoint is reachable the batch still publishes with the previous pointer carried forward and the report records the failure; with `required` set the run refuses instead.
 - **I6 — pointer check.** A snapshot whose CID does not hash to the contract's pointer is refused both as a manifest source and as a blob source.
+- **I7 — one snapshot per node.** Once the batch carrying the new pointer is final, the previous snapshot is unpinned on every endpoint that holds the new one; blob objects keep their own pins; a run with nothing new changes no pins.
 
 ## Process checks (in force from the groundwork phase)
 
