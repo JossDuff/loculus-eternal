@@ -48,6 +48,11 @@ One run does, in order:
    max_blob_fee_gwei = 5                         # refuse to publish when blob space is pricier than this
    max_priority_fee_gwei = 1
 
+   [ipfs]                                        # optional: Kubo RPC endpoints that pin every blob and snapshot
+   endpoints = ["http://kubo-1:5001", "http://kubo-2:5001"]
+   spec_path = "docs/container-spec.md"          # included in every snapshot
+   required = false                              # true: refuse to publish when no endpoint takes the snapshot
+
    [[sources]]                                   # where the command gets the published stream back from
    type = "beacon"                               # CHANGE: a beacon API with historical blobs (see below)
    endpoints = ["https://your-beacon-api"]
@@ -126,6 +131,17 @@ after that, only archives and your own local copy have them. The local copy in
 `upload-data/stream` is used first, so in normal operation nothing is downloaded. Keep at
 least one archive source configured for the day the local copy is lost. Public archives come
 and go; if one disappears, replace it in the config.
+
+## IPFS
+
+Every run adds the batch's blobs and a snapshot (the blob list with IPFS addresses, the
+container spec, and each organism's file compressed with zstd) to each endpoint in `[ipfs]`,
+and the batch's final transaction records a pointer to that snapshot on the chain. The
+snapshot's address is printed at the end of the run and kept in `upload-data/snapshot-cid.txt`;
+publish it on the public page so anyone can recover from IPFS alone. Once the new batch is
+final the previous snapshot is unpinned, so each node keeps every blob plus the latest
+snapshot only; the blobs are the permanent part. If no endpoint is reachable the run still
+publishes and says so; set `required = true` if you would rather it refused.
 
 ## Rotating the publisher key
 

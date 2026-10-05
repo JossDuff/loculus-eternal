@@ -12,8 +12,9 @@ from loculus_eternal.sources.beacon import BeaconSource
 from loculus_eternal.sources.blobscan import BlobscanSource
 from loculus_eternal.sources.blob_archiver import BlobArchiverSource
 from loculus_eternal.sources.local import LocalDirectorySource
+from loculus_eternal.sources.ipfs import IpfsSource
 
 __all__ = [
     "BlobContext", "BlobSource", "SourceChain", "SourceError", "verify_candidates",
-    "BeaconSource", "BlobscanSource", "BlobArchiverSource", "LocalDirectorySource",
+    "BeaconSource", "BlobscanSource", "BlobArchiverSource", "LocalDirectorySource", "IpfsSource",
 ]

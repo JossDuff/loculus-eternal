@@ -46,6 +46,9 @@ class PublishedView:
 def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: BlobStore, *, deployment_block: int = 0, spill_dir: Path | None = None, log=print) -> PublishedView:
     reader = ChainReader(w3, contract)
     state = reader.state_at_finalized()
+    for src in sources.sources:
+        if hasattr(src, "set_app_pointer"):
+            src.set_app_pointer(state.app_pointer)
     refs = reader.blob_refs_from_logs(deployment_block, state.block_number) if state.blob_count else []
     verify_manifest(refs, state)
 
