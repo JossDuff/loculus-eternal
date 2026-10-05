@@ -336,3 +336,28 @@ def test_R4_adapter_exception_is_an_error_attempt(published, tmp_path):
     report = Recovery(config(published, tmp_path, [Broken(), BlobscanSource(published["stub"].url)])).run()
     assert report.missing == []
     assert_recovered_matches(published, tmp_path / "out")
+
+
+def test_R14_include_withdrawn_writes_a_separate_file(published, tmp_path):
+    """A withdrawal published on top of the fixture stream: the main file excludes the entry
+    and its digest matches; --include-withdrawn writes the entry to its own file."""
+    anvil, stub = published["anvil"], published["stub"]
+    from loculus_eternal.format.encode import StreamEncoder
+    from loculus_eternal.testkit import publish_blobs
+
+    with StreamDecoder(published["blobs"]).decode() as dec:
+        enc = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:]), state=dec.encoder_state())
+        batch = enc.encode_batch([], previous_entries=dec.records, codec=CODEC_ZSTD, withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000002.1"], "note": "test"}])
+    for receipt, hashes in publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True):
+        slot = anvil.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
+        by_hash = {kzg.blob_to_versioned_hash(b): b for b in batch.blobs}
+        stub.add(slot, [(h, by_hash[h]) for h in hashes])
+    anvil.mine(3)
+    cfg = config(published, tmp_path, [BlobscanSource(stub.url)], include_withdrawn=True)
+    report = Recovery(cfg).run()
+    assert report.missing == [] and report.decode["allArtifactsMatch"]
+    main = (tmp_path / "out" / "zika.ndjson").read_bytes()
+    assert b"PP_000002.1" not in main
+    withdrawn = (tmp_path / "out" / "zika.withdrawn.ndjson").read_bytes()
+    assert b'"accessionVersion":"PP_000002.1"' in withdrawn and withdrawn.count(b"\n") == 1
+    assert report.decode["files"]["zika"]["withdrawnPath"].endswith("zika.withdrawn.ndjson")

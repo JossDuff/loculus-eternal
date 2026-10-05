@@ -488,3 +488,30 @@ def test_U13_chain_id_mismatch_is_a_configuration_error(world):
     world["cfg_path"].write_text(text)
     with pytest.raises(SystemExit, match="chain_id 1"):
         uploader(world)
+
+
+def test_U14_vanished_entries_are_reported_and_withdrawn_only_on_confirmation(world, tmp_path):
+    anvil = world["anvil"]
+    first = uploader(world).run()
+    assert first.outcome == "published" and first.new_entries == 3
+    register_in_archive(world, first)
+    # The backend removes one published entry outright.
+    world["backend"].set_lines("zika", [released_line("zika", "PP_2", 1), released_line("zika", "PP_3", 1, open_terms=False)])
+    quiet = uploader(world).run()
+    assert quiet.outcome == "nothing-to-publish" and quiet.vanished == {"zika": ["PP_1.1"]} and "withdraw-vanished" in quiet.message
+    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"], "nothing was published without confirmation"
+    checked = Uploader(configuration.load(world["cfg_path"]), log=lambda s: None).run("check")
+    assert checked.vanished == {"zika": ["PP_1.1"]}
+
+    confirmed = uploader(world).run(withdraw_vanished=True)
+    assert confirmed.outcome == "published", confirmed.message
+    assert confirmed.withdrawn == {"zika": ["PP_1.1"]} and confirmed.batch["withdrawn"] == 1 and confirmed.new_entries == 0
+    register_in_archive(world, confirmed)
+    report = recover(world, tmp_path)
+    assert report.missing == [] and report.decode["allArtifactsMatch"]
+    zika = [json.loads(l)["metadata"]["accessionVersion"] for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
+    assert zika == ["PP_2.1"] and report.decode["withdrawn"] == {"zika": {"PP_1": [1]}}
+    assert report.decode["files"]["zika"]["withdrawn"] == 1
+    # Once withdrawn, the entry is no longer "vanished": a further run has nothing to say.
+    again = uploader(world).run()
+    assert again.outcome == "nothing-to-publish" and again.vanished == {}
