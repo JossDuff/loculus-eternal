@@ -20,7 +20,7 @@ import io
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Iterable
 
 import zstandard
 
@@ -78,6 +78,8 @@ class Entry:
 
     @staticmethod
     def validate(entry: dict) -> None:
+        if not isinstance(entry, dict):
+            raise FormatError("entry must be a JSON object")
         expected = {"organism", "metadata", *DATA_KEYS}
         if set(entry) != expected:
             raise FormatError(f"entry keys must be exactly {sorted(expected)}, got {sorted(entry)}")
@@ -121,12 +123,6 @@ class Entry:
             "nucleotideSegments": sorted(entry["unalignedNucleotideSequences"]),
             "genes": sorted(entry["alignedAminoAcidSequences"]),
         }
-
-
-def sort_key_from_payload(payload: bytes) -> tuple[str, int]:
-    """(accession, version) of a canonical entry payload, for sorting payloads in tests."""
-    m = canonical.loads(payload)["metadata"]
-    return (m["accession"], m["version"])
 
 
 @dataclass
@@ -173,6 +169,8 @@ class StreamEncoder:
         self.header = Header(chain_id=chain_id, contract=contract, schema_id=schema_id)
         self.state = state or EncoderState()
         self.work_dir = Path(work_dir) if work_dir else None
+        if self.work_dir is not None:
+            self.work_dir.mkdir(parents=True, exist_ok=True)
         self.sort_buffer_bytes = sort_buffer_bytes
 
     def encode_batch(
@@ -259,11 +257,10 @@ class StreamEncoder:
                 "artifactSha256": digest,
             }
 
-        # Published set after this batch, for the index.
+        # Published set after this batch, for the index; the keys are already in hand.
         published = {o: {a: [list(p) for p in vs] for a, vs in accs.items()} for o, accs in st.published.items()}
-        for org, path in runs.items():
-            for acc, ver, _ in iter_run(path):
-                published.setdefault(org, {}).setdefault(acc, []).append([ver, st.next_batch])
+        for org, acc, ver in seen:
+            published.setdefault(org, {}).setdefault(acc, []).append([ver, st.next_batch])
         for accs in published.values():
             for vs in accs.values():
                 vs.sort()
@@ -359,12 +356,6 @@ class _Compressor:
     def close(self) -> None:
         if self._c is not None:
             self.out.write(self._c.flush())
-
-
-def materialise(payloads: Iterable[bytes]) -> Iterator[bytes]:
-    """Yield the lines of an organism's output file given its payloads in any order."""
-    for p in sorted(payloads, key=sort_key_from_payload):
-        yield p + b"\n"
 
 
 def _digest_merged(previous: Iterable[Record], new: Iterable[Record]) -> tuple[str, int]:

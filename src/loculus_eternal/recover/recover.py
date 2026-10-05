@@ -18,6 +18,7 @@ from web3 import Web3
 
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
+from loculus_eternal.format.entrystore import safe_dirname
 from loculus_eternal.sources.base import BlobSource, SourceChain
 from loculus_eternal.format.records import FormatError
 from loculus_eternal.store import BlobStore, fill_store
@@ -106,18 +107,20 @@ class Recovery:
         return fill_store(store, self.chain, refs, log=self.cfg.log)
 
     def decode(self, store: BlobStore, count: int) -> tuple[DecodedStream, dict]:
-        decoded = StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill").decode()
         out = self.cfg.out_dir
         out.mkdir(parents=True, exist_ok=True)
-        last = decoded.batches[-1].manifest["organisms"] if decoded.batches else {}
         files = {}
         digests = {}
-        for org in decoded.organisms():
-            path = out / f"{org}.ndjson"
-            with open(path, "wb", buffering=1 << 20) as f:
-                digests[org] = decoded.materialise_to(org, f)
-            files[org] = {"path": str(path), "entries": decoded.count(org), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
-        verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
+        # The spilled entries live under the data directory while the files are written and
+        # are removed when the decoded stream is closed; the output files are the result.
+        with StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill").decode() as decoded:
+            last = decoded.batches[-1].manifest["organisms"] if decoded.batches else {}
+            for org in decoded.organisms():
+                path = out / f"{safe_dirname(org)}.ndjson"
+                with open(path, "wb", buffering=1 << 20) as f:
+                    digests[org] = decoded.materialise_to(org, f)
+                files[org] = {"path": str(path), "entries": decoded.count(org), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
+            verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
         report = {
             "header": None if decoded.header is None else {"chainId": decoded.header.chain_id, "contract": "0x" + decoded.header.contract.hex(), "schemaId": decoded.header.schema_id, "version": f"{decoded.header.major}.{decoded.header.minor}"},
             "batches": [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "blobCountAfter": b.blob_count_after, "entries": b.entry_count, "hasIndex": b.index is not None} for b in decoded.batches],

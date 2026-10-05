@@ -106,3 +106,76 @@ def test_F18_external_sorter_and_merge(tmp_path):
     assert keys == sorted(set(keys)) and ("Z9", 9) in keys
     assert dropped == [(("A00", 1), 0, 1)]
     assert [p for b, (a, v, p) in merged if (a, v) == ("A00", 1)] == [b"p0"]
+
+
+# --- hostile streams: the decoder must tear the batch, never crash or escape its directory ---
+
+
+def _handmade(inner: bytes, manifest_organisms: dict, uncompressed_length: int | None = None) -> list[bytes]:
+    from loculus_eternal.format.chunks import BLOB_DATA_BYTES, pack_blobs
+
+    begin = BatchBegin(0, 0, b"\x00" * 32, CODEC_RAW, uncompressed_length if uncompressed_length is not None else len(inner), len(inner), sha256(inner))
+    manifest = {"batch": 0, "firstBlobSeq": 0, "blobCountAfter": 1, "previousManifestDigest": "00" * 32, "bodyDigest": begin.body_digest.hex(), "hasIndex": False, "organisms": manifest_organisms}
+    stream = frame(RecordType.HEADER, Header(CHAIN_ID, CONTRACT).encode()) + frame(RecordType.BATCH_BEGIN, begin.encode()) + frame(RecordType.BODY, inner) + frame(RecordType.BATCH_MANIFEST, canonical.dumps(manifest))
+    return pack_blobs(stream + b"\x00" * (BLOB_DATA_BYTES - len(stream)))
+
+
+def _organism_entry(organism: str) -> dict:
+    e = sample_entry("zika", "PP_000001", 1)
+    e["organism"] = organism
+    return e
+
+
+def test_F18_hostile_organism_name_cannot_escape_the_spill_directory(tmp_path):
+    e = _organism_entry("../../escaped")
+    payload = Entry.payload(e)
+    line = payload + b"\n"
+    blobs = _handmade(frame(RecordType.ENTRY, payload), {"../../escaped": {"entriesInBatch": 1, "entriesTotal": 1, "artifactSha256": hashlib.sha256(line).hexdigest()}})
+    spill = tmp_path / "a" / "b" / "spill"
+    with StreamDecoder(blobs, spill_dir=spill).decode() as dec:
+        assert not dec.torn and dec.organisms() == ["../../escaped"]
+        assert not (tmp_path / "escaped").exists() and not (tmp_path / "a" / "escaped").exists()
+        assert all(spill in p.parents for p in spill.rglob("*"))
+    assert not (spill / "entries").exists(), "closing removes the spilled entries"
+
+
+def test_F18_hostile_length_prefix_tears_the_batch_without_allocating(tmp_path):
+    from loculus_eternal.format import varint
+
+    inner = varint.encode(2**40) + bytes([RecordType.ENTRY]) + b"x" * 100
+    blobs = _handmade(inner, {})
+    with StreamDecoder(blobs).decode() as dec:
+        assert not dec.batches and "remain of the declared length" in dec.torn[0].reason or "body does not decode" in dec.torn[0].reason
+
+
+def test_F18_non_object_payloads_tear_the_batch(tmp_path):
+    for inner in (frame(RecordType.ENTRY, b"5"), frame(RecordType.SCHEMA, b"[]"), frame(RecordType.ENTRY, b'{"organism":1}')):
+        blobs = _handmade(inner, {})
+        with StreamDecoder(blobs).decode() as dec:
+            assert not dec.batches and dec.torn, inner
+
+
+def test_F18_a_torn_body_leaves_no_spilled_chunks(tmp_path):
+    good = Entry.payload(sample_entry("zika", "PP_000001", 1))
+    inner = frame(RecordType.ENTRY, good) + frame(RecordType.BATCH_BEGIN, b"x")
+    blobs = _handmade(inner, {})
+    spill = tmp_path / "spill"
+    with StreamDecoder(blobs, spill_dir=spill, sort_buffer_bytes=1).decode() as dec:
+        assert not dec.batches and "outer record type" in dec.torn[0].reason
+        assert not list(spill.rglob("*.run")) and not list(spill.rglob("chunk-*"))
+
+
+def test_F18_entry_count_excludes_duplicates_the_store_ignored():
+    e1 = sample_entry("zika", "PP_000001", 1)
+    e2 = dict(e1, metadata=dict(e1["metadata"], hostAge=99))
+    p1, p2 = Entry.payload(e1), Entry.payload(e2)
+    blobs = _handmade(frame(RecordType.ENTRY, p1) + frame(RecordType.ENTRY, p2), {"zika": {"entriesInBatch": 1, "entriesTotal": 1, "artifactSha256": hashlib.sha256(p1 + b"\n").hexdigest()}})
+    with StreamDecoder(blobs).decode() as dec:
+        assert not dec.torn and dec.count("zika") == 1 and dec.batches[0].entry_count == 1
+        assert any("duplicate" in w for w in dec.warnings)
+
+
+def test_F18_encoder_creates_its_work_directory(tmp_path):
+    enc = StreamEncoder(CHAIN_ID, CONTRACT, work_dir=tmp_path / "fresh" / "deep")
+    b = enc.encode_batch([sample_entry("zika", "PP_000001", 1)], codec=CODEC_RAW)
+    assert b.entry_count == 1 and (tmp_path / "fresh" / "deep").exists()

@@ -10,11 +10,24 @@ batch) live in memory, which is a few hundred thousand small tuples for Pathople
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator
+from typing import BinaryIO, Iterator
 
 from loculus_eternal.format.runs import EntryKey, Record, iter_run, merge_runs
+
+
+def safe_dirname(organism: str) -> str:
+    """A filesystem-safe directory name for an organism identifier from an untrusted stream.
+
+    Letters, digits, dot, underscore and hyphen pass through; anything else becomes %XX, and
+    a name that would be empty or a path step ("." or "..") is prefixed so it cannot be one.
+    """
+    name = re.sub(r"[^A-Za-z0-9._-]", lambda m: "%%%02X" % ord(m.group()), organism)
+    if name in ("", ".", "..") or name.startswith("-"):
+        name = "_" + name
+    return name
 
 
 class EntryStore:
@@ -37,12 +50,13 @@ class EntryStore:
     def count(self, organism: str) -> int:
         return len(self.index.get(organism, {}))
 
-    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, on_duplicate: Callable | None = None) -> Iterator[tuple[int, Record]]:
-        """(batch, (accession, version, payload)) in materialisation order."""
+    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None) -> Iterator[tuple[int, Record]]:
+        """(batch, (accession, version, payload)) in materialisation order, the earliest batch
+        winning a duplicate key."""
         runs = list(self.runs.get(organism, []))
         if extra_run is not None:
             runs.append(extra_run)
-        return merge_runs(runs, on_duplicate=on_duplicate)
+        return merge_runs(runs)
 
     def iter_records(self, organism: str) -> Iterator[Record]:
         for _, rec in self.iter_sorted(organism):
@@ -60,22 +74,22 @@ class EntryStore:
                         return p
         return None
 
-    def materialise_to(self, organism: str, out: BinaryIO, extra_run: tuple[int, Path] | None = None) -> str:
-        """Write the organism's output file and return its SHA-256 hex digest."""
+    def materialise_to(self, organism: str, out: BinaryIO | None, extra_run: tuple[int, Path] | None = None) -> tuple[str, int]:
+        """Write the organism's output file (if `out` is given) while hashing it. Returns the
+        SHA-256 hex digest and the number of lines. This is the one definition of the file."""
         h = hashlib.sha256()
+        n = 0
         for _, (_, _, payload) in self.iter_sorted(organism, extra_run):
-            out.write(payload)
-            out.write(b"\n")
+            if out is not None:
+                out.write(payload)
+                out.write(b"\n")
             h.update(payload)
             h.update(b"\n")
-        return h.hexdigest()
+            n += 1
+        return h.hexdigest(), n
 
-    def digest(self, organism: str, extra_run: tuple[int, Path] | None = None) -> str:
-        h = hashlib.sha256()
-        for _, (_, _, payload) in self.iter_sorted(organism, extra_run):
-            h.update(payload)
-            h.update(b"\n")
-        return h.hexdigest()
+    def digest(self, organism: str, extra_run: tuple[int, Path] | None = None) -> tuple[str, int]:
+        return self.materialise_to(organism, None, extra_run)
 
     def materialise(self, organism: str) -> bytes:
         import io
@@ -86,10 +100,13 @@ class EntryStore:
 
     # --- writes --------------------------------------------------------------------------------
 
+    def organism_dir(self, organism: str) -> Path:
+        d = self.directory / safe_dirname(organism)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def staging_path(self, organism: str, batch: int) -> Path:
-        d = self.directory / organism
-        d.mkdir(exist_ok=True)
-        return d / f"batch-{batch}.staging"
+        return self.organism_dir(organism) / f"batch-{batch}.staging"
 
     def accept(self, organism: str, batch: int, staged: Path, keys: list[EntryKey]) -> list[EntryKey]:
         """Take a verified staged run into the store. Returns the keys that were duplicates of
@@ -109,8 +126,8 @@ class EntryStore:
     def discard(self, staged: Path) -> None:
         staged.unlink(missing_ok=True)
 
-    def close(self) -> None:
-        pass
-
     def destroy(self) -> None:
+        """Remove every run file. The store is a working copy; the stream is the record."""
         shutil.rmtree(self.directory, ignore_errors=True)
+        self.runs = {}
+        self.index = {}

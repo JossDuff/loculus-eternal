@@ -10,7 +10,6 @@ the chunks at the end, and are consumed by streaming readers and k-way merges.
 from __future__ import annotations
 
 import heapq
-import io
 import os
 import tempfile
 from pathlib import Path
@@ -25,13 +24,24 @@ DEFAULT_BUFFER_BYTES = 256 * 1024 * 1024
 
 
 class RecordReader:
-    """Reads length-prefixed records from a binary stream without reading ahead past them."""
+    """Reads length-prefixed records from a binary stream without reading ahead past them.
 
-    def __init__(self, stream: BinaryIO):
+    With a `limit`, no length prefix may ask for more bytes than remain of the declared
+    total, so a hostile prefix cannot provoke a huge allocation, and a stream that keeps
+    producing bytes past the declared total is cut off.
+    """
+
+    def __init__(self, stream: BinaryIO, limit: int | None = None):
         self.stream = stream
         self.consumed = 0
+        self.limit = limit
+
+    def _check_room(self, n: int) -> None:
+        if self.limit is not None and self.consumed + n > self.limit:
+            raise ValueError(f"record asks for {n} bytes but only {self.limit - self.consumed} remain of the declared length")
 
     def _read_exact(self, n: int) -> bytes:
+        self._check_room(n)
         data = self.stream.read(n)
         if len(data) != n:
             raise EOFError(f"stream ended after {self.consumed + len(data)} bytes, needed {n} more")
@@ -42,6 +52,11 @@ class RecordReader:
         """A uvarint, or None at a clean end of stream."""
         buf = bytearray()
         while True:
+            if len(buf) >= varint.MAX_BYTES:
+                raise ValueError("length prefix longer than ten bytes")
+            if not buf and self.limit is not None and self.consumed >= self.limit:
+                return None  # the declared length is used up: a clean end, whatever follows
+            self._check_room(1)
             b = self.stream.read(1)
             if not b:
                 if not buf:
@@ -130,10 +145,20 @@ class ExternalSorter:
             for a, v, p in heapq.merge(*(iter_run(c) for c in self._chunks), key=_key):
                 write_record(out, a, v, p)
         os.replace(tmp, destination)
+        self.abort()
+        return self.count
+
+    def abort(self) -> None:
+        """Drop everything buffered or spilled and remove the work directory."""
+        self._buffer = []
+        self._buffered = 0
         for c in self._chunks:
             c.unlink(missing_ok=True)
         self._chunks = []
-        return self.count
+        try:
+            self.work_dir.rmdir()
+        except OSError:
+            pass
 
 
 def merge_runs(runs: Iterable[tuple[int, Path]], on_duplicate: Callable[[EntryKey, int, int], None] | None = None) -> Iterator[tuple[int, Record]]:
@@ -162,10 +187,11 @@ def merge_runs(runs: Iterable[tuple[int, Path]], on_duplicate: Callable[[EntryKe
 
 
 class BodyRecordReader:
-    """Reads container records (`uvarint(len) ‖ type ‖ payload`) from a decompressing stream."""
+    """Reads container records (`uvarint(len) ‖ type ‖ payload`) from a decompressing stream,
+    never asking for more than `limit` bytes in total."""
 
-    def __init__(self, stream: BinaryIO):
-        self.reader = RecordReader(stream)
+    def __init__(self, stream: BinaryIO, limit: int | None = None):
+        self.reader = RecordReader(stream, limit)
 
     def __iter__(self) -> Iterator[tuple[int, bytes]]:
         while True:
@@ -179,7 +205,3 @@ class BodyRecordReader:
     @property
     def consumed(self) -> int:
         return self.reader.consumed
-
-
-def bytes_stream(data: bytes) -> BinaryIO:
-    return io.BytesIO(data)

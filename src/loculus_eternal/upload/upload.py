@@ -172,78 +172,85 @@ class Uploader:
 
             view = self._view(store)
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
-
-            tooling = self._tooling(view)
-            report.tooling_published = bool(tooling)
-            stats: list[SyncStats] = []
-            encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill")
             try:
-                # The entries flow from the backend feeds straight into the encoder's sorted
-                # runs on disk; the whole batch is never in memory.
-                batch = encoder.encode_batch(self._sync(view, stats), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD)
-            except EmptyBatch:
-                report.sync = [s.__dict__ for s in stats]
-                report.outcome = "nothing-to-publish" if not report.transactions else "resumed"
-                report.message = "nothing to publish: every eligible entry is already in the stream" + ("; new tooling will be included with the next batch that has new entries" if tooling else "")
-                report.tooling_published = False
-                self.log(report.message)
-                return self._done(report, started)
+                return self._plan_and_publish(mode, view, store, report, started)
+            finally:
+                # The decoded stream's spilled entries served the published set and the
+                # cumulative digests; they are a working copy and go away with the run.
+                view.decoded.close()
+
+    def _plan_and_publish(self, mode: str, view: PublishedView, store: BlobStore, report: UploadReport, started: float) -> UploadReport:
+        tooling = self._tooling(view)
+        report.tooling_published = bool(tooling)
+        stats: list[SyncStats] = []
+        encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill")
+        try:
+            # The entries flow from the backend feeds straight into the encoder's sorted
+            # runs on disk; the whole batch is never in memory.
+            batch = encoder.encode_batch(self._sync(view, stats), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD)
+        except EmptyBatch:
             report.sync = [s.__dict__ for s in stats]
-            report.new_entries = batch.entry_count
-            report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
-            self.log(f"planned batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
-
-            if mode == "check":
-                fees = current_fees(self.w3, self.policy)
-                likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
-                at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
-                report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
-                line = f"estimated cost at current fees: {likely / 10**18:.6f} ETH, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
-                if self.account is not None:
-                    balance = self.w3.eth.get_balance(self.account.address)
-                    report.dry_run["balanceWei"] = balance
-                    line += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
-                self.log(line)
-                report.outcome = "checked"
-                return self._done(report, started)
-
-            if self.submitter is None:
-                raise SystemExit("configuration error: publishing needs the publisher key")
-            # The pointer is carried forward unchanged until the IPFS snapshot sets a new one;
-            # a batch end always writes it, so passing zero here would wipe a pointer set by hand.
-            journal = self.submitter.plan(batch, batch.blobs, view.state.app_pointer)
-            try:
-                report.dry_run = self.submitter.dry_run(journal)
-            except Refused as e:
-                report.outcome = "refused"
-                report.message = str(e)
-                self.log(f"refused: {e}")
-                self._abandon(journal)
-                return self._done(report, started)
-            self.log(f"dry run passed: up to {report.dry_run['maxCostWei'] / 10**18:.6f} ETH, likely {report.dry_run['likelyCostWei'] / 10**18:.6f} ETH, wallet holds {report.dry_run['balanceWei'] / 10**18:.6f} ETH")
-            if mode == "dry-run":
-                report.outcome = "dry-run-ok"
-                self._abandon(journal)
-                return self._done(report, started)
-
-            try:
-                self.submitter.run(journal)
-            except RevertedOnChain as e:
-                report.outcome = "failed"
-                report.message = f"{e}; the batch has been set aside and the next run will start a fresh one after the torn blobs"
-                self.log(f"publishing stopped: {report.message}")
-                self._abandon(journal)
-                return self._done(report, started)
-            except SubmitError as e:
-                report.outcome = "failed"
-                report.message = str(e)
-                self.log(f"publishing stopped: {e}")
-                return self._done(report, started)
-            self._finish(journal, store, report)
-            report.outcome = "published"
-            report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs"
+            report.outcome = "nothing-to-publish" if not report.transactions else "resumed"
+            report.message = "nothing to publish: every eligible entry is already in the stream" + ("; new tooling will be included with the next batch that has new entries" if tooling else "")
+            report.tooling_published = False
             self.log(report.message)
             return self._done(report, started)
+        report.sync = [s.__dict__ for s in stats]
+        report.new_entries = batch.entry_count
+        report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
+        self.log(f"planned batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
+
+        if mode == "check":
+            fees = current_fees(self.w3, self.policy)
+            likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
+            at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
+            report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
+            line = f"estimated cost at current fees: {likely / 10**18:.6f} ETH, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
+            if self.account is not None:
+                balance = self.w3.eth.get_balance(self.account.address)
+                report.dry_run["balanceWei"] = balance
+                line += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
+            self.log(line)
+            report.outcome = "checked"
+            return self._done(report, started)
+
+        if self.submitter is None:
+            raise SystemExit("configuration error: publishing needs the publisher key")
+        # The pointer is carried forward unchanged until the IPFS snapshot sets a new one;
+        # a batch end always writes it, so passing zero here would wipe a pointer set by hand.
+        journal = self.submitter.plan(batch, batch.blobs, view.state.app_pointer)
+        try:
+            report.dry_run = self.submitter.dry_run(journal)
+        except Refused as e:
+            report.outcome = "refused"
+            report.message = str(e)
+            self.log(f"refused: {e}")
+            self._abandon(journal)
+            return self._done(report, started)
+        self.log(f"dry run passed: up to {report.dry_run['maxCostWei'] / 10**18:.6f} ETH, likely {report.dry_run['likelyCostWei'] / 10**18:.6f} ETH, wallet holds {report.dry_run['balanceWei'] / 10**18:.6f} ETH")
+        if mode == "dry-run":
+            report.outcome = "dry-run-ok"
+            self._abandon(journal)
+            return self._done(report, started)
+
+        try:
+            self.submitter.run(journal)
+        except RevertedOnChain as e:
+            report.outcome = "failed"
+            report.message = f"{e}; the batch has been set aside and the next run will start a fresh one after the torn blobs"
+            self.log(f"publishing stopped: {report.message}")
+            self._abandon(journal)
+            return self._done(report, started)
+        except SubmitError as e:
+            report.outcome = "failed"
+            report.message = str(e)
+            self.log(f"publishing stopped: {e}")
+            return self._done(report, started)
+        self._finish(journal, store, report)
+        report.outcome = "published"
+        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs"
+        self.log(report.message)
+        return self._done(report, started)
 
     def _resume(self, journal: Journal, store: BlobStore, report: UploadReport) -> bool:
         """Finish an interrupted batch. Returns False if it had to be abandoned instead."""

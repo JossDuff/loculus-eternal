@@ -11,7 +11,6 @@ with the runs already accepted. Only the keys are kept in memory.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import tempfile
 from dataclasses import dataclass, field
@@ -103,13 +102,14 @@ class DecodedStream:
         return self.store.payload(organism, accession, version)
 
     def materialise_to(self, organism: str, out: BinaryIO) -> str:
-        return self.store.materialise_to(organism, out)
+        """Write the organism's file while hashing it; returns the SHA-256 hex digest."""
+        return self.store.materialise_to(organism, out)[0]
 
     def materialise(self, organism: str) -> bytes:
         return self.store.materialise(organism)
 
     def artifact_digests(self) -> dict[str, str]:
-        return {o: self.store.digest(o) for o in self.organisms()}
+        return {o: self.store.digest(o)[0] for o in self.organisms()}
 
     def verify_artifacts(self) -> dict[str, bool]:
         """Compare the materialised files against the last manifest's cumulative digests."""
@@ -150,7 +150,8 @@ class DecodedStream:
         )
 
     def close(self) -> None:
-        """Remove the spill directory if the decoder created a temporary one."""
+        """Remove the spilled entries. They are a working copy; the stream is the record."""
+        self.store.destroy()
         if self._cleanup is not None:
             self._cleanup.cleanup()
             self._cleanup = None
@@ -344,25 +345,29 @@ class StreamDecoder:
         count = 0
         sorter_kwargs = {"buffer_bytes": self.sort_buffer_bytes} if self.sort_buffer_bytes else {}
         try:
-            reader = BodyRecordReader(_body_stream(begin.codec, body))
+            # The reader refuses any record that would run past the declared uncompressed
+            # length, so a hostile length prefix or a decompression bomb cannot make it
+            # allocate or spill more than the batch header admits to.
+            reader = BodyRecordReader(_body_stream(begin.codec, body), limit=begin.uncompressed_length)
             for it, ipayload in reader:
                 if it == RecordType.ENTRY:
                     try:
                         entry = canonical.loads(ipayload)
                         Entry.validate(entry)
-                    except (ValueError, FormatError) as e:
+                    except (ValueError, TypeError, KeyError, FormatError) as e:
                         raise Torn(f"entry is invalid: {e}") from e
                     if not canonical.is_canonical(ipayload):
                         raise Torn("entry is not canonical JSON")
                     org, acc, ver = Entry.key(entry)
                     if org not in sorters:
-                        sorters[org] = ExternalSorter(out.store.directory / org / f"sort-{expected_batch}", **sorter_kwargs)
+                        sorters[org] = ExternalSorter(out.store.organism_dir(org) / f"sort-{expected_batch}", **sorter_kwargs)
                         keys[org] = []
                     sorters[org].add(acc, ver, ipayload)
                     keys[org].append((acc, ver))
-                    count += 1
                 elif it == RecordType.SCHEMA:
                     s = canonical.loads(ipayload)
+                    if not isinstance(s, dict) or not isinstance(s.get("organism"), str):
+                        raise Torn("schema record is not an object naming an organism")
                     schemas[s["organism"]] = s
                 elif it == RecordType.TOOLING:
                     p, c = decode_tooling(ipayload)
@@ -373,7 +378,13 @@ class StreamDecoder:
                     raise Torn(f"outer record type {it:#x} inside a body")
             if reader.consumed != begin.uncompressed_length:
                 raise Torn(f"decoded length {reader.consumed} differs from declared {begin.uncompressed_length}")
-        except (zstandard.ZstdError, EOFError, ValueError) as e:
+        except Torn:
+            for sorter in sorters.values():
+                sorter.abort()
+            raise
+        except (zstandard.ZstdError, EOFError, ValueError, TypeError, KeyError, MemoryError) as e:
+            for sorter in sorters.values():
+                sorter.abort()
             raise Torn(f"body does not decode: {e}") from e
 
         # Stage each organism's run, check every cumulative digest and count against the store
@@ -389,7 +400,7 @@ class StreamDecoder:
                 raise Torn("manifest organisms do not match the entries published so far")
             for org, info in organisms_in_manifest.items():
                 extra = (expected_batch, staged[org]) if org in staged else None
-                digest, total = _digest_and_count(out.store, org, extra)
+                digest, total = out.store.digest(org, extra)
                 if info.get("artifactSha256") != digest or info.get("entriesTotal") != total:
                     raise Torn(f"cumulative digest for {org} does not match the materialised entries")
         except Torn:
@@ -398,6 +409,7 @@ class StreamDecoder:
             raise
         for org, path in staged.items():
             duplicates = out.store.accept(org, expected_batch, path, keys[org])
+            count += len(keys[org]) - len(duplicates)
             for acc, ver in duplicates:
                 warnings.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
         out.warnings.extend(warnings)
@@ -416,13 +428,3 @@ class StreamDecoder:
             entry_count=count,
         )
 
-
-def _digest_and_count(store: EntryStore, organism: str, extra: tuple[int, Path] | None) -> tuple[str, int]:
-    """The materialised file's digest and line count with a staged run merged in."""
-    h = hashlib.sha256()
-    n = 0
-    for _, (_, _, payload) in store.iter_sorted(organism, extra):
-        h.update(payload)
-        h.update(b"\n")
-        n += 1
-    return h.hexdigest(), n
