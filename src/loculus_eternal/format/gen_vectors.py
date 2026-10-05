@@ -264,7 +264,6 @@ def vec_withdrawal() -> dict:
         "published": dec.published(),
         "withdrawn": dec.withdrawn(),
         "artifacts": _artifacts(dec),
-        "withdrawnEntries": {o: [p.decode("utf-8") for _, _, p in dec.withdrawn_records(o)] for o in dec.organisms()},
     }
 
 

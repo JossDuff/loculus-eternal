@@ -58,28 +58,22 @@ class EntryStore:
         idx = self.index.get(organism, {})
         return sum(1 for k in idx if k not in self.withdrawn.get(organism, {}))
 
-    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None, include_withdrawn: bool = False) -> Iterator[tuple[int, Record]]:
+    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None) -> Iterator[tuple[int, Record]]:
         """(batch, (accession, version, payload)) in materialisation order, the earliest batch
-        winning a duplicate key, withdrawn entries left out unless asked for."""
+        winning a duplicate key, withdrawn entries left out. There is deliberately no way to
+        ask for the withdrawn ones: honouring a withdrawal is the whole point of the record."""
         runs = list(self.runs.get(organism, []))
         if extra_run is not None:
             runs.append(extra_run)
-        excluded = set() if include_withdrawn else set(self.withdrawn.get(organism, {})) | set(extra_withdrawn or ())
+        excluded = set(self.withdrawn.get(organism, {})) | set(extra_withdrawn or ())
         for batch, rec in merge_runs(runs):
             if (rec[0], rec[1]) in excluded:
                 continue
             yield batch, rec
 
-    def iter_records(self, organism: str, include_withdrawn: bool = False) -> Iterator[Record]:
-        for _, rec in self.iter_sorted(organism, include_withdrawn=include_withdrawn):
+    def iter_records(self, organism: str) -> Iterator[Record]:
+        for _, rec in self.iter_sorted(organism):
             yield rec
-
-    def iter_withdrawn_records(self, organism: str) -> Iterator[Record]:
-        """Only the withdrawn entries, for a reader who insists on seeing them."""
-        wd = self.withdrawn.get(organism, {})
-        for _, rec in merge_runs(list(self.runs.get(organism, []))):
-            if (rec[0], rec[1]) in wd:
-                yield rec
 
     def withdraw(self, organism: str, keys: list[EntryKey], batch: int) -> None:
         bucket = self.withdrawn.setdefault(organism, {})
@@ -87,9 +81,10 @@ class EntryStore:
             bucket.setdefault(k, batch)
 
     def payload(self, organism: str, accession: str, version: int) -> bytes | None:
-        """One entry's payload; a linear scan of the winning run, meant for tests and tools."""
+        """One entry's payload; a linear scan of the winning run, meant for tests and tools.
+        Withdrawn entries are not returned."""
         batch = self.index.get(organism, {}).get((accession, version))
-        if batch is None:
+        if batch is None or (accession, version) in self.withdrawn.get(organism, {}):
             return None
         for b, path in self.runs[organism]:
             if b == batch:

@@ -29,7 +29,9 @@ def test_F19_withdrawn_entry_leaves_the_output_but_stays_in_the_stream():
         assert dec.count("zika") == 3 and dec.batches[1].withdrawn_count == 1
         after = dec.materialise("zika")
         assert b"PP_000001.1" not in after and b"PP_000001.1" in before
-        assert [p for _, _, p in dec.withdrawn_records("zika")] and all(canonical.loads(p)["metadata"]["accessionVersion"] == "PP_000001.1" for _, _, p in dec.withdrawn_records("zika"))
+        # The decoded stream knows the entry exists and is withdrawn, and offers no way to read it.
+        assert dec.payload("zika", "PP_000001", 1) is None and not hasattr(dec, "withdrawn_records")
+        assert all(canonical.loads(p)["metadata"]["accessionVersion"] != "PP_000001.1" for p in dec.payloads("zika"))
         assert hashlib.sha256(after).hexdigest() == b1.manifest["organisms"]["zika"]["artifactSha256"]
         assert dec.withdrawn() == {"zika": {"PP_000001": [1]}}
         state = dec.encoder_state()
@@ -89,4 +91,3 @@ def test_F19_vector(vectors):
         assert dec.withdrawn() == v["withdrawn"] and dec.published() == v["published"]
         for org, a in v["artifacts"].items():
             assert dec.materialise(org).decode("utf-8") == a["ndjson"]
-        assert {o: [p.decode("utf-8") for _, _, p in dec.withdrawn_records(o)] for o in dec.organisms()} == v["withdrawnEntries"]

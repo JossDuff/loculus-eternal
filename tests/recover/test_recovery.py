@@ -338,9 +338,9 @@ def test_R4_adapter_exception_is_an_error_attempt(published, tmp_path):
     assert_recovered_matches(published, tmp_path / "out")
 
 
-def test_R14_include_withdrawn_writes_a_separate_file(published, tmp_path):
-    """A withdrawal published on top of the fixture stream: the main file excludes the entry
-    and its digest matches; --include-withdrawn writes the entry to its own file."""
+def test_R14_withdrawn_entries_are_excluded_and_cannot_be_asked_for(published, tmp_path):
+    """A withdrawal published on top of the fixture stream: the output excludes the entry, its
+    digest matches, the report names the identifier, and no option produces the data."""
     anvil, stub = published["anvil"], published["stub"]
     from loculus_eternal.format.encode import StreamEncoder
     from loculus_eternal.testkit import publish_blobs
@@ -353,11 +353,14 @@ def test_R14_include_withdrawn_writes_a_separate_file(published, tmp_path):
         by_hash = {kzg.blob_to_versioned_hash(b): b for b in batch.blobs}
         stub.add(slot, [(h, by_hash[h]) for h in hashes])
     anvil.mine(3)
-    cfg = config(published, tmp_path, [BlobscanSource(stub.url)], include_withdrawn=True)
+    cfg = config(published, tmp_path, [BlobscanSource(stub.url)])
     report = Recovery(cfg).run()
     assert report.missing == [] and report.decode["allArtifactsMatch"]
     main = (tmp_path / "out" / "zika.ndjson").read_bytes()
     assert b"PP_000002.1" not in main
-    withdrawn = (tmp_path / "out" / "zika.withdrawn.ndjson").read_bytes()
-    assert b'"accessionVersion":"PP_000002.1"' in withdrawn and withdrawn.count(b"\n") == 1
-    assert report.decode["files"]["zika"]["withdrawnPath"].endswith("zika.withdrawn.ndjson")
+    assert report.decode["withdrawn"] == {"zika": {"PP_000002": [1]}} and report.decode["files"]["zika"]["withdrawn"] == 1
+    assert not any("withdrawn" in p.name for p in (tmp_path / "out").iterdir())
+    import subprocess, sys
+
+    helptext = subprocess.run([sys.executable, "-m", "loculus_eternal.cli", "recover", "--help"], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}).stdout
+    assert "withdrawn" not in helptext

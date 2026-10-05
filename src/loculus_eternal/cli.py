@@ -11,7 +11,7 @@ from loculus_eternal import config as configuration
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 
 
-def recovery_config(cfg: configuration.Config, skip_decode: bool, include_withdrawn: bool = False) -> RecoveryConfig:
+def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryConfig:
     from loculus_eternal.sources import IpfsSource
 
     manifest_sources = []
@@ -39,13 +39,12 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool, include_withdr
         manifest_sources=manifest_sources,
         deployment_block=cfg.chain.deployment_block,
         decode=not (cfg.recover.skip_decode or skip_decode),
-        include_withdrawn=include_withdrawn,
     )
 
 
 def cmd_recover(args: argparse.Namespace) -> int:
     cfg = configuration.load(args.config)
-    rc = recovery_config(cfg, args.skip_decode, args.include_withdrawn)
+    rc = recovery_config(cfg, args.skip_decode)
     report = Recovery(rc).run()
     rc.data_dir.mkdir(parents=True, exist_ok=True)
     (rc.data_dir / "run-report.json").write_text(json.dumps(report.to_json(), indent=1))
@@ -95,7 +94,6 @@ def main(argv: list[str] | None = None) -> int:
     rec = sub.add_parser("recover", help="rebuild the dataset from the contract address and the configured sources")
     rec.add_argument("--config", type=Path, required=True, help="TOML config file (see README)")
     rec.add_argument("--skip-decode", action="store_true", help="fetch and verify blobs only; do not materialise the dataset")
-    rec.add_argument("--include-withdrawn", action="store_true", help="also write <organism>.withdrawn.ndjson with the entries the publisher withdrew")
     rec.set_defaults(func=cmd_recover)
 
     args = parser.parse_args(argv)

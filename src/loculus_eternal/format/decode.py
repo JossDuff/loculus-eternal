@@ -96,9 +96,6 @@ class DecodedStream:
         withdrawn entries left out."""
         return self.store.iter_records(organism)
 
-    def withdrawn_records(self, organism: str) -> Iterator[Record]:
-        return self.store.iter_withdrawn_records(organism)
-
     def is_withdrawn(self, organism: str, accession: str, version: int) -> bool:
         return self.store.is_withdrawn(organism, accession, version)
 

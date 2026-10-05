@@ -379,11 +379,5 @@
     1
    ]
   }
- },
- "withdrawnEntries": {
-  "mpox": [],
-  "zika": [
-   "{\"alignedAminoAcidSequences\":{\"E\":\"MKVL*\",\"NS1\":null},\"alignedNucleotideSequences\":{\"main\":\"ACGNTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"},\"aminoAcidInsertions\":{\"E\":[],\"NS1\":[]},\"metadata\":{\"accession\":\"PP_000001\",\"accessionVersion\":\"PP_000001.1\",\"authors\":\"Müller, A.; 山田, 太郎\",\"geoLocCountry\":\"Switzerland\",\"geoLocLatitude\":46.52,\"hostAge\":42,\"isRevocation\":false,\"pipelineVersion\":7,\"releasedDate\":\"2026-09-30\",\"sampleCollectionDate\":null,\"submitter\":\"insdc_ingest_user\",\"version\":1},\"nucleotideInsertions\":{\"main\":[]},\"organism\":\"zika\",\"unalignedNucleotideSequences\":{\"main\":\"ACGTTGCAACGTTGCAACGTTGCAACGTTGCAACGTTGCA\"}}"
-  ]
  }
 }
