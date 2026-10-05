@@ -37,11 +37,12 @@ The directory contains, by these exact names:
 
 | Name | Content |
 |---|---|
-| `manifest.json` | the chain id, the contract address, `blobCount` and `head` after the batch, the list of batches (number, first and last blob, manifest digest), and every blob in order with its versioned hash and its blob-object CID |
+| `manifest.json` | the chain id, the contract address, `blobCount` and `head` after the batch, the list of batches (`batch`, `firstBlobSeq`, `lastBlobSeq`, `manifestDigest`), and every blob in order as `seq`, `versionedHash`, `cid`, plus `blockNumber` and `blockTimestamp` when the publisher knew them at the time (always for blobs of earlier batches, never for the batch the snapshot was built for, since it had not been sent yet) |
 | `container-spec.md` | the container specification the stream was written to |
 | `<organism>.ndjson.zst` | the materialised file of each organism, as the recovery command writes it, compressed with zstd (one frame, no dictionary) |
 
-`manifest.json` is pretty-printed JSON with sorted keys and a trailing newline. The
+All three kinds of member are required; a snapshot without the spec is not a snapshot under
+this profile. `manifest.json` is pretty-printed JSON with sorted keys and a trailing newline. The
 compressed files are **not** canonical: a different zstd build produces different bytes for
 the same content, so a pinner keeps the publisher's bytes by CID rather than regenerating
 them. What is verifiable is the decompressed content, whose SHA-256 is the cumulative
@@ -70,7 +71,9 @@ public page. The chain then verifies it.
    contract's `appPointer`, `blobCount` and `head` from any Ethereum node.
 2. Check the CID against the pointer. Fetch `manifest.json` and check the blob list against
    `head` as for any manifest.
-3. Fetch each blob object by its CID, verify it against its versioned hash, store it.
+3. Fetch each blob object by its CID, verify it against its versioned hash, store it. The
+   recovery command also fills in missing block numbers from event logs when a node still
+   serves them, so beacon-style sources can help with blobs the IPFS nodes have lost.
 4. Decode. The `.ndjson.zst` files are a shortcut: decompress and compare their SHA-256 with
    the stream's own cumulative digests before trusting them.
 
@@ -85,6 +88,10 @@ names a new snapshot is final, the upload command unpins the previous snapshot o
 endpoint that holds the new one, so a node carries every blob object plus the latest
 snapshot and nothing accumulates. An old snapshot's blocks leave the node at its next
 garbage collection; nothing in them is lost, since every file is rebuildable from the blob
-objects. The runbook recommends at least two team-operated nodes and one pinning service.
+objects. The upload command remembers which snapshot each endpoint holds, so an endpoint
+that was unreachable for one batch still lets go of the older snapshot it has when it next
+takes a new one; and a batch that is refused or abandoned after its snapshot and blob
+objects were added has those pins removed again. The runbook recommends at least two
+team-operated nodes and one pinning service.
 IPFS is a hedge beside consensus retention, public archives and local copies, never the
 only place the bytes live.

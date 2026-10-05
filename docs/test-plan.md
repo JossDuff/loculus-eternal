@@ -122,6 +122,10 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **I5 — IPFS is a hedge.** When no endpoint is reachable the batch still publishes with the previous pointer carried forward and the report records the failure; with `required` set the run refuses instead.
 - **I6 — pointer check.** A snapshot whose CID does not hash to the contract's pointer is refused both as a manifest source and as a blob source.
 - **I7 — one snapshot per node.** Once the batch carrying the new pointer is final, the previous snapshot is unpinned on every endpoint that holds the new one; blob objects keep their own pins; a run with nothing new changes no pins.
+- **I8 — no orphan pins.** A batch refused after its snapshot and blob objects were added has those pins removed from every endpoint that took them; a fee refusal happens before any IPFS work.
+- **I9 — per-endpoint bookkeeping.** An endpoint that was unreachable for one batch still ends with exactly the latest snapshot once it takes a new one, because the upload command remembers what each endpoint holds.
+- **I10 — configuration.** `required = true` without endpoints is a configuration error.
+- **I11 — upload-side IPFS source.** An `ipfs` source without a snapshot CID in the upload configuration follows the machine's latest snapshot, is checked against the chain's pointer, and can supply the stream's own blobs back to the upload command.
 
 ## Process checks (in force from the groundwork phase)
 
