@@ -325,8 +325,13 @@ Every pinner must derive identical CIDs from identical bytes, so the profile is 
   an address list computable from the bytes alone.
 - **Snapshot object**: a UnixFS directory with `manifest.json` (ordered versioned hashes,
   per-blob CIDs, batch numbers, `blobCount`, `head`), the materialized per-organism NDJSON
-  files, and the container spec. Chunker `size-262144`, CIDv1, raw leaves, sha2-256. The
-  `appPointer` on-chain is the sha256 of the snapshot CID's bytes.
+  files **compressed with zstd** (decided 2026-10-05: the plain files are 14 GB and share
+  almost nothing between snapshots, so pinners would carry 14 GB per upload; compressed they
+  are about 40 MB), and the container spec. Chunker `size-262144`, CIDv1, raw leaves,
+  sha2-256. The `appPointer` on-chain is the sha256 of the snapshot CID's bytes. The current
+  snapshot CID is announced off-chain (run report, public page) and verified against the
+  pointer; the per-blob CIDs cannot be derived from versioned hashes, so IPFS-only recovery
+  starts from the snapshot.
 - Implementation: Kubo RPC API. Pinning targets are configuration.
 
 ---

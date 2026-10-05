@@ -115,7 +115,12 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### I — IPFS
 
-*To be filled in during the IPFS phase.*
+- **I1 — blob object CID.** A blob object's CID is computable locally from the bytes (CIDv1, raw, sha2-256) and Kubo's `block put` with the profile's parameters returns the same CID; the on-chain pointer is the SHA-256 of the CID's binary form.
+- **I2 — snapshot determinism.** Two independent Kubo nodes adding the same snapshot files with the profile's parameters return the same directory CID, which does not depend on the directory's name and does change when the file set changes.
+- **I3 — publishing.** A published batch adds every blob object and a snapshot (manifest, spec, compressed per-organism files) to every configured endpoint; the batch-end transaction stores the pointer to that snapshot; the manifest lists every blob with its CID and the chain's head; the compressed files decompress to the published entries.
+- **I4 — recovery from IPFS alone.** With only an IPFS source and the snapshot's manifest as the blob list, and event logs unavailable, the recovered files are byte-identical and the snapshot's compressed files decompress to them.
+- **I5 — IPFS is a hedge.** When no endpoint is reachable the batch still publishes with the previous pointer carried forward and the report records the failure; with `required` set the run refuses instead.
+- **I6 — pointer check.** A snapshot whose CID does not hash to the contract's pointer is refused both as a manifest source and as a blob source.
 
 ## Process checks (in force from the groundwork phase)
 
