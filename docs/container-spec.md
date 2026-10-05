@@ -194,9 +194,11 @@ Canonical JSON naming entries the publisher withdraws from the dataset:
 
 `accessionVersions` is a sorted list of distinct `<accession>.<version>` strings; `note` is a
 string or null. A withdrawal is a request that readers honour, not an erasure: the withdrawn
-entries' bytes stay in the stream, in archives and on every chain node forever, and anyone
-can still read them. What changes is what conforming readers **produce**: withdrawn entries
-are excluded from the materialised output (below) and from every snapshot. A withdrawal is
+entries' bytes stay in the stream, in archives and on every chain node forever, because
+nothing can take them out. What changes is what conforming readers **produce**: withdrawn
+entries are excluded from the materialised output (below) and from every snapshot, and a
+conforming reader offers no way to produce them. That the bytes remain readable by other
+means is a side effect of the medium, not a feature of the format. A withdrawal is
 permanent for the named accessionVersions, applies whether they were published before or
 after it, and an encoder MUST refuse to publish an `ENTRY` for a withdrawn accessionVersion.
 

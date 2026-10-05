@@ -75,8 +75,9 @@ own revocation is just another version and is published like one; a consumer der
 accession is revoked. For data that has to be taken down, the publisher appends a
 **withdrawal record** naming the accessionVersions. The bytes stay, but every conforming
 reader excludes withdrawn entries from the files it produces and from the snapshots it pins,
-and the stream's own digests are defined over the output without them. It is a request that
-honest readers honour, not an erasure, and the public page must say so. The upload command
+offers no way to produce them, and the stream's own digests are defined over the output
+without them. It is a request that honest readers honour, not an erasure, and the public
+page must say so. The upload command
 never withdraws on its own: it reports published entries that the backend no longer serves,
 and withdraws them only when the maintainer confirms it for that run, so that a half-finished
 backend migration cannot withdraw a dataset by accident. Pathoplexus accepted this on

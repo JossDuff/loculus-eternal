@@ -96,7 +96,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **R10 — history expiry.** A manifest file handed over out of band verifies against `head` and the run completes without ever asking the node for logs.
 - **R11 — adapter shapes.** The beacon, Blobscan and blob-archiver adapters each return the verified blob from their respective response shapes; the beacon adapter sends the `versioned_hashes` filter and derives the slot from the block timestamp.
 - **R12 — adaptive log paging.** `eth_getLogs` paging halves after an error and doubles after a success, and still covers the whole range.
-- **R14 — withdrawn entries.** Recovery output excludes withdrawn entries by default and lists them in the report; with `--include-withdrawn` they are written to a separate file per organism, leaving the main files and their digests unchanged.
+- **R14 — withdrawn entries.** Recovery output excludes withdrawn entries and the report names the withdrawn identifiers; the command offers no option that produces the withdrawn data.
 - **R13 — command line.** `loculus-eternal recover --config file.toml` runs the whole recovery from a TOML file and exits non-zero when blobs are missing or the list cannot be verified.
 
 ### U — upload command
