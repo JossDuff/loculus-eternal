@@ -21,6 +21,7 @@ max_blob_fee_gwei = 50                         # Sepolia blob fees are noisy; th
 max_priority_fee_gwei = 1
 inclusion_timeout_blocks = 6
 escalation_attempts = 8
+max_in_flight = 8                              # transactions sent before the first is included
 finality_timeout_seconds = 1800
 
 [ipfs]

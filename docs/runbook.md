@@ -20,8 +20,9 @@ One run does, in order:
    not changed), selects the entries that are open and not yet published.
 4. Packs them into one batch, simulates the first transaction against the contract, checks the
    current fees and your wallet balance, and refuses with a reason if anything is off.
-5. Sends the transactions one by one, raising the fee and resending if one is not picked up,
-   and waits until each is final (about 13 minutes on mainnet).
+5. Sends the transactions back to back, a few at a time, raising the fee and resending the
+   front one if it is not picked up, then waits once until the last is final (about 13
+   minutes on mainnet) before recording anything.
 6. Writes a report and keeps a copy of the published blobs locally.
 
 ## One-time setup
