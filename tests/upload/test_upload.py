@@ -410,7 +410,7 @@ def test_U5_finished_journal_left_by_a_crash_is_completed_not_an_error(world):
     assert len(have) == journal["blob_count_after"]
 
 
-def test_U9_transaction_reverted_on_chain_sets_the_batch_aside(world):
+def test_U9_another_upload_mid_batch_sets_the_batch_aside(world):
     anvil = world["anvil"]
     world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_R{i}") for i in range(9)])
     up = uploader(world)
@@ -437,12 +437,10 @@ def test_U9_transaction_reverted_on_chain_sets_the_batch_aside(world):
             stranger_results.append((blobs, publish_blobs(anvil, blobs, last_blob_chunk_count=17, is_batch_end=True)))
 
     up.submitter.after_send = race_after_first_and_record
-    # The second transaction is simulated before sending and refused instead; force the
-    # on-chain revert by skipping the simulation for it.
-    original_simulate = up.submitter.simulate
-    up.submitter.simulate = lambda tx, fees: 100_000 if tx.index == 1 else original_simulate(tx, fees)
+    # The other upload uses the same publisher key, so it consumes the nonce our second
+    # transaction was going to use; the submitter notices and sets the batch aside.
     report = up.run()
-    assert report.outcome == "failed" and "reverted on chain" in report.message
+    assert report.outcome == "failed" and "another upload ran" in report.message, report.message
     assert not (up.data_dir / "journal.json").exists()
     aside = list((up.data_dir / "abandoned").glob("*.json"))
     assert aside
@@ -515,3 +513,31 @@ def test_U14_vanished_entries_are_reported_and_withdrawn_only_on_confirmation(wo
     # Once withdrawn, the entry is no longer "vanished": a further run has nothing to say.
     again = uploader(world).run()
     assert again.outcome == "nothing-to-publish" and again.vanished == {}
+
+
+def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_P{i}") for i in range(14)])  # more than twelve blobs: three transactions
+    up = uploader(world)
+    up.submitter.policy.max_in_flight = 2
+    sent_at = []
+
+    def note(tx):
+        sent_at.append((tx.index, tx.nonce, anvil.contract.functions.blobCount().call()))
+
+    up.submitter.after_send = note
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert len(report.transactions) == 3
+    nonces = [n for _, n, _ in sent_at]
+    assert nonces == [nonces[0], nonces[0] + 1, nonces[0] + 2], "consecutive nonces"
+    # With a window of two, the second was sent before the first had to be included... on anvil
+    # automine includes instantly, so what we can assert is ordering and that finality came once.
+    blocks = [t["block"] for t in report.transactions]
+    assert blocks == sorted(blocks)
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+    done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
+    assert all(t["status"] == "finalized" for t in done["txs"])
+    register_in_archive(world, report)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"]

@@ -2,9 +2,13 @@
 
 The journal on disk records every transaction of the batch as planned, sent, included or
 finalized, together with the blob bytes, so that a crash at any point resumes instead of
-duplicating. Nothing is reported as published until the block that included it is
-finalized. A transaction that is not included within the configured window is replaced at
-the same nonce with both fees raised by a quarter, a bounded number of times.
+duplicating. The batch's transactions are sent back to back with consecutive nonces, a
+bounded number in flight at once: nonce order guarantees that transaction n+1 can never
+execute before n, and a reorganisation that drops n drops n+1 with it and replays both in
+order, so the contract's sequence guard holds without waiting between them. Only the head of
+the line is replaced with higher fees when it is not included in time, since nothing behind
+it can move until it does. Finality is awaited once, at the end, for every transaction, and
+nothing is reported as published before that.
 """
 
 from __future__ import annotations
@@ -55,6 +59,12 @@ class RevertedOnChain(SubmitError):
     continue, because the contract's record has moved past what this batch assumed."""
 
 
+class NonceTaken(RevertedOnChain):
+    """The publisher account spent one of this batch's nonces on another transaction, so the
+    batch's remaining transactions can never be included. Another upload ran with the same
+    key, from another machine. Nothing was spent here; the batch is set aside."""
+
+
 @dataclass
 class SentAttempt:
     tx_hash: str
@@ -62,6 +72,7 @@ class SentAttempt:
     max_fee_per_blob_gas: int
     at: float
     max_priority_fee_per_gas: int = 0
+    sent_block: int | None = None
 
 
 @dataclass
@@ -122,6 +133,7 @@ class FeePolicy:
     inclusion_timeout_seconds: float = 180.0
     finality_timeout_seconds: float = 1800.0
     poll_interval: float = 6.0
+    max_in_flight: int = 8        # transactions sent but not yet included; nodes cap pending blob transactions per account
 
 
 class Submitter:
@@ -248,7 +260,7 @@ class Submitter:
         if balance < max_cost_for(NOMINAL_GAS_LIMIT):
             raise too_poor(max_cost_for(NOMINAL_GAS_LIMIT))
         gas = self.simulate(pending[0], fees)
-        gas_limit = gas + gas // 4
+        gas_limit = _gas_limit(gas)
         max_cost = max_cost_for(gas_limit)
         likely_cost = sum(gas * fees["baseFeePerGas"] + len(t.seqs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] for t in pending)
         if balance < max_cost:
@@ -259,30 +271,126 @@ class Submitter:
 
     def run(self, journal: Journal) -> Journal:
         """Drive every transaction of the journal to finalized, resuming from any state."""
-        for tx in journal.txs:
-            if tx.status == "planned":
-                self._send(journal, tx)
-            if tx.status == "sent":
-                self._await_inclusion(journal, tx)
-            if tx.status == "included":
-                self._await_finality(journal, tx)
-        return journal
+        while True:
+            self._send_and_include_all(journal)
+            if self._await_finality_all(journal):
+                return journal
+            # A reorganisation dropped something before finality; the loop resends it.
 
-    def _send(self, journal: Journal, tx: PlannedTx, escalation: int = 0) -> None:
+    def _send_and_include_all(self, journal: Journal) -> None:
+        """Keep up to max_in_flight transactions pending until every one is included."""
+        gas: int | None = None
+        while True:
+            pending = [t for t in journal.txs if t.status == "sent"]
+            planned = [t for t in journal.txs if t.status == "planned"]
+            if not pending and not planned:
+                return
+            # Fill the window in order. Only the first transaction of a run is simulated: the
+            # ones behind it would fail a simulation against the current state by design,
+            # because they assume their predecessors have executed.
+            while planned and len(pending) < self.policy.max_in_flight:
+                tx = planned.pop(0)
+                if gas is None:
+                    gas = self.simulate(tx, self.fees()) if not pending and not any(t.status in ("included", "finalized") for t in journal.txs) else self._gas_from_journal(journal)
+                self._send(journal, tx, gas=gas)
+                pending.append(tx)
+            self._poll_inclusion(journal, pending)
+            if any(t.status == "sent" for t in journal.txs):
+                self.sleep(self.policy.poll_interval)
+
+    def _gas_from_journal(self, journal: Journal) -> int:
+        """The gas limit for a resumed batch: what an included transaction used, or a sound default."""
+        used = [t.gas_used for t in journal.txs if t.gas_used]
+        return _gas_limit(max(used)) if used else _gas_limit(NOMINAL_GAS_LIMIT // 2)
+
+    def _poll_inclusion(self, journal: Journal, pending: list[PlannedTx]) -> None:
+        """Record every pending transaction that landed; replace the head of the line if it
+        has been waiting too long."""
+        for tx in list(pending):
+            receipt = self._receipt_for_any(tx)
+            if receipt is None:
+                continue
+            if receipt["status"] != 1:
+                raise RevertedOnChain(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
+            tx.status = "included"
+            tx.included_block = receipt["blockNumber"]
+            tx.included_tx = receipt["transactionHash"].hex()
+            tx.gas_used = receipt["gasUsed"]
+            tx.effective_gas_price = receipt.get("effectiveGasPrice")
+            tx.blob_gas_price = receipt.get("blobGasPrice")
+            tx.block_timestamp = self.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
+            journal.save(self.journal_path)
+            self.log(f"transaction {tx.index}: included in block {tx.included_block}")
+            pending.remove(tx)
+        if not pending:
+            return
+        head = pending[0]
+        # If the account's confirmed nonce has passed the head's nonce and none of its
+        # attempts landed, something else from this key took the nonce: another upload. The
+        # count can show a block before its receipts do, so look again before concluding.
+        if head.nonce is not None and self.w3.eth.get_transaction_count(self.account.address) > head.nonce:
+            self.sleep(min(self.policy.poll_interval, 2.0))
+            if self._receipt_for_any(head) is None:
+                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
+            return  # it landed after all; the next poll records it
+        last = head.attempts[-1]
+        waited_blocks = self.w3.eth.block_number - (last.sent_block if last.sent_block is not None else self.w3.eth.block_number)
+        timed_out = waited_blocks >= self.policy.inclusion_timeout_blocks or time.time() - last.at >= self.policy.inclusion_timeout_seconds
+        if timed_out:
+            if len(head.attempts) > self.policy.escalation_attempts:
+                raise SubmitError(f"transaction {head.index} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
+            self.log(f"transaction {head.index}: not included yet, replacing with higher fees")
+            self._send(journal, head, escalation=len(head.attempts), gas=_gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
+
+    def _await_finality_all(self, journal: Journal) -> bool:
+        """Wait until the block of the last included transaction is final, then confirm every
+        transaction is still where the journal says. Returns False if any was dropped by a
+        reorganisation (those are set back to planned for the caller to resend)."""
+        included = [t for t in journal.txs if t.status == "included"]
+        if not included:
+            return True
+        last_block = max(t.included_block for t in included)
+        started = time.time()
+        while self.w3.eth.get_block("finalized")["number"] < last_block:
+            if time.time() - started > self.policy.finality_timeout_seconds:
+                raise SubmitError(f"transactions were included up to block {last_block} but finality did not arrive within {self.policy.finality_timeout_seconds}s; rerun later to continue waiting")
+            self.sleep(self.policy.poll_interval)
+        dropped = False
+        for tx in included:
+            receipt = self._receipt_for_any(tx)
+            if receipt is None or receipt["blockNumber"] != tx.included_block:
+                self.log(f"transaction {tx.index}: dropped by a reorganisation before finality, resending")
+                tx.status = "planned"
+                tx.included_block = None
+                dropped = True
+        if dropped:
+            journal.save(self.journal_path)
+            return False
+        for tx in included:
+            tx.status = "finalized"
+            self.log(f"transaction {tx.index}: finalized")
+        journal.save(self.journal_path)
+        return True
+
+    def _send(self, journal: Journal, tx: PlannedTx, escalation: int = 0, gas: int | None = None) -> None:
         if tx.attempts and self._receipt_for_any(tx) is not None:
             tx.status = "sent"
             return  # an earlier attempt landed after all; the inclusion loop will record it
         fees = self.fees()
-        try:
-            gas = self.simulate(tx, fees)
-        except Refused:
-            if tx.attempts and self._receipt_for_any(tx) is not None:
-                tx.status = "sent"
-                return
-            raise
+        if gas is None:
+            try:
+                gas = _gas_limit(self.simulate(tx, fees))
+            except Refused:
+                if tx.attempts and self._receipt_for_any(tx) is not None:
+                    tx.status = "sent"
+                    return
+                raise
         factor = 1.25**escalation
         if tx.nonce is None:
-            tx.nonce = self.w3.eth.get_transaction_count(self.account.address, "pending")
+            # Consecutive nonces within the batch: the one after the predecessor's, or the
+            # account's next pending nonce for the first transaction.
+            previous = journal.txs[tx.index - 1] if tx.index > 0 else None
+            tx.nonce = previous.nonce + 1 if previous is not None and previous.nonce is not None else self.w3.eth.get_transaction_count(self.account.address, "pending")
         max_fee = int(fees["maxFeePerGas"] * factor)
         priority = int(fees["maxPriorityFeePerGas"] * factor)
         blob_fee = int(fees["maxFeePerBlobGas"] * factor)
@@ -300,7 +408,7 @@ class Submitter:
             "to": self.contract.address,
             "value": 0,
             "data": self.calldata(tx),
-            "gas": gas + gas // 4,
+            "gas": gas,
             "maxFeePerGas": max_fee,
             "maxPriorityFeePerGas": priority,
             "maxFeePerBlobGas": blob_fee,
@@ -311,7 +419,8 @@ class Submitter:
         # Record the attempt before broadcasting. If the broadcast's response is lost, the
         # node may still have the transaction; a resume then waits for this hash at this
         # nonce instead of sending a second copy at a fresh nonce.
-        tx.attempts.append(SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"]))
+        attempt = SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"])
+        tx.attempts.append(attempt)
         tx.status = "sent"
         journal.save(self.journal_path)
         if self.drop_sends > 0:
@@ -324,6 +433,10 @@ class Submitter:
             else:
                 if "0x" + bytes(reported).hex() != tx_hash:
                     raise SubmitError(f"the node reports transaction hash 0x{bytes(reported).hex()} but the signed payload hashes to {tx_hash}")
+        # The inclusion window counts from the block after the broadcast returned.
+        attempt.sent_block = self.w3.eth.block_number
+        attempt.at = time.time()
+        journal.save(self.journal_path)
         self.log(f"transaction {tx.index}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
         if self.after_send:
             self.after_send(tx)
@@ -347,59 +460,11 @@ class Submitter:
                 return receipt
         return None
 
-    def _await_inclusion(self, journal: Journal, tx: PlannedTx) -> None:
-        start_block = self.w3.eth.block_number
-        started = time.time()
-        while True:
-            receipt = self._receipt_for_any(tx)
-            if receipt is not None:
-                if receipt["status"] != 1:
-                    raise RevertedOnChain(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
-                tx.status = "included"
-                tx.included_block = receipt["blockNumber"]
-                tx.included_tx = receipt["transactionHash"].hex()
-                tx.gas_used = receipt["gasUsed"]
-                tx.effective_gas_price = receipt.get("effectiveGasPrice")
-                tx.blob_gas_price = receipt.get("blobGasPrice")
-                tx.block_timestamp = self.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
-                journal.save(self.journal_path)
-                self.log(f"transaction {tx.index}: included in block {tx.included_block}")
-                return
-            timed_out = self.w3.eth.block_number - start_block >= self.policy.inclusion_timeout_blocks or time.time() - started >= self.policy.inclusion_timeout_seconds
-            if timed_out:
-                if len(tx.attempts) > self.policy.escalation_attempts:
-                    raise SubmitError(f"transaction {tx.index} was not included after {len(tx.attempts)} attempts; the journal is kept so a later run can resume")
-                self.log(f"transaction {tx.index}: not included yet, replacing with higher fees")
-                self._send(journal, tx, escalation=len(tx.attempts))
-                start_block = self.w3.eth.block_number
-                started = time.time()
-                continue
-            self.sleep(self.policy.poll_interval)
 
-    def _await_finality(self, journal: Journal, tx: PlannedTx) -> None:
-        started = time.time()
-        while True:
-            finalized = self.w3.eth.get_block("finalized")["number"]
-            if finalized >= tx.included_block:
-                # The block could have been reorganised before finality; confirm the receipt
-                # still exists and still points at the same block.
-                receipt = self._receipt_for_any(tx)
-                if receipt is None or receipt["blockNumber"] != tx.included_block:
-                    self.log(f"transaction {tx.index}: dropped by a reorganisation before finality, resending")
-                    tx.status = "planned"
-                    tx.included_block = None
-                    journal.save(self.journal_path)
-                    self._send(journal, tx, escalation=len(tx.attempts))
-                    self._await_inclusion(journal, tx)
-                    started = time.time()
-                    continue
-                tx.status = "finalized"
-                journal.save(self.journal_path)
-                self.log(f"transaction {tx.index}: finalized")
-                return
-            if time.time() - started > self.policy.finality_timeout_seconds:
-                raise SubmitError(f"transaction {tx.index} was included in block {tx.included_block} but finality did not arrive within {self.policy.finality_timeout_seconds}s; rerun later to continue waiting")
-            self.sleep(self.policy.poll_interval)
+def _gas_limit(estimate: int) -> int:
+    """A limit with room for the batch-end transaction's extra storage write and event, which
+    the first transaction's estimate does not include."""
+    return max(estimate + estimate // 4, estimate + 60_000)
 
 
 def current_fees(w3: Web3, policy: FeePolicy) -> dict:

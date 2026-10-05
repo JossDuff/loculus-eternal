@@ -73,6 +73,7 @@ class Uploader:
             escalation_attempts=config.upload.escalation_attempts,
             inclusion_timeout_blocks=config.upload.inclusion_timeout_blocks,
             finality_timeout_seconds=config.upload.finality_timeout_seconds,
+            max_in_flight=config.upload.max_in_flight,
         )
         if poll_interval is not None:
             policy.poll_interval = poll_interval

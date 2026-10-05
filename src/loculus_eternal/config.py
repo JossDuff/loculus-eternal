@@ -52,6 +52,7 @@ class UploadConfig:
     finality_timeout_seconds: int
     inclusion_timeout_blocks: int
     escalation_attempts: int
+    max_in_flight: int
 
 
 @dataclass
@@ -138,6 +139,7 @@ def load(path: str | Path) -> Config:
                 finality_timeout_seconds=int(u.get("finality_timeout_seconds", 1800)),
                 inclusion_timeout_blocks=int(u.get("inclusion_timeout_blocks", 6)),
                 escalation_attempts=int(u.get("escalation_attempts", 8)),
+                max_in_flight=int(u.get("max_in_flight", 8)),
             )
         ipfs = None
         if "ipfs" in raw:
