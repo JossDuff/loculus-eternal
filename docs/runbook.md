@@ -121,9 +121,10 @@ or a directory of blobs exported from a recovery) and run again.
 Nothing can be deleted from Ethereum or from archives other people run, so the permanent
 record keeps everything ever published. What you can do is **withdraw**: the next batch then
 carries a record naming the entries, and every recovery and every snapshot from then on
-leaves them out, and neither command offers a way to get them back. The bytes remain where
-they were published, as with anything on Ethereum; the record says plainly that the
-publisher withdrew them.
+leaves them out, and neither command will write the withdrawn entries to its output. A
+withdrawal cannot be reversed: the same accessionVersion can never be published again. The
+bytes remain where they were published, as with anything on Ethereum; the record says
+plainly that the publisher withdrew them.
 
 The command never withdraws on its own. When entries that were published are no longer in
 the backend's feed, `--check` and every run report them:
