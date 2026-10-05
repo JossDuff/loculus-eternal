@@ -26,7 +26,9 @@ One run does, in order:
 
 ## One-time setup
 
-1. Install: `uv sync` in a checkout of the repository (Python 3.12 or newer, `uv`).
+1. Install: `uv sync` in a checkout of the repository (Python 3.12 or newer, `uv`). The
+   machine needs about 40 GB of free disk for a genesis-sized run (spill files and the
+   snapshot build) and 4 GB of memory; a delta needs far less.
 2. Create a config file. Start from this and change the four marked lines:
 
    ```toml

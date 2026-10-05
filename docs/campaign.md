@@ -59,6 +59,34 @@ IPFS profile are frozen.
    as frozen, bump the package version, and tag the release. The tooling records in the
    mainnet genesis will carry that version.
 
+## What a full-scale rehearsal on anvil measured
+
+Run on 2026-10-05 with the real dataset (every organism's release feed as downloaded on
+2026-09-30), on a 14-core machine with 30 GB of memory, against anvil and one Kubo node:
+
+| Step | Measured |
+|---|---|
+| Entries in the genesis batch | 294,558 in 15 organisms |
+| Blobs and transactions | 310 blobs in 52 transactions |
+| `--check` (read feeds, encode) | 12.8 minutes, peak memory 1.7 GB |
+| Publish: encode | 13 minutes |
+| Publish: build and pin the snapshot | 3.5 minutes |
+| Publish: send 52 transactions (anvil, immediate finality) | 33 minutes, about 38 seconds each, mostly cell-proof computation |
+| Whole publish run | 49 minutes, peak memory 2.1 GB |
+| A rerun with nothing new | 3.3 minutes, almost all of it decoding the stream to learn the published set |
+| Execution gas per transaction | 43,378 to 64,283, mean 44,110 |
+| Recovery from a local copy, including decode and digest check | 3.7 minutes |
+| Recovery from IPFS alone | 3.8 minutes |
+| Disk used during the run | about 2 times the decompressed dataset: spill files plus snapshot build; keep 40 GB free |
+
+Every digest matched, every per-organism count matched the backend's open count, and the
+two recoveries produced identical files.
+
+What it means for Sepolia: on a real network each transaction also waits for finality, about
+13 minutes, so with the sending rule as it stood (next transaction only after the previous
+is final) genesis would take about 11 hours of mostly waiting. See the sending decision in
+the plan file.
+
 ## What the campaign cannot tell us
 
 Sepolia blob fees do not predict mainnet fees, and Sepolia archives are thinner than
