@@ -65,6 +65,7 @@ Record types:
 | `0x12` | `TOOLING` | inside a body | binary, below |
 | `0x13` | `DICTIONARY` | reserved, inside a body | unused in version 1 |
 | `0x14` | `REPROCESSED` | reserved, inside a body | unused in version 1 |
+| `0x15` | `WITHDRAW` | inside a body | canonical JSON |
 
 Types `0x01`–`0x0f` are **outer** records (they appear directly in the stream) and
 `0x10`–`0x7f` are **inner** records (they appear only inside a decompressed body). A decoder
@@ -134,8 +135,9 @@ A batch MUST begin at chunk 0 of a blob. In batch 0, `HEADER` occupies stream po
 The payload is the batch's inner records, concatenated, encoded with `codec`. Its length and
 digest MUST equal `compressedLength` and `bodyDigest` from `BATCH_BEGIN`. Inner records in
 canonical encoder order are: every `SCHEMA` record (sorted by organism), then every `TOOLING`
-record (sorted by path), then every `ENTRY` record sorted by organism, then accession, then
-numeric version. Decoders MUST NOT depend on that order.
+record (sorted by path), then every `WITHDRAW` record (sorted by organism), then every
+`ENTRY` record sorted by organism, then accession, then numeric version. Decoders MUST NOT
+depend on that order. A batch MUST contain at least one `ENTRY` or one `WITHDRAW` record.
 
 ### `ENTRY`
 
@@ -178,6 +180,26 @@ that contains entries for that organism and again in any batch where the shape c
 lists the keys of `unalignedNucleotideSequences`, sorted. `genes` lists the keys of
 `alignedAminoAcidSequences`, sorted.
 
+### `WITHDRAW`
+
+Canonical JSON naming entries the publisher withdraws from the dataset:
+
+```json
+{
+  "organism": "<organism identifier>",
+  "accessionVersions": ["PP_000123.1", "PP_000124.2"],
+  "note": "removed from Pathoplexus on 2026-10-05 at the submitter's request"
+}
+```
+
+`accessionVersions` is a sorted list of distinct `<accession>.<version>` strings; `note` is a
+string or null. A withdrawal is a request that readers honour, not an erasure: the withdrawn
+entries' bytes stay in the stream, in archives and on every chain node forever, and anyone
+can still read them. What changes is what conforming readers **produce**: withdrawn entries
+are excluded from the materialised output (below) and from every snapshot. A withdrawal is
+permanent for the named accessionVersions, applies whether they were published before or
+after it, and an encoder MUST refuse to publish an `ENTRY` for a withdrawn accessionVersion.
+
 ### `TOOLING`
 
 ```
@@ -207,12 +229,18 @@ it was published in:
     "<organism>": {
       "<accession>": [[1, 0], [2, 5]]
     }
+  },
+  "withdrawn": {
+    "<organism>": {
+      "<accession>": [1]
+    }
   }
 }
 ```
 
-Each accession maps to a list of `[version, batch]` pairs sorted by version. An index is
-inclusive of its own batch. **Encoder rule:** an `INDEX` MUST be emitted in a batch when the
+Each accession maps to a list of `[version, batch]` pairs sorted by version; `withdrawn`
+lists, per organism and accession, the sorted versions withdrawn so far (an empty object when
+there are none). An index is inclusive of its own batch. **Encoder rule:** an `INDEX` MUST be emitted in a batch when the
 sum of `compressedLength` over this batch and every batch after the last one that carried an
 index reaches 16,777,216 bytes (16 MiB). An encoder MAY emit one more often. Decoders MUST
 accept any placement. A reader that wants the published set reads the most recent `INDEX`
@@ -234,6 +262,8 @@ Canonical JSON:
     "<organism>": {
       "entriesInBatch": 120,
       "entriesTotal": 58779,
+      "withdrawnInBatch": 0,
+      "withdrawnTotal": 3,
       "artifactSha256": "<64 hex>"
     }
   }
@@ -244,8 +274,10 @@ Canonical JSON:
 is `firstBlobSeq` plus the number of blobs the batch occupies. `previousManifestDigest` and
 `bodyDigest` repeat the values from `BATCH_BEGIN`. `organisms` lists every organism with at
 least one entry published so far, including organisms with no entries in this batch (with
-`entriesInBatch` 0). `artifactSha256` is the **cumulative** digest: the SHA-256 of that
-organism's complete materialised file after this batch, as defined below. The manifest is
+`entriesInBatch` 0). `entriesTotal` counts the lines of the organism's materialised file,
+that is published entries minus withdrawn ones; `withdrawnTotal` counts the withdrawn ones.
+`artifactSha256` is the **cumulative** digest: the SHA-256 of that organism's complete
+materialised file after this batch, as defined below. The manifest is
 the last record of the batch; the bytes from its end to the end of the blob are zero.
 
 The **digest of a manifest** (used as the next batch's `previousManifestDigest`) is the
@@ -281,8 +313,8 @@ needs the published set.
 ## Materialisation (schema `pathoplexus`)
 
 The materialised output of a stream is one file per organism, named `<organism>.ndjson`,
-containing one line per published accessionVersion of that organism. Each line is the exact
-`ENTRY` payload bytes followed by a single `0x0a`. Lines are sorted by `metadata.accession`
+containing one line per published accessionVersion of that organism **that has not been
+withdrawn**. Each line is the exact `ENTRY` payload bytes followed by a single `0x0a`. Lines are sorted by `metadata.accession`
 (byte-wise on the UTF-8 string) and then by `metadata.version` (numerically). The file is a
 pure function of the set of entries: no timestamps, counts, or banners. `artifactSha256` in a
 manifest is the SHA-256 of this file's bytes after the manifest's batch.
@@ -305,12 +337,13 @@ whose `metadata.isRevocation` is true revokes the accession.
 | `multi_blob.json` | a raw batch spanning several blobs with a partially filled last blob |
 | `two_batches_index.json` | two batches, the second carrying an `INDEX` |
 | `torn_batch.json` | a complete batch, a torn batch, and the same batch republished at the next blob boundary |
+| `withdrawal.json` | two batches, the second withdrawing an entry of the first and adding another |
 
 For codec 0 streams two conforming encoders produce identical bytes for identical input. For
 codec 1 streams they produce identical decoded content, identical manifests except for
 `bodyDigest` and `compressedLength`, and identical materialised files.
 
-Behaviour IDs for this format are `F1`–`F17` in `docs/test-plan.md`.
+Behaviour IDs for this format are `F1`–`F19` in `docs/test-plan.md`.
 
 ## Appendix: the Pathoplexus published-field schema
 

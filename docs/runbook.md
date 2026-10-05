@@ -113,6 +113,34 @@ the whole published stream to know what is already published, and none of the co
 sources had that blob. Add a source that has it (a beacon node with historical blobs, Blobscan,
 or a directory of blobs exported from a recovery) and run again.
 
+## When data was removed from Pathoplexus
+
+Nothing can be deleted from Ethereum or from archives other people run, so the permanent
+record keeps everything ever published. What you can do is **withdraw**: the next batch then
+carries a record naming the entries, and every recovery and every snapshot from then on
+leaves them out. People who go looking can still read the bytes; the record says plainly
+that the publisher withdrew them.
+
+The command never withdraws on its own. When entries that were published are no longer in
+the backend's feed, `--check` and every run report them:
+
+```
+zika: 3044 released, 3044 open, 3041 already published, 0 new, 3 published but no longer in the feed
+```
+
+Look at the list in the run report (`upload-data/reports/…json`, under `vanished`). If those
+are the entries that were removed on purpose, confirm the withdrawal:
+
+```
+loculus-eternal upload --config loculus-eternal.toml --withdraw-vanished
+```
+
+That run publishes a batch with the withdrawals (and any new entries), and the recovered
+dataset excludes them from then on. If the list is not what you expect, for example because
+an organism's feed is temporarily empty, do not confirm; fix the backend first.
+
+A Loculus revocation needs nothing special: it is a new version and is published as one.
+
 ## When a run is interrupted
 
 If the process dies after a transaction was sent, the next run says "resuming interrupted

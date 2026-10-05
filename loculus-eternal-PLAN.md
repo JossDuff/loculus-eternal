@@ -236,6 +236,8 @@ Proposed shape (refined in the container format phase):
     - `DICTIONARY`: reserved for codec dictionaries. Unused in v1.
     - `REPROCESSED`: reserved for a future decision to republish processed fields after a
       pipeline change. Unused in v1.
+    - `WITHDRAW`: accessionVersions the publisher withdraws; excluded from materialised output
+      and snapshots from that batch on, bytes retained.
   - `BATCH_MANIFEST` (uncompressed, terminates every batch): batch number, per-organism
     entry counts, **the sha256 of each materialized per-organism NDJSON artifact** so any
     decoder can prove its output is what the publisher intended, the previous manifest's
