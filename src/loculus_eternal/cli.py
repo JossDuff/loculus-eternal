@@ -11,7 +11,7 @@ from loculus_eternal import config as configuration
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 
 
-def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryConfig:
+def recovery_config(cfg: configuration.Config, skip_decode: bool, include_withdrawn: bool = False) -> RecoveryConfig:
     from loculus_eternal.sources import IpfsSource
 
     manifest_sources = []
@@ -39,12 +39,13 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
         manifest_sources=manifest_sources,
         deployment_block=cfg.chain.deployment_block,
         decode=not (cfg.recover.skip_decode or skip_decode),
+        include_withdrawn=include_withdrawn,
     )
 
 
 def cmd_recover(args: argparse.Namespace) -> int:
     cfg = configuration.load(args.config)
-    rc = recovery_config(cfg, args.skip_decode)
+    rc = recovery_config(cfg, args.skip_decode, args.include_withdrawn)
     report = Recovery(rc).run()
     rc.data_dir.mkdir(parents=True, exist_ok=True)
     (rc.data_dir / "run-report.json").write_text(json.dumps(report.to_json(), indent=1))
@@ -69,7 +70,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         uploader = Uploader(cfg)
     else:
         uploader = Uploader.with_key(cfg, configuration.publisher_key())
-    report = uploader.run(mode)
+    report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
     if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":
@@ -88,11 +89,13 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
+    up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
     up.set_defaults(func=cmd_upload)
 
     rec = sub.add_parser("recover", help="rebuild the dataset from the contract address and the configured sources")
     rec.add_argument("--config", type=Path, required=True, help="TOML config file (see README)")
     rec.add_argument("--skip-decode", action="store_true", help="fetch and verify blobs only; do not materialise the dataset")
+    rec.add_argument("--include-withdrawn", action="store_true", help="also write <organism>.withdrawn.ndjson with the entries the publisher withdrew")
     rec.set_defaults(func=cmd_recover)
 
     args = parser.parse_args(argv)

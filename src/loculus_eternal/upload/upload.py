@@ -32,7 +32,7 @@ from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
-from loculus_eternal.upload.sync import BackendClient, SyncStats, iter_new_entries
+from loculus_eternal.upload.sync import BackendClient, SyncStats, find_vanished, iter_new_entries
 
 
 @dataclass
@@ -42,6 +42,8 @@ class UploadReport:
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
+    vanished: dict = field(default_factory=dict)      # organism -> accessionVersions published but gone from the feed
+    withdrawn: dict = field(default_factory=dict)     # organism -> accessionVersions withdrawn by this run
     tooling_published: bool = False
     batch: dict | None = None
     ipfs: dict | None = None            # the new batch's snapshot and blob objects
@@ -107,7 +109,8 @@ class Uploader:
             st = SyncStats(organism)
             stats.append(st)
             yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st)
-            self.log(f"{organism}: {st.total} released, {st.open} open, {st.already_published} already published, {st.new} new" + (" (feed unchanged, from cache)" if feed.from_cache else ""))
+            gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
+            self.log(f"{organism}: {st.total} released, {st.open} open, {st.already_published} already published, {st.new} new" + (f", {len(gone)} published but no longer in the feed" if gone else "") + (" (feed unchanged, from cache)" if feed.from_cache else ""))
 
     def _tooling(self, view: PublishedView) -> list[tuple[str, bytes]]:
         """The spec and source files, when none are in the stream yet or the version changed."""
@@ -180,10 +183,14 @@ class Uploader:
 
     # --- the run --------------------------------------------------------------------------------
 
-    def run(self, mode: str = "publish") -> UploadReport:
-        """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only)."""
+    def run(self, mode: str = "publish", withdraw_vanished: bool = False) -> UploadReport:
+        """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only).
+
+        `withdraw_vanished` is the maintainer's explicit confirmation that every published
+        entry the backend no longer serves should be withdrawn in this batch."""
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
+        self._withdraw_vanished = withdraw_vanished
         with BlobStore(self.data_dir / "stream") as store:
             # An interrupted batch comes first, before the chain is even read: its blobs are in
             # the journal, not yet in the store or necessarily in any archive, so finishing it
@@ -215,21 +222,33 @@ class Uploader:
         report.tooling_published = bool(tooling)
         stats: list[SyncStats] = []
         encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill")
+
         try:
             # The entries flow from the backend feeds straight into the encoder's sorted
-            # runs on disk; the whole batch is never in memory.
-            batch = encoder.encode_batch(self._sync(view, stats), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD)
+            # runs on disk; the whole batch is never in memory. The encoder reads the
+            # withdrawals only after the entries, so by then every feed has been seen and
+            # the vanished entries are known.
+            batch = encoder.encode_batch(self._sync(view, stats), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD, withdrawals=_WithdrawalsLater(lambda: self._withdrawals(stats, report)))
         except EmptyBatch:
-            report.sync = [s.__dict__ for s in stats]
+            report.sync = [_stats_json(s) for s in stats]
+            report.vanished = {s.organism: s.vanished for s in stats if s.vanished}
             report.outcome = "nothing-to-publish" if not report.transactions else "resumed"
             report.message = "nothing to publish: every eligible entry is already in the stream" + ("; new tooling will be included with the next batch that has new entries" if tooling else "")
+            if report.vanished:
+                n = sum(len(v) for v in report.vanished.values())
+                report.message += f"; {n} published entries are no longer in the backend feed (run with --withdraw-vanished to withdraw them)"
             report.tooling_published = False
             self.log(report.message)
             return self._done(report, started)
-        report.sync = [s.__dict__ for s in stats]
+        report.sync = [_stats_json(s) for s in stats]
+        report.vanished = {s.organism: s.vanished for s in stats if s.vanished}
         report.new_entries = batch.entry_count
+        if report.vanished and not self._withdraw_vanished:
+            n = sum(len(v) for v in report.vanished.values())
+            self.log(f"{n} published entries are no longer in the backend feed; they stay in the record until a run with --withdraw-vanished confirms their withdrawal")
         report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
-        self.log(f"planned batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
+        report.batch["withdrawn"] = batch.withdrawn_count
+        self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
         if mode == "check":
             fees = current_fees(self.w3, self.policy)
@@ -335,6 +354,19 @@ class Uploader:
         self._finish(journal, store, report)
         return True
 
+    def _withdrawals(self, stats: list[SyncStats], report: UploadReport) -> list[dict]:
+        """Called by the encoder once every feed has been read. Withdraws nothing unless the
+        maintainer confirmed it for this run."""
+        if not self._withdraw_vanished:
+            return []
+        out = []
+        for st in stats:
+            if st.vanished:
+                out.append({"organism": st.organism, "accessionVersions": st.vanished, "note": f"no longer served by the Pathoplexus backend as of {time.strftime('%Y-%m-%d')}; withdrawn by the maintainer"})
+                report.withdrawn[st.organism] = list(st.vanished)
+                self.log(f"{st.organism}: withdrawing {len(st.vanished)} entries the backend no longer serves")
+        return out
+
     def _current_snapshot_cid(self) -> str | None:
         path = self.data_dir / "snapshot-cid.txt"
         return path.read_text().strip() or None if path.exists() else None
@@ -383,3 +415,20 @@ def _installed_version() -> str | None:
         return importlib.metadata.version("loculus-eternal")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _stats_json(st: SyncStats) -> dict:
+    d = dict(st.__dict__)
+    d.pop("seen", None)
+    return d
+
+
+class _WithdrawalsLater:
+    """An iterable the encoder consumes only after it has read every entry, so the list can
+    depend on what the feeds contained."""
+
+    def __init__(self, make):
+        self._make = make
+
+    def __iter__(self):
+        return iter(self._make())

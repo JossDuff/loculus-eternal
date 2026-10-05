@@ -51,6 +51,7 @@ class RecoveryConfig:
     manifest_sources: list[ManifestSource] = field(default_factory=lambda: [ManifestSource(logs=True)])
     deployment_block: int = 0
     decode: bool = True
+    include_withdrawn: bool = False   # also write <organism>.withdrawn.ndjson files
     log: Callable[[str], None] = print
 
 
@@ -145,17 +146,27 @@ class Recovery:
         # are removed when the decoded stream is closed; the output files are the result.
         with StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill").decode() as decoded:
             last = decoded.batches[-1].manifest["organisms"] if decoded.batches else {}
+            withdrawn = decoded.withdrawn()
             for org in decoded.organisms():
                 path = out / f"{safe_dirname(org)}.ndjson"
                 with open(path, "wb", buffering=1 << 20) as f:
                     digests[org] = decoded.materialise_to(org, f)
-                files[org] = {"path": str(path), "entries": decoded.count(org), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
+                files[org] = {"path": str(path), "entries": decoded.count(org), "withdrawn": sum(len(v) for v in withdrawn.get(org, {}).values()), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
+                if self.cfg.include_withdrawn and withdrawn.get(org):
+                    # Withdrawn entries go to a separate file so the main file and its
+                    # digest are exactly what the publisher's manifest describes.
+                    wpath = out / f"{safe_dirname(org)}.withdrawn.ndjson"
+                    with open(wpath, "wb") as f:
+                        for _, _, payload in decoded.withdrawn_records(org):
+                            f.write(payload + b"\n")
+                    files[org]["withdrawnPath"] = str(wpath)
             verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
         report = {
             "header": None if decoded.header is None else {"chainId": decoded.header.chain_id, "contract": "0x" + decoded.header.contract.hex(), "schemaId": decoded.header.schema_id, "version": f"{decoded.header.major}.{decoded.header.minor}"},
             "batches": [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "blobCountAfter": b.blob_count_after, "entries": b.entry_count, "hasIndex": b.index is not None} for b in decoded.batches],
             "torn": [t.__dict__ for t in decoded.torn],
             "warnings": decoded.warnings,
+            "withdrawn": {o: {a: v for a, v in accs.items()} for o, accs in withdrawn.items()},
             "files": files,
             "allArtifactsMatch": bool(verified) and all(verified.values()),
             "tooling": sorted(decoded.tooling),

@@ -65,6 +65,7 @@ class DecodedBatch:
     schemas: dict[str, dict]
     tooling: dict[str, bytes]
     entry_count: int
+    withdrawn_count: int = 0
 
 
 @dataclass
@@ -91,8 +92,25 @@ class DecodedStream:
         return self.store.count(organism)
 
     def records(self, organism: str) -> Iterator[Record]:
-        """(accession, version, payload) in materialisation order, streamed from disk."""
+        """(accession, version, payload) in materialisation order, streamed from disk,
+        withdrawn entries left out."""
         return self.store.iter_records(organism)
+
+    def withdrawn_records(self, organism: str) -> Iterator[Record]:
+        return self.store.iter_withdrawn_records(organism)
+
+    def is_withdrawn(self, organism: str, accession: str, version: int) -> bool:
+        return self.store.is_withdrawn(organism, accession, version)
+
+    def withdrawn(self) -> dict[str, dict[str, list[int]]]:
+        out: dict[str, dict[str, list[int]]] = {}
+        for org, keys in self.store.withdrawn.items():
+            for acc, ver in keys:
+                out.setdefault(org, {}).setdefault(acc, []).append(ver)
+        for accs in out.values():
+            for vs in accs.values():
+                vs.sort()
+        return out
 
     def payloads(self, organism: str) -> list[bytes]:
         """Every payload in materialisation order, in memory. For tests and small streams."""
@@ -146,6 +164,7 @@ class DecodedStream:
             published=self.published(),
             schemas=dict(self.schemas),
             entries_total={o: self.store.count(o) for o in self.organisms()},
+            withdrawn=self.withdrawn(),
             bytes_since_index=bytes_since_index,
         )
 
@@ -341,6 +360,7 @@ class StreamDecoder:
         tooling: dict[str, bytes] = {}
         sorters: dict[str, ExternalSorter] = {}
         keys: dict[str, list[tuple[str, int]]] = {}
+        withdrawals: dict[str, set[tuple[str, int]]] = {}
         warnings: list[str] = []
         count = 0
         sorter_kwargs = {"buffer_bytes": self.sort_buffer_bytes} if self.sort_buffer_bytes else {}
@@ -372,6 +392,15 @@ class StreamDecoder:
                 elif it == RecordType.TOOLING:
                     p, c = decode_tooling(ipayload)
                     tooling[p] = c
+                elif it == RecordType.WITHDRAW:
+                    w = canonical.loads(ipayload)
+                    if not isinstance(w, dict) or not isinstance(w.get("organism"), str) or not isinstance(w.get("accessionVersions"), list):
+                        raise Torn("withdrawal record is not an object naming an organism and accessionVersions")
+                    for av in w["accessionVersions"]:
+                        acc, _, ver = str(av).rpartition(".")
+                        if not acc or not ver.isdigit():
+                            raise Torn(f"withdrawal names a malformed accessionVersion {av!r}")
+                        withdrawals.setdefault(w["organism"], set()).add((acc, int(ver)))
                 elif INNER_MIN <= it <= INNER_MAX:
                     warnings.append(f"batch {expected_batch}: skipped unknown inner record type {it:#x}")
                 else:
@@ -396,12 +425,13 @@ class StreamDecoder:
                 sorter.finish(path)
                 staged[org] = path
             organisms_in_manifest = manifest.get("organisms", {})
-            if set(organisms_in_manifest) != set(out.store.index) | set(staged):
+            if set(organisms_in_manifest) != set(out.store.organisms()) | set(staged) | set(withdrawals):
                 raise Torn("manifest organisms do not match the entries published so far")
             for org, info in organisms_in_manifest.items():
                 extra = (expected_batch, staged[org]) if org in staged else None
-                digest, total = out.store.digest(org, extra)
-                if info.get("artifactSha256") != digest or info.get("entriesTotal") != total:
+                digest, total = out.store.digest(org, extra, withdrawals.get(org))
+                withdrawn_total = len(set(out.store.withdrawn.get(org, {})) | withdrawals.get(org, set()))
+                if info.get("artifactSha256") != digest or info.get("entriesTotal") != total or info.get("withdrawnTotal", 0) != withdrawn_total:
                     raise Torn(f"cumulative digest for {org} does not match the materialised entries")
         except Torn:
             for path in staged.values():
@@ -412,6 +442,8 @@ class StreamDecoder:
             count += len(keys[org]) - len(duplicates)
             for acc, ver in duplicates:
                 warnings.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
+        for org, wkeys in withdrawals.items():
+            out.store.withdraw(org, sorted(wkeys), expected_batch)
         out.warnings.extend(warnings)
         out.schemas.update(schemas)
         out.tooling.update(tooling)
@@ -426,5 +458,6 @@ class StreamDecoder:
             schemas=schemas,
             tooling=tooling,
             entry_count=count,
+            withdrawn_count=sum(len(v) for v in withdrawals.values()),
         )
 

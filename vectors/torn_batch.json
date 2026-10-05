@@ -1,10 +1,10 @@
 {
  "blobSha256": [
-  "30f596f44ddc3365233e352a4c5e6c32d078d95bca5f337f3295ef39b14b79a9",
-  "6be175b0096c872640248dd87435b48cc50c79395ea0c38eed32f13b10212815",
-  "c8a812f84f22c84e28d18340b362a8939f5c3943b2946a1d78a9488a95954222",
+  "541cd6aff99624eff4fbd69f53a2006b945386260e54a70a2b4083af66300b72",
+  "3031909f812945c4f5862e0a5c617441dafb6ee49e5e5d3eeeaa12c84694d2c0",
+  "383afd8b56008a2f84cb35a0fcf47c726394d7547fb27a8665df1a525230d59d",
   "d8b11b9997a56c8f46557bef39642632764e5ced33dda5f458de4b1ba4b7e791",
-  "a9accc4f3cc6b32da599c826ee16e93f5527811dfdf256ad1370821f2c1524ff"
+  "458ba93879e73d75ee61306df277fc9aad80e52cb75ec601ea7d2a52927ee57e"
  ],
  "expected": {
   "artifactSha256": {
@@ -16,13 +16,13 @@
     "batch": 0,
     "blobCountAfter": 1,
     "firstBlobSeq": 0,
-    "manifestDigest": "639e43f4422dcdc6b3e271b27300ca302dcd869400e5114b7afca41e2b773019"
+    "manifestDigest": "824eee617ba3be597db8050c67259cafaeb3a578cc4350ee19ff080dd32efe75"
    },
    {
     "batch": 1,
     "blobCountAfter": 5,
     "firstBlobSeq": 2,
-    "manifestDigest": "0a1575fcc1aaa627d5644564f5695707e1408cf05367478bd60990da8cf1dc63"
+    "manifestDigest": "f0f17d6a45e25bfb6615152bef4d82c870862989ded3d9a5c98f5f0088996501"
    }
   ],
   "published": {

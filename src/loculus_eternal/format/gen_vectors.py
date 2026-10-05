@@ -241,6 +241,33 @@ def vec_torn_batch() -> dict:
     }
 
 
+def vec_withdrawal() -> dict:
+    enc = StreamEncoder(CHAIN_ID, CONTRACT)
+    b0 = enc.encode_batch(genesis_entries(), codec=CODEC_RAW)
+    dec0 = StreamDecoder(b0.blobs).decode()
+    withdrawal = {"organism": "zika", "accessionVersions": ["PP_000001.1"], "note": "withdrawn in the vector for the sample's sake"}
+    b1 = enc.encode_batch([sample_entry("zika", "PP_000010", 1)], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[withdrawal], force_index=True)
+    dec = StreamDecoder(b0.blobs + b1.blobs).decode()
+    assert not dec.torn and all(dec.verify_artifacts().values())
+    assert dec.is_withdrawn("zika", "PP_000001", 1) and dec.count("zika") == 3
+    return {
+        "input": {
+            "chainId": CHAIN_ID,
+            "contract": _hex(CONTRACT),
+            "codec": CODEC_RAW,
+            "batches": [
+                {"entries": genesis_entries(), "tooling": [], "withdrawals": [], "forceIndex": False},
+                {"entries": [sample_entry("zika", "PP_000010", 1)], "tooling": [], "withdrawals": [withdrawal], "forceIndex": True},
+            ],
+        },
+        "expected": [_batch_expectation(b0, True), _batch_expectation(b1, True)],
+        "published": dec.published(),
+        "withdrawn": dec.withdrawn(),
+        "artifacts": _artifacts(dec),
+        "withdrawnEntries": {o: [p.decode("utf-8") for _, _, p in dec.withdrawn_records(o)] for o in dec.organisms()},
+    }
+
+
 GENERATORS = {
     "varint.json": vec_varint,
     "canonical_json.json": vec_canonical_json,
@@ -250,6 +277,7 @@ GENERATORS = {
     "multi_blob.json": vec_multi_blob,
     "two_batches_index.json": vec_two_batches_index,
     "torn_batch.json": vec_torn_batch,
+    "withdrawal.json": vec_withdrawal,
 }
 
 

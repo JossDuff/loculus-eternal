@@ -136,12 +136,20 @@ class EncoderState:
     published: dict[str, dict[str, list[list[int]]]] = field(default_factory=dict)
     # organism -> schema dict last published
     schemas: dict[str, dict] = field(default_factory=dict)
-    # organism -> entries published so far
+    # organism -> lines in the materialised file so far (published minus withdrawn)
     entries_total: dict[str, int] = field(default_factory=dict)
+    # organism -> accession -> sorted withdrawn versions
+    withdrawn: dict[str, dict[str, list[int]]] = field(default_factory=dict)
     bytes_since_index: int = 0
 
     def is_published(self, organism: str, accession: str, version: int) -> bool:
         return any(v == version for v, _ in self.published.get(organism, {}).get(accession, []))
+
+    def is_withdrawn(self, organism: str, accession: str, version: int) -> bool:
+        return version in self.withdrawn.get(organism, {}).get(accession, [])
+
+    def withdrawn_total(self, organism: str) -> int:
+        return sum(len(v) for v in self.withdrawn.get(organism, {}).values())
 
 
 @dataclass
@@ -158,6 +166,7 @@ class EncodedBatch:
     index: dict | None
     schemas_published: list[str]
     entry_count: int
+    withdrawn_count: int = 0
 
 
 # previous_entries(organism) yields (accession, version, payload) in materialisation order
@@ -180,18 +189,22 @@ class StreamEncoder:
         tooling: Iterable[tuple[str, bytes]] = (),
         codec: int = CODEC_ZSTD,
         force_index: bool = False,
+        withdrawals: Iterable[dict] = (),
     ) -> EncodedBatch:
         """Encode one batch from a stream of entries and advance the state.
 
         `previous_entries(organism)` must yield `(accession, version, payload)` for every
-        entry of that organism published in earlier batches, in materialisation order; it is
-        needed for the cumulative artifact digests and may be omitted only when nothing has
-        been published yet.
+        entry of that organism published in earlier batches and not withdrawn, in
+        materialisation order; it is needed for the cumulative artifact digests and may be
+        omitted only when nothing has been published yet.
+
+        `withdrawals` are `{"organism", "accessionVersions", "note"}` dicts; withdrawn
+        entries leave the materialised output from this batch on.
         """
         with tempfile.TemporaryDirectory(prefix="loculus-eternal-encode-", dir=self.work_dir) as tmp:
-            return self._encode(Path(tmp), entries, previous_entries, list(tooling), codec, force_index)
+            return self._encode(Path(tmp), entries, previous_entries, list(tooling), codec, force_index, withdrawals)
 
-    def _encode(self, work: Path, entries, previous_entries, tooling, codec, force_index) -> EncodedBatch:
+    def _encode(self, work: Path, entries, previous_entries, tooling, codec, force_index, withdrawals) -> EncodedBatch:
         st = self.state
 
         # Pass 1: validate, canonicalise, and spill every entry into a sorted run per organism.
@@ -207,6 +220,8 @@ class StreamEncoder:
             seen.add(k)
             if st.is_published(*k):
                 raise FormatError(f"entry already published: {k}")
+            if st.is_withdrawn(*k):
+                raise FormatError(f"entry is withdrawn and cannot be published: {k}")
             schema = Entry.schema(e)
             if st.schemas.get(k[0]) != schema and schemas_now.get(k[0]) != schema:
                 schemas_now[k[0]] = schema
@@ -215,8 +230,36 @@ class StreamEncoder:
                 sorters[org] = ExternalSorter(work / "sort" / org, buffer_bytes=self.sort_buffer_bytes)
             sorters[org].add(k[1], k[2], Entry.payload(e))
             count += 1
-        if count == 0:
-            raise EmptyBatch("a batch must contain at least one entry")
+        # Withdrawals are read only after every entry, so a caller may decide them from what
+        # the entries turned out to be (the upload command withdraws what vanished from the
+        # feeds). An entry that is withdrawn in this very batch is then refused.
+        withdraw_now: dict[str, dict[str, list[int]]] = {}
+        withdraw_records: list[tuple[str, bytes]] = []
+        for w in withdrawals:
+            org = w.get("organism")
+            if not isinstance(org, str) or not org or not isinstance(w.get("accessionVersions"), list) or not w["accessionVersions"]:
+                raise FormatError("a withdrawal names an organism and a non-empty list of accessionVersions")
+            versions = sorted(set(w["accessionVersions"]))
+            for av in versions:
+                acc, _, ver = av.rpartition(".")
+                if not acc or not ver.isdigit() or int(ver) < 1:
+                    raise FormatError(f"withdrawal names a malformed accessionVersion {av!r}")
+                if st.is_withdrawn(org, acc, int(ver)) or int(ver) in withdraw_now.get(org, {}).get(acc, []):
+                    raise FormatError(f"{org} {av} is already withdrawn")
+                withdraw_now.setdefault(org, {}).setdefault(acc, []).append(int(ver))
+            note = w.get("note")
+            if note is not None and not isinstance(note, str):
+                raise FormatError("a withdrawal note is a string or null")
+            withdraw_records.append((org, canonical.dumps({"organism": org, "accessionVersions": versions, "note": note})))
+        for accs in withdraw_now.values():
+            for vs in accs.values():
+                vs.sort()
+
+        for org, acc, ver in seen:
+            if ver in withdraw_now.get(org, {}).get(acc, []):
+                raise FormatError(f"entry is withdrawn and cannot be published: {(org, acc, ver)}")
+        if count == 0 and not withdraw_records:
+            raise EmptyBatch("a batch must contain at least one entry or one withdrawal")
         runs: dict[str, Path] = {}
         for org, sorter in sorters.items():
             path = work / f"{org}.run"
@@ -232,6 +275,8 @@ class StreamEncoder:
             uncompressed_length += sink.write(frame(RecordType.SCHEMA, canonical.dumps(schemas_now[org])))
         for p, c in sorted(tooling, key=lambda t: t[0]):
             uncompressed_length += sink.write(frame(RecordType.TOOLING, encode_tooling(p, c)))
+        for _, payload in sorted(withdraw_records, key=lambda t: t[0]):
+            uncompressed_length += sink.write(frame(RecordType.WITHDRAW, payload))
         for org in sorted(runs):
             for _, _, payload in iter_run(runs[org]):
                 uncompressed_length += sink.write(frame(RecordType.ENTRY, payload))
@@ -239,8 +284,16 @@ class StreamEncoder:
         compressed_bytes = compressed.getvalue()
         body_digest = sha256(compressed_bytes)
 
-        # Pass 3: cumulative artifact digests by merging previous entries with the new run.
-        organisms = sorted(set(st.entries_total) | set(runs))
+        # Pass 3: cumulative artifact digests by merging previous entries with the new run,
+        # leaving out anything withdrawn so far or in this batch.
+        withdrawn_after = {o: {a: list(v) for a, v in accs.items()} for o, accs in st.withdrawn.items()}
+        for org, accs in withdraw_now.items():
+            for acc, vs in accs.items():
+                withdrawn_after.setdefault(org, {}).setdefault(acc, []).extend(vs)
+        for accs in withdrawn_after.values():
+            for vs in accs.values():
+                vs.sort()
+        organisms = sorted(set(st.entries_total) | set(runs) | set(withdraw_now) | set(st.withdrawn))
         artifacts: dict[str, dict] = {}
         for org in organisms:
             if st.entries_total.get(org, 0) > 0:
@@ -250,10 +303,14 @@ class StreamEncoder:
             else:
                 prev = ()
             new: Iterable[Record] = iter_run(runs[org]) if org in runs else ()
-            digest, new_count = _digest_merged(prev, new)
+            excluded = withdrawn_after.get(org, {})
+            digest, total, new_count = _digest_merged(prev, new, excluded)
+            withdrawn_in_batch = sum(len(v) for v in withdraw_now.get(org, {}).values())
             artifacts[org] = {
                 "entriesInBatch": new_count,
-                "entriesTotal": st.entries_total.get(org, 0) + new_count,
+                "entriesTotal": total,
+                "withdrawnInBatch": withdrawn_in_batch,
+                "withdrawnTotal": sum(len(v) for v in excluded.values()),
                 "artifactSha256": digest,
             }
 
@@ -266,7 +323,7 @@ class StreamEncoder:
                 vs.sort()
 
         has_index = force_index or st.bytes_since_index + len(compressed_bytes) >= INDEX_THRESHOLD_BYTES
-        index = {"batch": st.next_batch, "entries": published} if has_index else None
+        index = {"batch": st.next_batch, "entries": published, "withdrawn": withdrawn_after} if has_index else None
 
         begin = BatchBegin(
             batch=st.next_batch,
@@ -316,6 +373,7 @@ class StreamEncoder:
         st.next_batch += 1
         st.next_blob_seq = blob_count_after
         st.published = published
+        st.withdrawn = withdrawn_after
         st.schemas.update(schemas_now)
         for org, a in artifacts.items():
             st.entries_total[org] = a["entriesTotal"]
@@ -334,6 +392,7 @@ class StreamEncoder:
             index=index,
             schemas_published=sorted(schemas_now),
             entry_count=count,
+            withdrawn_count=sum(len(v) for accs in withdraw_now.values() for v in accs.values()),
         )
 
 
@@ -358,14 +417,19 @@ class _Compressor:
             self.out.write(self._c.flush())
 
 
-def _digest_merged(previous: Iterable[Record], new: Iterable[Record]) -> tuple[str, int]:
-    """SHA-256 of the output file formed by merging two sorted runs, and the count of new records."""
+def _digest_merged(previous: Iterable[Record], new: Iterable[Record], excluded: dict[str, list[int]]) -> tuple[str, int, int]:
+    """SHA-256 and line count of the output file formed by merging two sorted runs minus the
+    excluded (withdrawn) keys, and the count of new records that made it in."""
     h = hashlib.sha256()
+    total = 0
     new_count = 0
     prev_tagged = ((rec, 0) for rec in previous)
     new_tagged = ((rec, 1) for rec in new)
     for rec, is_new in heapq.merge(prev_tagged, new_tagged, key=lambda item: (item[0][0], item[0][1])):
+        if rec[1] in excluded.get(rec[0], ()):
+            continue
         h.update(rec[2])
         h.update(b"\n")
+        total += 1
         new_count += is_new
-    return h.hexdigest(), new_count
+    return h.hexdigest(), total, new_count
