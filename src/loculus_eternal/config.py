@@ -95,7 +95,9 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         elif kind == "local":
             out.append(LocalDirectorySource(s["path"]))
         elif kind == "ipfs":
-            out.append(IpfsSource(s["endpoints"], s["snapshot_cid"]))
+            # snapshot_cid may be omitted for the upload command, which fills in its own
+            # latest snapshot; the recovery command needs it.
+            out.append(IpfsSource(s["endpoints"], s.get("snapshot_cid")))
         else:
             raise ConfigError(f"unknown source type {kind!r} (known: beacon, blobscan, blob-archiver, local, ipfs)")
     return out
@@ -145,6 +147,8 @@ def load(path: str | Path) -> Config:
                 spec_path=(path.parent / i.get("spec_path", "docs/container-spec.md")),
                 required=bool(i.get("required", False)),
             )
+            if ipfs.required and not ipfs.endpoints:
+                raise ConfigError("[ipfs] required = true needs at least one endpoint")
         r = raw.get("recover", {})
         recover = RecoverSettings(
             data_dir=Path(r.get("data_dir", "recovery-data")),

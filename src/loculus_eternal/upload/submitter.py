@@ -94,8 +94,9 @@ class Journal:
     blobs_dir: str
     txs: list[PlannedTx]
     snapshot_cid: str | None = None             # the snapshot this batch's pointer names
-    previous_snapshot_cid: str | None = None    # the one to unpin once this batch is final
     snapshot_endpoints: list[str] = field(default_factory=list)   # endpoints that took the new snapshot
+    blob_cids: list[str] = field(default_factory=list)            # the batch's blob objects, for cleanup if abandoned
+    ipfs_publish: dict | None = None            # what build_and_publish reported, for cleanup if abandoned
 
     @property
     def finished(self) -> bool:
@@ -144,7 +145,7 @@ class Submitter:
     def existing_journal(self) -> Journal | None:
         return Journal.load(self.journal_path) if self.journal_path.exists() else None
 
-    def plan(self, batch, blobs: list[bytes], app_pointer: bytes, *, snapshot_cid: str | None = None, previous_snapshot_cid: str | None = None, snapshot_endpoints: list[str] | None = None) -> Journal:
+    def plan(self, batch, blobs: list[bytes], app_pointer: bytes, *, snapshot_cid: str | None = None, snapshot_endpoints: list[str] | None = None, blob_cids: list[str] | None = None, ipfs_publish: dict | None = None) -> Journal:
         """Write the journal and the blob files for a freshly encoded batch."""
         if self.journal_path.exists():
             raise SubmitError(f"a journal already exists at {self.journal_path}; resume or abandon it first")
@@ -177,8 +178,9 @@ class Submitter:
             blobs_dir=str(blobs_dir),
             txs=txs,
             snapshot_cid=snapshot_cid,
-            previous_snapshot_cid=previous_snapshot_cid,
             snapshot_endpoints=list(snapshot_endpoints or []),
+            blob_cids=list(blob_cids or []),
+            ipfs_publish=ipfs_publish,
         )
         journal.save(self.journal_path)
         return journal
@@ -219,11 +221,16 @@ class Submitter:
             raise Refused(f"transaction {tx.index} of the batch would revert: {reason}")
         return int(response["result"], 16)
 
-    def dry_run(self, journal: Journal) -> dict:
-        """Check fees, simulate the next transaction, and check the balance covers the batch."""
+    def check_fees(self) -> dict:
+        """Refuse when blob space is pricier than the configured ceiling. Cheap; run first."""
         fees = self.fees()
         if fees["blobBaseFee"] > self.policy.max_blob_fee_gwei * GWEI:
             raise Refused(f"the blob base fee is {fees['blobBaseFee'] / GWEI:.3f} gwei, above the configured limit of {self.policy.max_blob_fee_gwei} gwei; wait for a quieter period or raise upload.max_blob_fee_gwei")
+        return fees
+
+    def dry_run(self, journal: Journal) -> dict:
+        """Check fees, simulate the next transaction, and check the balance covers the batch."""
+        fees = self.check_fees()
         pending = [t for t in journal.txs if t.status == "planned"]
         balance = self.w3.eth.get_balance(self.account.address)
         if not pending:

@@ -215,7 +215,7 @@ def test_I7_previous_snapshot_is_unpinned_once_the_new_batch_is_final(world):
     assert second.outcome == "published"
     new = second.ipfs["snapshotCid"]
     assert new != old
-    assert second.ipfs["previousSnapshotCid"] == old and sorted(second.ipfs["previousUnpinnedOn"]) == sorted([a.api_url, b.api_url])
+    assert second.ipfs_finalised["previousUnpinned"] == {a.api_url: old, b.api_url: old}
     for node in (a, b):
         assert node.is_pinned(new) and not node.is_pinned(old)
         # Every blob object, old and new, keeps its own pin.
@@ -224,3 +224,78 @@ def test_I7_previous_snapshot_is_unpinned_once_the_new_batch_is_final(world):
     # A third run with nothing new leaves everything as it is.
     third = uploader(world).run()
     assert third.outcome == "nothing-to-publish" and a.is_pinned(new)
+
+
+def test_I8_refused_batch_takes_its_snapshot_and_blob_objects_back(world):
+    """IPFS work happens before the dry run; a refusal must not leave orphan pins."""
+    anvil = world["anvil"]
+    a, b = world["kubo"]
+    saved = anvil.w3.eth.get_balance(anvil.publisher.address)
+    anvil.fund(anvil.publisher.address, 10**12)
+    try:
+        report = uploader(world).run()
+    finally:
+        anvil.fund(anvil.publisher.address, saved)
+    assert report.outcome == "refused" and "holds" in report.message
+    assert report.ipfs["snapshotCid"], "the snapshot was built and added before the refusal"
+    orphan = report.ipfs["snapshotCid"]
+    for node in (a, b):
+        assert not node.is_pinned(orphan)
+    manifest = parse_manifest(a.cat(f"{orphan}/manifest.json"))  # blocks linger until GC, but unpinned
+    assert all(not a.is_pinned(entry["cid"]) for entry in manifest["blobs"])
+    assert not (world["tmp"] / "upload-data" / "snapshot-cid.txt").exists()
+    # And a fee refusal happens before any IPFS work at all.
+    world["cfg_path"].write_text(world["cfg_path"].read_text().replace("[ipfs]", "[upload.extra]\n[ipfs]").replace("inclusion_timeout_blocks = 3", "inclusion_timeout_blocks = 3\nmax_blob_fee_gwei = 0"))
+    cheap = uploader(world).run()
+    assert cheap.outcome == "refused" and "blob base fee" in cheap.message and cheap.ipfs is None
+
+
+def test_I9_an_endpoint_that_missed_a_batch_still_ends_with_one_snapshot(world):
+    a, b = world["kubo"]
+    cfg = world["cfg_path"]
+    both = cfg.read_text()
+    only_a = both.replace(f'endpoints = ["{a.api_url}", "{b.api_url}"]', f'endpoints = ["{a.api_url}"]')
+    first = uploader(world).run()
+    s1 = first.ipfs["snapshotCid"]
+    # Endpoint b is away for the second batch.
+    cfg.write_text(only_a)
+    world["backend"].add("zika", released_line("zika", "PP_1", 2))
+    second = uploader(world).run()
+    s2 = second.ipfs["snapshotCid"]
+    assert second.ipfs_finalised["previousUnpinned"] == {a.api_url: s1}
+    assert b.is_pinned(s1) and not b.is_pinned(s2) and not a.is_pinned(s1)
+    # b is back for the third: it lets go of s1, which is what it actually held.
+    cfg.write_text(both)
+    world["backend"].add("zika", released_line("zika", "PP_1", 3))
+    third = uploader(world).run()
+    s3 = third.ipfs["snapshotCid"]
+    assert third.ipfs_finalised["previousUnpinned"] == {a.api_url: s2, b.api_url: s1}
+    for node in (a, b):
+        assert node.is_pinned(s3) and not node.is_pinned(s1) and not node.is_pinned(s2)
+
+
+def test_I10_required_without_endpoints_is_a_configuration_error(world):
+    cfg = world["cfg_path"]
+    a, b = world["kubo"]
+    cfg.write_text(cfg.read_text().replace(f'endpoints = ["{a.api_url}", "{b.api_url}"]', "endpoints = []\nrequired = true"))
+    with pytest.raises(SystemExit, match="at least one endpoint"):
+        configuration.load(cfg)
+
+
+def test_I11_upload_ipfs_source_follows_the_latest_snapshot(world, tmp_path):
+    """An [[sources]] ipfs entry without a snapshot CID uses this machine's latest snapshot,
+    and the published view checks it against the chain's pointer before trusting it."""
+    a, _ = world["kubo"]
+    cfg = world["cfg_path"]
+    cfg.write_text(cfg.read_text() + f'\n[[sources]]\ntype = "ipfs"\nendpoints = ["{a.api_url}"]\n')
+    first = uploader(world).run()
+    assert first.outcome == "published"
+    # Wipe the local stream copy so the next run must fetch its own blobs back; the beacon
+    # stub has nothing, so IPFS is the only source that can answer.
+    import shutil
+
+    shutil.rmtree(world["tmp"] / "upload-data" / "stream")
+    world["backend"].add("mpox", released_line("mpox", "PP_8", 1))
+    second = uploader(world).run()
+    assert second.outcome == "published", second.message
+    assert second.batch["firstBlobSeq"] == first.batch["blobCountAfter"]

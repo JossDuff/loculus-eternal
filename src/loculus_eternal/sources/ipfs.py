@@ -4,8 +4,7 @@ A blob object's CID is the sha2-256 of its bytes, which cannot be derived from t
 hash the chain records, so IPFS recovery starts from a snapshot CID learned off-chain. The
 snapshot is trusted only after its CID hashes to the contract's `appPointer`; its manifest
 then maps every versioned hash to a blob-object CID, and every blob fetched is verified like
-any other. Endpoints are Kubo RPC URLs; a plain HTTP gateway works too for `block/get`
-through `/ipfs/<cid>?format=raw`.
+any other. Endpoints are Kubo RPC API URLs.
 """
 
 from __future__ import annotations
@@ -18,15 +17,27 @@ from loculus_eternal.sources.base import BlobContext, SourceError
 
 
 class IpfsSource:
-    def __init__(self, endpoints: list[str], snapshot_cid: str, *, timeout: float = 300.0, client: httpx.Client | None = None):
+    def __init__(self, endpoints: list[str], snapshot_cid: str | None, *, timeout: float = 300.0, client: httpx.Client | None = None):
         if not endpoints:
             raise ValueError("at least one IPFS endpoint is required")
+        self.endpoints = list(endpoints)
         self.clients = [KuboClient(e, timeout=timeout, client=client) for e in endpoints]
         self.snapshot_cid = snapshot_cid
         self.expected_pointer: bytes | None = None
         self.manifest: dict | None = None
         self._cid_by_hash: dict[bytes, str] = {}
-        self.name = f"ipfs({snapshot_cid[:16]}…; " + ", ".join(e for e in endpoints) + ")"
+
+    @property
+    def name(self) -> str:
+        cid = (self.snapshot_cid or "no snapshot")[:16]
+        return f"ipfs({cid}…; " + ", ".join(self.endpoints) + ")"
+
+    def set_snapshot(self, snapshot_cid: str | None) -> None:
+        """Point the source at another snapshot (the upload command's latest, for instance)."""
+        if snapshot_cid != self.snapshot_cid:
+            self.snapshot_cid = snapshot_cid
+            self.manifest = None
+            self._cid_by_hash = {}
 
     def set_app_pointer(self, pointer: bytes) -> None:
         """Called by the recovery command with the contract's pointer at the finalized block."""
@@ -35,7 +46,11 @@ class IpfsSource:
     def _load_manifest(self) -> dict:
         if self.manifest is not None:
             return self.manifest
-        if self.expected_pointer is not None and app_pointer(self.snapshot_cid) != self.expected_pointer:
+        if self.snapshot_cid is None:
+            raise SourceError("no snapshot CID: the IPFS source cannot locate blobs without one")
+        if self.expected_pointer is None:
+            raise SourceError("the snapshot has not been checked against the contract's appPointer; refusing to trust it")
+        if app_pointer(self.snapshot_cid) != self.expected_pointer:
             raise SourceError(f"snapshot {self.snapshot_cid} does not match the contract's appPointer; refusing its manifest")
         errors = []
         for c in self.clients:
@@ -52,7 +67,7 @@ class IpfsSource:
     def blob_refs(self) -> list[BlobRef]:
         """The manifest's blob list, for use as a manifest source (verified by the caller)."""
         m = self._load_manifest()
-        return [BlobRef(seq=int(b["seq"]), versioned_hash=bytes.fromhex(b["versionedHash"][2:])) for b in m["blobs"]]
+        return [BlobRef(seq=int(b["seq"]), versioned_hash=bytes.fromhex(b["versionedHash"][2:]), block_number=b.get("blockNumber"), block_timestamp=b.get("blockTimestamp")) for b in m["blobs"]]
 
     def fetch(self, ctx: BlobContext, wanted: list[bytes]) -> list[bytes]:
         self._load_manifest()

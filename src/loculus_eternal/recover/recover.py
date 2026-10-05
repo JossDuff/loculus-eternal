@@ -110,8 +110,27 @@ class Recovery:
                 self.cfg.log(f"blob list from {src.name} unavailable: {e}")
                 continue
             self.cfg.log(f"blob list from {src.name} verified against head ({len(refs)} blobs)")
+            if any(r.block_number is None for r in refs):
+                refs = self._enrich_from_logs(refs, state)
             return refs, src.name, errors
         return [], None, errors
+
+    def _enrich_from_logs(self, refs: list[BlobRef], state: ChainState) -> list[BlobRef]:
+        """A manifest from a file or a snapshot may lack block numbers; beacon-style sources
+        need them. Fill them in from the logs when the node still serves them."""
+        try:
+            by_seq = {r.seq: r for r in self.reader.blob_refs_from_logs(self.cfg.deployment_block, state.block_number)}
+        except Exception as e:
+            self.cfg.log(f"block numbers for the blob list are unavailable (logs: {e}); sources that need a slot will be skipped for those blobs")
+            return refs
+        out = []
+        for r in refs:
+            logged = by_seq.get(r.seq)
+            if r.block_number is None and logged is not None and logged.versioned_hash == r.versioned_hash:
+                out.append(BlobRef(r.seq, r.versioned_hash, logged.block_number, logged.block_timestamp))
+            else:
+                out.append(r)
+        return out
 
     def fetch_blobs(self, refs: list[BlobRef], store: BlobStore) -> tuple[int, int, list[dict]]:
         """Fill the store from the sources. Returns (fetched, rejected, missing report)."""

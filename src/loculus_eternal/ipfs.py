@@ -82,12 +82,22 @@ def app_pointer(snapshot_cid: str) -> bytes:
 # --- Kubo RPC ---------------------------------------------------------------------------------
 
 
+_shared: dict[float, httpx.Client] = {}
+
+
+def shared_client(timeout: float) -> httpx.Client:
+    """One connection pool per timeout for every Kubo endpoint in the process."""
+    if timeout not in _shared:
+        _shared[timeout] = httpx.Client(timeout=timeout)
+    return _shared[timeout]
+
+
 class KuboClient:
     """The subset of the Kubo RPC API (`POST /api/v0/…`) this project uses."""
 
     def __init__(self, api_url: str, *, timeout: float = 300.0, client: httpx.Client | None = None):
         self.api_url = api_url.rstrip("/")
-        self.client = client or httpx.Client(timeout=timeout)
+        self.client = client or shared_client(timeout)
 
     def _post(self, path: str, params: dict | None = None, files=None, data=None) -> httpx.Response:
         try:
@@ -115,9 +125,10 @@ class KuboClient:
     def pin_add(self, cid: str) -> None:
         self._post("pin/add", params={"arg": cid, "recursive": "true"})
 
-    def pin_rm(self, cid: str) -> None:
-        """Drop a recursive pin. The blocks stay until the node's next garbage collection."""
-        self._post("pin/rm", params={"arg": cid, "recursive": "true"})
+    def pin_rm(self, cid: str, *, recursive: bool = True) -> None:
+        """Drop a pin (recursive for a snapshot directory, direct for a blob object). The
+        blocks stay until the node's next garbage collection."""
+        self._post("pin/rm", params={"arg": cid, "recursive": "true" if recursive else "false"})
 
     def is_pinned(self, cid: str) -> bool:
         try:
@@ -176,15 +187,19 @@ def publish_blobs(client: KuboClient, blobs: Iterable[bytes]) -> list[str]:
     return cids
 
 
-def snapshot_manifest(*, chain_id: int, contract: str, blob_count: int, head: bytes, batches: list[dict], blobs: list[tuple[int, bytes, str]]) -> bytes:
-    """manifest.json: enough to recover with nothing but IPFS, verified against the chain."""
+def snapshot_manifest(*, chain_id: int, contract: str, blob_count: int, head: bytes, batches: list[dict], blobs: list[dict]) -> bytes:
+    """manifest.json: enough to recover with nothing but IPFS, verified against the chain.
+
+    Each blob entry has `seq`, `versionedHash`, `cid`, and, when known at build time,
+    `blockNumber` and `blockTimestamp`, which let beacon-style sources locate the blob too.
+    """
     doc = {
         "chainId": chain_id,
         "contract": contract,
         "blobCount": blob_count,
         "head": "0x" + head.hex(),
         "batches": batches,
-        "blobs": [{"seq": seq, "versionedHash": "0x" + vh.hex(), "cid": cid} for seq, vh, cid in blobs],
+        "blobs": blobs,
         "profile": "docs/ipfs-profile.md",
     }
     return (json.dumps(doc, indent=1, sort_keys=True) + "\n").encode()
