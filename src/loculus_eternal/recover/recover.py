@@ -30,10 +30,15 @@ class ManifestSource:
 
     logs: bool = False
     file: Path | None = None
+    ipfs: object = None   # an IpfsSource whose snapshot manifest lists the blobs
 
     @property
     def name(self) -> str:
-        return "event logs" if self.logs else f"file {self.file}"
+        if self.logs:
+            return "event logs"
+        if self.file is not None:
+            return f"file {self.file}"
+        return f"IPFS snapshot {self.ipfs.snapshot_cid}"
 
 
 @dataclass
@@ -78,6 +83,10 @@ class Recovery:
     def read_chain_state(self) -> ChainState:
         state = self.reader.state_at_finalized()
         self.cfg.log(f"contract {self.cfg.contract} at finalized block {state.block_number}: {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
+        # IPFS sources trust a snapshot only if its CID hashes to the contract's pointer.
+        for src in list(self.cfg.sources) + [m.ipfs for m in self.cfg.manifest_sources if m.ipfs is not None]:
+            if hasattr(src, "set_app_pointer"):
+                src.set_app_pointer(state.app_pointer)
         return state
 
     def acquire_manifest(self, state: ChainState) -> tuple[list[BlobRef], str | None, list[str]]:
@@ -87,8 +96,10 @@ class Recovery:
             try:
                 if src.logs:
                     refs = self.reader.blob_refs_from_logs(self.cfg.deployment_block, state.block_number)
-                else:
+                elif src.file is not None:
                     refs = _read_manifest_file(src.file)
+                else:
+                    refs = src.ipfs.blob_refs()
                 verify_manifest(refs, state)
             except (ManifestMismatch, OSError, ValueError, KeyError) as e:
                 errors.append(f"{src.name}: {e}")

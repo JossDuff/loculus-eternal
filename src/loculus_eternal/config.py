@@ -12,7 +12,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, LocalDirectorySource
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
 from loculus_eternal.sources.blobscan import PUBLIC_API
 
@@ -55,6 +55,13 @@ class UploadConfig:
 
 
 @dataclass
+class IpfsConfig:
+    endpoints: list[str]          # Kubo RPC API URLs that receive every blob object and snapshot
+    spec_path: Path               # the container spec to include in the snapshot
+    required: bool                # refuse to publish when no endpoint accepts the snapshot
+
+
+@dataclass
 class RecoverSettings:
     data_dir: Path
     out_dir: Path
@@ -69,6 +76,7 @@ class Config:
     sources: list
     backend: BackendConfig | None
     upload: UploadConfig | None
+    ipfs: IpfsConfig | None
     recover: RecoverSettings
     raw: dict = field(repr=False, default_factory=dict)
 
@@ -86,8 +94,10 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
             out.append(BlobArchiverSource(s["url"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "local":
             out.append(LocalDirectorySource(s["path"]))
+        elif kind == "ipfs":
+            out.append(IpfsSource(s["endpoints"], s["snapshot_cid"]))
         else:
-            raise ConfigError(f"unknown source type {kind!r} (known: beacon, blobscan, blob-archiver, local)")
+            raise ConfigError(f"unknown source type {kind!r} (known: beacon, blobscan, blob-archiver, local, ipfs)")
     return out
 
 
@@ -127,6 +137,14 @@ def load(path: str | Path) -> Config:
                 inclusion_timeout_blocks=int(u.get("inclusion_timeout_blocks", 6)),
                 escalation_attempts=int(u.get("escalation_attempts", 8)),
             )
+        ipfs = None
+        if "ipfs" in raw:
+            i = raw["ipfs"]
+            ipfs = IpfsConfig(
+                endpoints=list(i.get("endpoints", [])),
+                spec_path=(path.parent / i.get("spec_path", "docs/container-spec.md")),
+                required=bool(i.get("required", False)),
+            )
         r = raw.get("recover", {})
         recover = RecoverSettings(
             data_dir=Path(r.get("data_dir", "recovery-data")),
@@ -136,7 +154,7 @@ def load(path: str | Path) -> Config:
         )
     except KeyError as e:
         raise ConfigError(f"{path} is missing {e.args[0]!r}") from e
-    return Config(path=path, chain=chain, sources=sources, backend=backend, upload=upload, recover=recover, raw=raw)
+    return Config(path=path, chain=chain, sources=sources, backend=backend, upload=upload, ipfs=ipfs, recover=recover, raw=raw)
 
 
 def publisher_key() -> str:

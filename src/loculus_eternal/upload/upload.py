@@ -27,7 +27,9 @@ from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
+from loculus_eternal.ipfs import IpfsError
 from loculus_eternal.upload.published import PublishedView, load_published_view
+from loculus_eternal.upload.snapshot import build_and_publish
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
 from loculus_eternal.upload.sync import BackendClient, SyncStats, iter_new_entries
 
@@ -41,6 +43,7 @@ class UploadReport:
     new_entries: int = 0
     tooling_published: bool = False
     batch: dict | None = None
+    ipfs: dict | None = None
     dry_run: dict | None = None
     transactions: list[dict] = field(default_factory=list)
     message: str = ""
@@ -216,9 +219,23 @@ class Uploader:
 
         if self.submitter is None:
             raise SystemExit("configuration error: publishing needs the publisher key")
-        # The pointer is carried forward unchanged until the IPFS snapshot sets a new one;
-        # a batch end always writes it, so passing zero here would wipe a pointer set by hand.
-        journal = self.submitter.plan(batch, batch.blobs, view.state.app_pointer)
+        # The snapshot of the stream as it will stand after this batch goes to IPFS first,
+        # because the batch-end transaction carries the pointer to it. Without IPFS, or if
+        # no endpoint takes it, the existing pointer is carried forward: a batch end always
+        # writes the pointer, so zero would wipe one set by hand.
+        pointer = view.state.app_pointer
+        if self.cfg.ipfs is not None and self.cfg.ipfs.endpoints and mode == "publish":
+            try:
+                snap = build_and_publish(self.cfg.ipfs, chain_id=self.w3.eth.chain_id, contract=self.cfg.chain.contract, store=store, existing_blob_count=view.state.blob_count, batch=batch, work_dir=self.data_dir / "spill", log=self.log)
+            except IpfsError as e:
+                report.outcome = "refused"
+                report.message = f"IPFS: {e}"
+                self.log(f"refused: {e}")
+                return self._done(report, started)
+            report.ipfs = snap.to_json()
+            if snap.pointer is not None:
+                pointer = snap.pointer
+        journal = self.submitter.plan(batch, batch.blobs, pointer)
         try:
             report.dry_run = self.submitter.dry_run(journal)
         except Refused as e:
@@ -247,8 +264,10 @@ class Uploader:
             self.log(f"publishing stopped: {e}")
             return self._done(report, started)
         self._finish(journal, store, report)
+        if report.ipfs and report.ipfs.get("snapshotCid"):
+            (self.data_dir / "snapshot-cid.txt").write_text(report.ipfs["snapshotCid"] + "\n")
         report.outcome = "published"
-        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs"
+        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f"; snapshot {report.ipfs['snapshotCid']}" if report.ipfs and report.ipfs.get("snapshotCid") else "")
         self.log(report.message)
         return self._done(report, started)
 
