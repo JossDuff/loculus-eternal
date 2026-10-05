@@ -186,7 +186,7 @@ def vec_two_batches_index() -> dict:
     b0 = enc.encode_batch(genesis_entries(), tooling=tooling(), codec=CODEC_RAW)
     dec0 = StreamDecoder(b0.blobs).decode()
     enc1 = StreamEncoder(CHAIN_ID, CONTRACT, state=dec0.encoder_state())
-    b1 = enc1.encode_batch(second_batch_entries(), previous_entries=dec0.payloads, codec=CODEC_RAW, force_index=True)
+    b1 = enc1.encode_batch(second_batch_entries(), previous_entries=dec0.records, codec=CODEC_RAW, force_index=True)
     dec = StreamDecoder(b0.blobs + b1.blobs).decode()
     assert not dec.torn and all(dec.verify_artifacts().values()) and dec.batches[1].index is not None
     return {
@@ -212,12 +212,12 @@ def vec_torn_batch() -> dict:
     big = [sample_entry("zika", f"PP_00020{i}", 1, seq_len=60000) for i in range(3)]
     # The interrupted attempt: only its first blob reached the chain.
     enc_t = StreamEncoder(CHAIN_ID, CONTRACT, state=dec0.encoder_state())
-    attempt = enc_t.encode_batch(big, previous_entries=dec0.payloads, codec=CODEC_RAW)
+    attempt = enc_t.encode_batch(big, previous_entries=dec0.records, codec=CODEC_RAW)
     torn_blob = attempt.blobs[0]
     # The retry starts at the next blob boundary with the same batch number.
     enc_r = StreamEncoder(CHAIN_ID, CONTRACT, state=dec0.encoder_state())
     enc_r.state.next_blob_seq += 1
-    retry = enc_r.encode_batch(big, previous_entries=dec0.payloads, codec=CODEC_RAW)
+    retry = enc_r.encode_batch(big, previous_entries=dec0.records, codec=CODEC_RAW)
     blobs = b0.blobs + [torn_blob] + retry.blobs
     dec = StreamDecoder(blobs).decode()
     assert [t.first_blob for t in dec.torn] == [1] and [b.batch for b in dec.batches] == [0, 1]

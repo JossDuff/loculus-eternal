@@ -33,7 +33,7 @@ def published():
         enc = StreamEncoder(anvil.chain_id, contract)
         b0 = enc.encode_batch(genesis_entries(), tooling=tooling(), codec=CODEC_ZSTD)
         dec0 = StreamDecoder(b0.blobs).decode()
-        b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.payloads, codec=CODEC_ZSTD, force_index=True)
+        b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.records, codec=CODEC_ZSTD, force_index=True)
         all_blobs = []
         for batch in (b0, b1):
             for receipt, hashes in publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True):
@@ -62,7 +62,7 @@ def config(published, tmp_path, sources, **kw) -> RecoveryConfig:
 
 def assert_recovered_matches(published, out_dir: Path):
     expected = published["expected"]
-    for org in expected.entries:
+    for org in expected.organisms():
         assert (out_dir / f"{org}.ndjson").read_bytes() == expected.materialise(org)
     report = json.loads((out_dir / "recovery-report.json").read_text())
     assert report["allArtifactsMatch"] and report["torn"] == []
@@ -223,7 +223,7 @@ def test_R7_decode_report_lists_batches_files_digests_and_tooling(published, tmp
     d = report.decode
     assert d["header"]["chainId"] == published["anvil"].chain_id
     assert d["batches"][1]["hasIndex"] is True
-    assert set(d["files"]) == set(published["expected"].entries)
+    assert set(d["files"]) == set(published["expected"].organisms())
     assert all(f["matchesManifest"] for f in d["files"].values())
     assert d["tooling"] == sorted(p for p, _ in tooling())
 

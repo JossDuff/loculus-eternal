@@ -57,7 +57,7 @@ def test_F6_batch_starts_at_blob_boundary_and_is_zero_padded():
     assert t == RecordType.BATCH_BEGIN and BatchBegin.decode(payload).batch == 0
     # A second batch begins at chunk 0 of the next blob.
     dec = StreamDecoder(b0.blobs).decode()
-    b1 = StreamEncoder(CHAIN_ID, CONTRACT, state=dec.encoder_state()).encode_batch(second_batch_entries(), previous_entries=dec.payloads, codec=CODEC_RAW)
+    b1 = StreamEncoder(CHAIN_ID, CONTRACT, state=dec.encoder_state()).encode_batch(second_batch_entries(), previous_entries=dec.records, codec=CODEC_RAW)
     assert b1.first_blob_seq == b0.blob_count_after
     t, payload, _ = read_record(b1.stream, 0)
     assert t == RecordType.BATCH_BEGIN and BatchBegin.decode(payload).first_blob_seq == b1.first_blob_seq
@@ -155,7 +155,7 @@ def test_F8_manifest_with_wrong_cumulative_digest_is_torn():
         off = end
     dec = StreamDecoder(rewrite_blobs(bytes(stream))).decode()
     assert not dec.batches and "cumulative digest" in dec.torn[0].reason
-    assert all(not v for v in dec.entries.values()), "a torn batch must leave no entries behind"
+    assert dec.organisms() == [], "a torn batch must leave no entries behind"
 
 
 
@@ -248,21 +248,21 @@ def test_F10_index_is_emitted_at_the_threshold(monkeypatch):
     # Pretend the stream has nearly reached the threshold; the next batch must carry an index.
     enc.state.bytes_since_index = INDEX_THRESHOLD_BYTES - 1
     dec = StreamDecoder(b0.blobs).decode()
-    b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec.payloads, codec=CODEC_RAW)
+    b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec.records, codec=CODEC_RAW)
     assert b1.index is not None and b1.manifest["hasIndex"] is True and enc.state.bytes_since_index == 0
 
 
 def test_F10_reader_from_latest_index_matches_full_replay():
     enc, b0 = encode_genesis()
     dec0 = StreamDecoder(b0.blobs).decode()
-    b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.payloads, codec=CODEC_RAW, force_index=True)
+    b1 = enc.encode_batch(second_batch_entries(), previous_entries=dec0.records, codec=CODEC_RAW, force_index=True)
     dec1 = StreamDecoder(b0.blobs + b1.blobs).decode()
-    b2 = enc.encode_batch([sample_entry("mpox", "PP_000099", 1)], previous_entries=dec1.payloads, codec=CODEC_RAW)
+    b2 = enc.encode_batch([sample_entry("mpox", "PP_000099", 1)], previous_entries=dec1.records, codec=CODEC_RAW)
     dec = StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode()
     # Start from the index in batch 1 and add batch 2's entries.
     from_index = {o: {a: [list(p) for p in vs] for a, vs in accs.items()} for o, accs in dec.batches[1].index["entries"].items()}
-    for org, items in dec.entries.items():
-        for (acc, ver), (_, batch) in items.items():
+    for org in dec.organisms():
+        for (acc, ver), batch in dec.store.index[org].items():
             if batch == 2:
                 from_index.setdefault(org, {}).setdefault(acc, []).append([ver, batch])
     for accs in from_index.values():
@@ -294,10 +294,10 @@ def test_F11_torn_batch_vector(vectors):
     enc = StreamEncoder(i["chainId"], bytes.fromhex(i["contract"]))
     b0 = enc.encode_batch(i["genesisEntries"], codec=CODEC_RAW)
     dec0 = StreamDecoder(b0.blobs).decode()
-    attempt = StreamEncoder(i["chainId"], bytes.fromhex(i["contract"]), state=dec0.encoder_state()).encode_batch(i["batch1Entries"], previous_entries=dec0.payloads, codec=CODEC_RAW)
+    attempt = StreamEncoder(i["chainId"], bytes.fromhex(i["contract"]), state=dec0.encoder_state()).encode_batch(i["batch1Entries"], previous_entries=dec0.records, codec=CODEC_RAW)
     retry_enc = StreamEncoder(i["chainId"], bytes.fromhex(i["contract"]), state=dec0.encoder_state())
     retry_enc.state.next_blob_seq += 1
-    retry = retry_enc.encode_batch(i["batch1Entries"], previous_entries=dec0.payloads, codec=CODEC_RAW)
+    retry = retry_enc.encode_batch(i["batch1Entries"], previous_entries=dec0.records, codec=CODEC_RAW)
     blobs = b0.blobs + [attempt.blobs[0]] + retry.blobs
     assert [hashlib.sha256(b).hexdigest() for b in blobs] == v["blobSha256"]
     dec = StreamDecoder(blobs).decode()
@@ -312,8 +312,8 @@ def test_F11_missing_blob_tears_only_its_batch():
     enc, b0 = encode_genesis()
     dec0 = StreamDecoder(b0.blobs).decode()
     big = [sample_entry("zika", f"PP_00030{i}", 1, seq_len=60000) for i in range(3)]
-    b1 = enc.encode_batch(big, previous_entries=dec0.payloads, codec=CODEC_RAW)
-    b2 = enc.encode_batch([sample_entry("mpox", "PP_000400", 1)], previous_entries=StreamDecoder(b0.blobs + b1.blobs).decode().payloads, codec=CODEC_RAW)
+    b1 = enc.encode_batch(big, previous_entries=dec0.records, codec=CODEC_RAW)
+    b2 = enc.encode_batch([sample_entry("mpox", "PP_000400", 1)], previous_entries=StreamDecoder(b0.blobs + b1.blobs).decode().records, codec=CODEC_RAW)
     blobs = b0.blobs + b1.blobs + b2.blobs
     blobs[2] = None
     dec = StreamDecoder(blobs).decode()
@@ -327,7 +327,7 @@ def test_F11_stream_ending_mid_batch_is_torn():
     enc, b0 = encode_genesis()
     dec0 = StreamDecoder(b0.blobs).decode()
     big = [sample_entry("zika", f"PP_00050{i}", 1, seq_len=60000) for i in range(3)]
-    b1 = enc.encode_batch(big, previous_entries=dec0.payloads, codec=CODEC_RAW)
+    b1 = enc.encode_batch(big, previous_entries=dec0.records, codec=CODEC_RAW)
     dec = StreamDecoder(b0.blobs + b1.blobs[:-1]).decode()
     assert [b.batch for b in dec.batches] == [0] and dec.torn[0].expected_batch == 1
     assert dec.published() == dec0.published()
@@ -341,7 +341,7 @@ def test_F12_unknown_inner_record_is_skipped_and_reported():
     blobs = _handmade_batch([e], extra_inner=frame(0x42, b"future record"))
     dec = StreamDecoder(blobs).decode()
     assert dec.batches and any("0x42" in w for w in dec.warnings)
-    assert len(dec.entries["zika"]) == 1
+    assert dec.count("zika") == 1
 
 
 def test_F12_outer_record_type_inside_a_body_tears_the_batch():
@@ -397,10 +397,10 @@ def test_F16_schema_records_on_first_appearance_and_on_change():
     dec0 = StreamDecoder(b0.blobs).decode()
     assert dec0.schemas["zika"]["nucleotideSegments"] == ["main"] and "accession" in dec0.schemas["zika"]["metadataFields"]
     # Same shape again: no schema record. New field: schema record.
-    b1 = enc.encode_batch([sample_entry("zika", "PP_000777", 1)], previous_entries=dec0.payloads, codec=CODEC_RAW)
+    b1 = enc.encode_batch([sample_entry("zika", "PP_000777", 1)], previous_entries=dec0.records, codec=CODEC_RAW)
     assert b1.schemas_published == []
     dec1 = StreamDecoder(b0.blobs + b1.blobs).decode()
-    b2 = enc.encode_batch([sample_entry("zika", "PP_000778", 1, extra={"newField": 1})], previous_entries=dec1.payloads, codec=CODEC_RAW)
+    b2 = enc.encode_batch([sample_entry("zika", "PP_000778", 1, extra={"newField": 1})], previous_entries=dec1.records, codec=CODEC_RAW)
     assert b2.schemas_published == ["zika"]
     dec2 = StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode()
     assert "newField" in dec2.schemas["zika"]["metadataFields"]

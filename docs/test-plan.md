@@ -52,6 +52,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **F15 — projection.** An entry carries `organism` and the six data keys; its metadata carries `accession`, `version` and `accessionVersion` and none of the four removed fields; an encoder refuses an entry that violates this.
 - **F16 — schema records.** The first batch that publishes an organism carries a schema record for it; a later batch carries one only if the field set, segments or genes changed; the record lists each sorted.
 - **F17 — tooling records.** A tooling record carries a relative path and the file's bytes and round-trips exactly.
+- **F18 — bounded memory.** Encoding and decoding spill entries to sorted runs on disk: the stream bytes, manifests and materialised files are identical whatever the sort buffer size, down to a buffer that forces a spill after every entry; a body whose entries are out of order still materialises sorted; the decoder's entry iterator yields keys with payloads in materialisation order without loading the set. A hostile body (an oversized length prefix, a non-object payload, an organism name that is a path) tears the batch, allocates nothing beyond the declared length, writes nowhere outside the spill directory, and leaves no spilled chunks behind; closing the decoded stream removes the spilled entries.
 
 ### C — contract
 

@@ -5,19 +5,32 @@ sequence number, the digest of the previous manifest, which organisms have had a
 record, the published accessionVersions, and how many compressed bytes have gone by since
 the last index. That state is rebuilt from the chain and the stream by the decoder, so an
 encoder can be resumed on any machine.
+
+Entries are consumed as a stream: each is validated, canonicalised, and written to a sorted
+run on disk; the body is compressed as the run is replayed; the cumulative digests are
+computed by merging the run with the previously published entries. Memory stays bounded
+however large the batch.
 """
 
 from __future__ import annotations
 
+import hashlib
 import heapq
+import io
+import tempfile
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Iterator
+from pathlib import Path
+from typing import Callable, Iterable
+
+import zstandard
 
 from loculus_eternal.format import canonical
 from loculus_eternal.format.chunks import BLOB_DATA_BYTES, blobs_needed, last_blob_chunk_count, pack_blobs
 from loculus_eternal.format.records import (
+    CODEC_RAW,
     CODEC_ZSTD,
     DIGEST_BYTES,
+    ZSTD_LEVEL,
     BatchBegin,
     FormatError,
     Header,
@@ -27,6 +40,7 @@ from loculus_eternal.format.records import (
     frame,
     sha256,
 )
+from loculus_eternal.format.runs import DEFAULT_BUFFER_BYTES, ExternalSorter, Record, iter_run
 
 INDEX_THRESHOLD_BYTES = 16 * 1024 * 1024
 
@@ -40,6 +54,10 @@ DATA_KEYS = (
 REMOVED_METADATA = ("versionStatus", "dataUseTerms", "dataUseTermsRestrictedUntil", "dataUseTermsUrl")
 
 EntryKey = tuple[str, str, int]  # (organism, accession, version)
+
+
+class EmptyBatch(FormatError):
+    """The entry stream produced nothing to publish."""
 
 
 class Entry:
@@ -60,6 +78,8 @@ class Entry:
 
     @staticmethod
     def validate(entry: dict) -> None:
+        if not isinstance(entry, dict):
+            raise FormatError("entry must be a JSON object")
         expected = {"organism", "metadata", *DATA_KEYS}
         if set(entry) != expected:
             raise FormatError(f"entry keys must be exactly {sorted(expected)}, got {sorted(entry)}")
@@ -105,12 +125,6 @@ class Entry:
         }
 
 
-def sort_key_from_payload(payload: bytes) -> tuple[str, int]:
-    """(accession, version) of a canonical entry payload, for merging sorted runs."""
-    m = canonical.loads(payload)["metadata"]
-    return (m["accession"], m["version"])
-
-
 @dataclass
 class EncoderState:
     """Everything the encoder needs to append the next batch."""
@@ -143,15 +157,21 @@ class EncodedBatch:
     manifest_digest: bytes
     index: dict | None
     schemas_published: list[str]
+    entry_count: int
 
 
-PreviousEntries = Callable[[str], Iterable[bytes]]
+# previous_entries(organism) yields (accession, version, payload) in materialisation order
+PreviousEntries = Callable[[str], Iterable[Record]]
 
 
 class StreamEncoder:
-    def __init__(self, chain_id: int, contract: bytes, state: EncoderState | None = None, schema_id: str = "pathoplexus"):
+    def __init__(self, chain_id: int, contract: bytes, state: EncoderState | None = None, schema_id: str = "pathoplexus", work_dir: Path | None = None, sort_buffer_bytes: int = DEFAULT_BUFFER_BYTES):
         self.header = Header(chain_id=chain_id, contract=contract, schema_id=schema_id)
         self.state = state or EncoderState()
+        self.work_dir = Path(work_dir) if work_dir else None
+        if self.work_dir is not None:
+            self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.sort_buffer_bytes = sort_buffer_bytes
 
     def encode_batch(
         self,
@@ -161,27 +181,26 @@ class StreamEncoder:
         codec: int = CODEC_ZSTD,
         force_index: bool = False,
     ) -> EncodedBatch:
-        """Encode one batch and advance the state.
+        """Encode one batch from a stream of entries and advance the state.
 
-        `previous_entries(organism)` must yield the canonical payloads of every entry of that
-        organism published in earlier batches, in materialisation order; it is needed for the
-        cumulative artifact digests. It may be omitted only when nothing has been published.
+        `previous_entries(organism)` must yield `(accession, version, payload)` for every
+        entry of that organism published in earlier batches, in materialisation order; it is
+        needed for the cumulative artifact digests and may be omitted only when nothing has
+        been published yet.
         """
-        st = self.state
-        new = list(entries)
-        for e in new:
-            Entry.validate(e)
-        new.sort(key=Entry.key)
-        if not new:
-            raise FormatError("a batch must contain at least one entry")
+        with tempfile.TemporaryDirectory(prefix="loculus-eternal-encode-", dir=self.work_dir) as tmp:
+            return self._encode(Path(tmp), entries, previous_entries, list(tooling), codec, force_index)
 
-        # Validate, check for duplicates against the stream and within the batch, and build
-        # the inner records. Schema records go first, tooling second, entries last.
+    def _encode(self, work: Path, entries, previous_entries, tooling, codec, force_index) -> EncodedBatch:
+        st = self.state
+
+        # Pass 1: validate, canonicalise, and spill every entry into a sorted run per organism.
+        sorters: dict[str, ExternalSorter] = {}
         schemas_now: dict[str, dict] = {}
-        inner_entries: list[bytes] = []
         seen: set[EntryKey] = set()
-        per_org_new: dict[str, list[bytes]] = {}
-        for e in new:
+        count = 0
+        for e in entries:
+            Entry.validate(e)
             k = Entry.key(e)
             if k in seen:
                 raise FormatError(f"duplicate entry in batch: {k}")
@@ -191,45 +210,62 @@ class StreamEncoder:
             schema = Entry.schema(e)
             if st.schemas.get(k[0]) != schema and schemas_now.get(k[0]) != schema:
                 schemas_now[k[0]] = schema
-            payload = Entry.payload(e)
-            inner_entries.append(frame(RecordType.ENTRY, payload))
-            per_org_new.setdefault(k[0], []).append(payload)
+            org = k[0]
+            if org not in sorters:
+                sorters[org] = ExternalSorter(work / "sort" / org, buffer_bytes=self.sort_buffer_bytes)
+            sorters[org].add(k[1], k[2], Entry.payload(e))
+            count += 1
+        if count == 0:
+            raise EmptyBatch("a batch must contain at least one entry")
+        runs: dict[str, Path] = {}
+        for org, sorter in sorters.items():
+            path = work / f"{org}.run"
+            sorter.finish(path)
+            runs[org] = path
 
-        body = b"".join(
-            [frame(RecordType.SCHEMA, canonical.dumps(schemas_now[o])) for o in sorted(schemas_now)]
-            + [frame(RecordType.TOOLING, encode_tooling(p, c)) for p, c in sorted(tooling, key=lambda t: t[0])]
-            + inner_entries
-        )
-        compressed = compress(codec, body)
-        body_digest = sha256(compressed)
+        # Pass 2: the body, compressed as it is produced. Schema records first, tooling second,
+        # then entries by organism, accession, version.
+        uncompressed_length = 0
+        compressed = io.BytesIO()
+        sink = _Compressor(codec, compressed)
+        for org in sorted(schemas_now):
+            uncompressed_length += sink.write(frame(RecordType.SCHEMA, canonical.dumps(schemas_now[org])))
+        for p, c in sorted(tooling, key=lambda t: t[0]):
+            uncompressed_length += sink.write(frame(RecordType.TOOLING, encode_tooling(p, c)))
+        for org in sorted(runs):
+            for _, _, payload in iter_run(runs[org]):
+                uncompressed_length += sink.write(frame(RecordType.ENTRY, payload))
+        sink.close()
+        compressed_bytes = compressed.getvalue()
+        body_digest = sha256(compressed_bytes)
 
-        # Cumulative artifact digests: merge previously published payloads with the new ones.
-        organisms = sorted(set(st.entries_total) | set(per_org_new))
+        # Pass 3: cumulative artifact digests by merging previous entries with the new run.
+        organisms = sorted(set(st.entries_total) | set(runs))
         artifacts: dict[str, dict] = {}
         for org in organisms:
             if st.entries_total.get(org, 0) > 0:
                 if previous_entries is None:
                     raise FormatError(f"previous entries of {org} are needed for the cumulative digest")
-                prev: Iterable[bytes] = previous_entries(org)
+                prev: Iterable[Record] = previous_entries(org)
             else:
                 prev = ()
-            digest = _digest_materialised(prev, per_org_new.get(org, []))
+            new: Iterable[Record] = iter_run(runs[org]) if org in runs else ()
+            digest, new_count = _digest_merged(prev, new)
             artifacts[org] = {
-                "entriesInBatch": len(per_org_new.get(org, [])),
-                "entriesTotal": st.entries_total.get(org, 0) + len(per_org_new.get(org, [])),
-                "artifactSha256": digest.hex(),
+                "entriesInBatch": new_count,
+                "entriesTotal": st.entries_total.get(org, 0) + new_count,
+                "artifactSha256": digest,
             }
 
-        # Published set after this batch, for the index.
+        # Published set after this batch, for the index; the keys are already in hand.
         published = {o: {a: [list(p) for p in vs] for a, vs in accs.items()} for o, accs in st.published.items()}
-        for e in new:
-            org, acc, ver = Entry.key(e)
+        for org, acc, ver in seen:
             published.setdefault(org, {}).setdefault(acc, []).append([ver, st.next_batch])
         for accs in published.values():
             for vs in accs.values():
                 vs.sort()
 
-        has_index = force_index or st.bytes_since_index + len(compressed) >= INDEX_THRESHOLD_BYTES
+        has_index = force_index or st.bytes_since_index + len(compressed_bytes) >= INDEX_THRESHOLD_BYTES
         index = {"batch": st.next_batch, "entries": published} if has_index else None
 
         begin = BatchBegin(
@@ -237,13 +273,13 @@ class StreamEncoder:
             first_blob_seq=st.next_blob_seq,
             previous_manifest_digest=st.previous_manifest_digest,
             codec=codec,
-            uncompressed_length=len(body),
-            compressed_length=len(compressed),
+            uncompressed_length=uncompressed_length,
+            compressed_length=len(compressed_bytes),
             body_digest=body_digest,
         )
         prefix = b"".join(
             ([frame(RecordType.HEADER, self.header.encode())] if st.next_batch == 0 and st.next_blob_seq == 0 else [])
-            + [frame(RecordType.BATCH_BEGIN, begin.encode()), frame(RecordType.BODY, compressed)]
+            + [frame(RecordType.BATCH_BEGIN, begin.encode()), frame(RecordType.BODY, compressed_bytes)]
             + ([frame(RecordType.INDEX, bytes([codec]) + compress(codec, canonical.dumps(index)))] if index else [])
         )
 
@@ -283,7 +319,7 @@ class StreamEncoder:
         st.schemas.update(schemas_now)
         for org, a in artifacts.items():
             st.entries_total[org] = a["entriesTotal"]
-        st.bytes_since_index = 0 if has_index else st.bytes_since_index + len(compressed)
+        st.bytes_since_index = 0 if has_index else st.bytes_since_index + len(compressed_bytes)
 
         return EncodedBatch(
             batch=begin.batch,
@@ -297,22 +333,39 @@ class StreamEncoder:
             manifest_digest=manifest_digest,
             index=index,
             schemas_published=sorted(schemas_now),
+            entry_count=count,
         )
 
 
-def materialise(payloads: Iterable[bytes]) -> Iterator[bytes]:
-    """Yield the lines of an organism's output file given its payloads in any order."""
-    for p in sorted(payloads, key=sort_key_from_payload):
-        yield p + b"\n"
+class _Compressor:
+    """Writes body bytes through the codec into a buffer, counting the uncompressed bytes."""
+
+    def __init__(self, codec: int, out: io.BytesIO):
+        self.out = out
+        if codec == CODEC_RAW:
+            self._c = None
+        elif codec == CODEC_ZSTD:
+            self._c = zstandard.ZstdCompressor(level=ZSTD_LEVEL).compressobj()
+        else:
+            raise FormatError(f"unknown codec {codec}")
+
+    def write(self, data: bytes) -> int:
+        self.out.write(data if self._c is None else self._c.compress(data))
+        return len(data)
+
+    def close(self) -> None:
+        if self._c is not None:
+            self.out.write(self._c.flush())
 
 
-def _digest_materialised(previous: Iterable[bytes], new: list[bytes]) -> bytes:
-    """SHA-256 of the output file formed by merging two sorted runs of payloads."""
-    import hashlib
-
+def _digest_merged(previous: Iterable[Record], new: Iterable[Record]) -> tuple[str, int]:
+    """SHA-256 of the output file formed by merging two sorted runs, and the count of new records."""
     h = hashlib.sha256()
-    merged = heapq.merge(previous, sorted(new, key=sort_key_from_payload), key=sort_key_from_payload)
-    for p in merged:
-        h.update(p)
+    new_count = 0
+    prev_tagged = ((rec, 0) for rec in previous)
+    new_tagged = ((rec, 1) for rec in new)
+    for rec, is_new in heapq.merge(prev_tagged, new_tagged, key=lambda item: (item[0][0], item[0][1])):
+        h.update(rec[2])
         h.update(b"\n")
-    return h.digest()
+        new_count += is_new
+    return h.hexdigest(), new_count
