@@ -46,6 +46,12 @@ def published():
         yield {"anvil": anvil, "stub": stub, "blobs": all_blobs, "expected": expected, "deployment_block": 1}
 
 
+def run_cli(*args: str) -> subprocess.CompletedProcess:
+    """The command line as a user would run it, from the source tree."""
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
+    return subprocess.run([sys.executable, "-m", "loculus_eternal.cli", *args], capture_output=True, text=True, env=env)
+
+
 def config(published, tmp_path, sources, **kw) -> RecoveryConfig:
     anvil = published["anvil"]
     return RecoveryConfig(
@@ -264,8 +270,7 @@ type = "blobscan"
 url = "{stub.url}"
 """
     )
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
-    proc = subprocess.run([sys.executable, "-m", "loculus_eternal.cli", "recover", "--config", str(cfg)], capture_output=True, text=True, env=env)
+    proc = run_cli("recover", "--config", str(cfg))
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "verified against head" in proc.stdout
     assert_recovered_matches(published, tmp_path / "out")
@@ -360,7 +365,6 @@ def test_R14_withdrawn_entries_are_excluded_and_cannot_be_asked_for(published, t
     assert b"PP_000002.1" not in main
     assert report.decode["withdrawn"] == {"zika": {"PP_000002": [1]}} and report.decode["files"]["zika"]["withdrawn"] == 1
     assert not any("withdrawn" in p.name for p in (tmp_path / "out").iterdir())
-    import subprocess, sys
-
-    helptext = subprocess.run([sys.executable, "-m", "loculus_eternal.cli", "recover", "--help"], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}).stdout
-    assert "withdrawn" not in helptext
+    helptext = run_cli("recover", "--help")
+    assert helptext.returncode == 0 and "--skip-decode" in helptext.stdout
+    assert "withdrawn" not in helptext.stdout

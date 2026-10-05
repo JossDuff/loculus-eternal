@@ -82,7 +82,7 @@ class EntryStore:
 
     def payload(self, organism: str, accession: str, version: int) -> bytes | None:
         """One entry's payload; a linear scan of the winning run, meant for tests and tools.
-        Withdrawn entries are not returned."""
+        None means never published or withdrawn; `has` and `is_withdrawn` tell them apart."""
         batch = self.index.get(organism, {}).get((accession, version))
         if batch is None or (accession, version) in self.withdrawn.get(organism, {}):
             return None

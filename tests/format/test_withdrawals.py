@@ -29,9 +29,17 @@ def test_F19_withdrawn_entry_leaves_the_output_but_stays_in_the_stream():
         assert dec.count("zika") == 3 and dec.batches[1].withdrawn_count == 1
         after = dec.materialise("zika")
         assert b"PP_000001.1" not in after and b"PP_000001.1" in before
-        # The decoded stream knows the entry exists and is withdrawn, and offers no way to read it.
-        assert dec.payload("zika", "PP_000001", 1) is None and not hasattr(dec, "withdrawn_records")
+        # The decoded stream knows the entry exists and is withdrawn, and none of its
+        # payload-producing surface yields it.
+        assert dec.payload("zika", "PP_000001", 1) is None
         assert all(canonical.loads(p)["metadata"]["accessionVersion"] != "PP_000001.1" for p in dec.payloads("zika"))
+        assert all(a != "PP_000001" or v != 1 for a, v, _ in dec.records("zika"))
+        assert b"PP_000001.1" not in dec.materialise("zika")
+        import io
+
+        buf = io.BytesIO()
+        dec.materialise_to("zika", buf)
+        assert b"PP_000001.1" not in buf.getvalue()
         assert hashlib.sha256(after).hexdigest() == b1.manifest["organisms"]["zika"]["artifactSha256"]
         assert dec.withdrawn() == {"zika": {"PP_000001": [1]}}
         state = dec.encoder_state()
