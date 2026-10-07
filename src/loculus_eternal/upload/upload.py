@@ -29,6 +29,7 @@ from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
 from loculus_eternal.ipfs import IpfsError, KuboClient
+from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
@@ -63,7 +64,7 @@ class Uploader:
             raise SystemExit("configuration error: the upload command needs [backend] and [upload] sections")
         self.cfg = config
         self.log = log
-        self.w3 = w3 or Web3(Web3.HTTPProvider(config.chain.rpc_url, request_kwargs={"timeout": 120}))
+        self.w3 = w3 or connect(config.chain.rpc_url, max_rps=config.chain.max_requests_per_second, timeout=120)
         self.account = account
         self.data_dir = config.upload.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)

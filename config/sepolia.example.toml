@@ -6,6 +6,7 @@
 rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"   # ${NAME} is read from the environment, so no key lives in this file
 contract = "0x0000000000000000000000000000000000000000"   # CHANGE: after deployment
 chain_id = 11155111
+max_requests_per_second = 5                    # Infura's free tier meters requests; spaced and retried
 deployment_block = 0                           # CHANGE: the block the contract was deployed in
 
 [backend]

@@ -7,7 +7,10 @@ import json
 import sys
 from pathlib import Path
 
+from requests.exceptions import RequestException
+
 from loculus_eternal import config as configuration
+from loculus_eternal.chain import ChainError
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 
 
@@ -39,6 +42,7 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
         manifest_sources=manifest_sources,
         deployment_block=cfg.chain.deployment_block,
         decode=not (cfg.recover.skip_decode or skip_decode),
+        max_requests_per_second=cfg.chain.max_requests_per_second,
     )
 
 
@@ -76,6 +80,11 @@ def cmd_upload(args: argparse.Namespace) -> int:
     except SyncError as e:
         print(f"backend problem: {e}", file=sys.stderr)
         return 1
+    except (RequestException, ChainError) as e:
+        # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
+        # in the journal; the next run resumes from it.
+        print(f"the RPC endpoint failed: {e}\nnothing is lost: run the same command again to resume", file=sys.stderr)
+        return 3
     if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":

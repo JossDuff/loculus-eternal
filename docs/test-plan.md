@@ -136,4 +136,5 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 ## Process checks (in force from the groundwork phase)
 
 - **P1 — no numbered references.** No human-facing file (README, CLAUDE.md, docs, the plan file, source, tests, contract sources) contains a milestone reference (the letter M followed by a digit) or a section sign. The check is a grep for those two patterns and must return nothing.
+- **P3 — metered endpoints.** Every JSON-RPC connection spaces its requests to a configured maximum per second and retries a failed request with growing pauses, for every method the project uses including sending a signed transaction, which is idempotent; a run that still fails on the endpoint ends with a plain message and a journal that resumes.
 - **P2 — no secrets.** No private key, token, or password appears anywhere in the tree; the publisher key is read only from `LOCULUS_ETERNAL_PUBLISHER_KEY`.
