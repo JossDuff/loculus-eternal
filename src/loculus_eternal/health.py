@@ -168,8 +168,8 @@ class HealthCheck:
         report.sources = {"matrix": matrix, "blobs": len(refs), "verifiedFromAnySource": len(refs) - len(unavailable), "unavailable": unavailable, "withinRetention": len(in_retention)}
         if refs and not self.cfg.sources:
             report.problems.append("no blob sources are configured, so availability cannot be checked")
-        elif unavailable:
-            report.problems.append(f"{len(unavailable)} blob(s) not verifiable from any configured source: {unavailable[:10]}{'…' if len(unavailable) > 10 else ''}")
+        # Whether an unavailable blob matters is decided once the stream's structure is known:
+        # the dead blobs of an abandoned upload are not needed by anyone.
         for name, c in matrix.items():
             if c["corrupt"]:
                 report.notes.append(f"{name} served {c['corrupt']} corrupt or wrong blob(s); they were rejected")
@@ -181,11 +181,19 @@ class HealthCheck:
             return
         log("walking the stream's structure")
         structure = read_structure(blobs)
+        unavailable = [i for i, b in enumerate(blobs) if b is None]
+        dead = structure.dead_blobs()
+        needed = [i for i in unavailable if i not in dead]
+        if needed:
+            report.problems.append(f"{len(needed)} blob(s) not verifiable from any configured source: {needed[:10]}{'…' if len(needed) > 10 else ''}")
+        if len(needed) < len(unavailable):
+            report.notes.append(f"{len(unavailable) - len(needed)} blob(s) of an abandoned upload are unavailable; a later batch skips them and no reader needs them")
         report.stream = {
             "header": None if structure.header is None else {"version": f"{structure.header.major}.{structure.header.minor}", "chainId": structure.header.chain_id, "contract": "0x" + structure.header.contract.hex(), "schemaId": structure.header.schema_id},
             "batches": len(structure.batches),
             "batchList": [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "blobCountAfter": b.blob_count_after, "codec": b.codec, "compressedBytes": b.compressed_length, "uncompressedBytes": b.uncompressed_length, "hasIndex": b.has_index} for b in structure.batches],
             "torn": [t.__dict__ for t in structure.torn],
+            "deadBlobs": len(dead),
             "organisms": structure.organisms(),
             "entriesTotal": sum(o.get("entriesTotal", 0) for o in structure.organisms().values()),
             "withdrawnTotal": sum(o.get("withdrawnTotal", 0) for o in structure.organisms().values()),
@@ -229,7 +237,9 @@ class HealthCheck:
                 result["manifestMatchesChain"] = False
                 report.problems.append(f"the snapshot's blob list does not match the chain: {e}")
             objects_ok = 0
-            for b in manifest["blobs"]:
+            # A dead blob of an abandoned upload is listed without a CID; nobody needs it.
+            with_cid = [b for b in manifest["blobs"] if b.get("cid")]
+            for b in with_cid:
                 try:
                     data = client.block_get(b["cid"])
                     if kzg.verify_blob(data, bytes.fromhex(b["versionedHash"][2:])):
@@ -237,8 +247,9 @@ class HealthCheck:
                 except IpfsError:
                     pass
             result["blobObjectsRetrievable"] = objects_ok
-            if objects_ok < len(manifest["blobs"]):
-                report.notes.append(f"{len(manifest['blobs']) - objects_ok} blob object(s) not retrievable from the IPFS endpoint")
+            result["blobObjectsListed"] = len(with_cid)
+            if objects_ok < len(with_cid):
+                report.notes.append(f"{len(with_cid) - objects_ok} blob object(s) not retrievable from the IPFS endpoint")
             files = []
             for name in ("manifest.json", "container-spec.md"):
                 try:

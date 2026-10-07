@@ -156,6 +156,7 @@
         ["Complete batches", n(st.batches)],
         ["Entries", `${n(st.entriesTotal)} published${st.withdrawnTotal ? `, ${n(st.withdrawnTotal)} withdrawn` : ""}`],
         ["Torn ranges", (st.torn || []).length ? `<span class="warn">${(st.torn).map(t => `blobs ${t.first_blob}–${t.last_blob}: ${esc(t.reason)}`).join("; ")}</span>` : "none"],
+        ["Dead blobs", st.deadBlobs ? `${st.deadBlobs} (an abandoned upload a later batch skips; no reader needs them)` : "none"],
       ]) + (batches ? `<table style="margin-top:12px"><thead><tr><th class="num">Batch</th><th class="num">Blobs</th><th class="num">Count</th><th class="num">Compressed</th><th class="num">Decoded</th><th>Index</th></tr></thead><tbody>${batches}</tbody></table>` : "");
     }
 
