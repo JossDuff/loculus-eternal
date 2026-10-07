@@ -61,7 +61,6 @@ def public_config(config: Config) -> dict:
         "rpc": public_url(config.chain.rpc_url),
         "deploymentBlock": config.chain.deployment_block,
         "sources": sources,
-        "backend": public_url(config.backend.url) if config.backend else None,
         "ipfsEndpoints": [public_url(e) for e in config.ipfs.endpoints] if config.ipfs else [],
         "configFile": str(config.path),
         "repository": REPOSITORY,

@@ -2,8 +2,9 @@
 
 One check reads the contract, verifies the blob list against the chain, fetches every blob
 from every configured source and verifies each against its versioned hash, walks the
-stream's structure, checks the IPFS snapshot against the on-chain pointer, and compares the
-backend's released counts with what is published. It materialises nothing. The result is a
+stream's structure, and checks the IPFS snapshot against the on-chain pointer. It
+materialises nothing, and it never consults the live database: the record is judged on
+its own. The result is a
 plain report with a verdict and the reasons for it, meant for a third party who wants to
 confirm, without trusting anyone, that the data is still there and still right.
 """
@@ -13,8 +14,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Callable
-
-import httpx
 
 from loculus_eternal import kzg
 from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, chain_head, verify_manifest
@@ -41,7 +40,6 @@ class Report:
     sources: dict = field(default_factory=dict)
     stream: dict = field(default_factory=dict)
     ipfs: dict = field(default_factory=dict)
-    backend: dict = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
     progress: dict = field(default_factory=dict)   # {"steps", "step", "detail"} while running
 
@@ -50,10 +48,9 @@ class Report:
 
 
 class HealthCheck:
-    def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, progress: Callable[[dict], None] | None = None, w3=None, http: httpx.Client | None = None):
+    def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, progress: Callable[[dict], None] | None = None, w3=None):
         self.cfg = config
         self.w3 = w3 or connect(config.chain.rpc_url, max_rps=config.chain.max_requests_per_second, timeout=60)
-        self.http = http or httpx.Client(timeout=60)
         self._log = log or (lambda s: None)
         self._progress = progress or (lambda p: None)
 
@@ -76,14 +73,11 @@ class HealthCheck:
             if state is None:
                 report.verdict = "failing"
                 return self._finish(report)
-            # Blob check: every blob from every source, the record's structure, and the
-            # backend's counts beside the published ones.
+            # Blob check: every blob from every source, then the record's structure.
             self._step(report, "blob check")
             blobs = self._sources(report, refs, state, log)
             self._step(report, "blob check", "walking the record's structure")
             self._stream(report, blobs, state, log)
-            self._step(report, "blob check", "asking the backend for its released counts")
-            self._backend(report, log)
             # IPFS check: the snapshot the contract points at.
             self._step(report, "IPFS check", "checking the snapshot against the pointer")
             self._ipfs(report, state, refs, log)
@@ -285,35 +279,3 @@ class HealthCheck:
             result["error"] = str(e)
             report.problems.append(f"cannot read the snapshot's manifest from IPFS: {e}")
         report.ipfs = result
-
-    def _backend(self, report: Report, log) -> None:
-        if self.cfg.backend is None:
-            report.backend = {"configured": False}
-            return
-        log("asking the backend for its released counts")
-        organisms = self.cfg.backend.organisms
-        rows = {}
-        try:
-            if organisms is None:
-                r = self.http.get(f"{self.cfg.backend.url}/api-docs", headers={"Accept": "application/json"})
-                r.raise_for_status()
-                organisms = sorted(r.json()["components"]["schemas"]["Organism"]["enum"])
-            published = report.stream.get("organisms", {})
-            for org in organisms:
-                released = None
-                try:
-                    with self.http.stream("GET", f"{self.cfg.backend.url}/{org}/get-released-data", params={"compression": "zstd"}) as resp:
-                        total = resp.headers.get("x-total-records")
-                        released = int(total) if total else None
-                except httpx.HTTPError as e:
-                    rows[org] = {"error": str(e)[:120]}
-                    continue
-                p = published.get(org, {})
-                rows[org] = {"released": released, "published": p.get("entriesTotal", 0), "withdrawn": p.get("withdrawnTotal", 0)}
-            for org in published:
-                if org not in rows:
-                    rows[org] = {"released": None, "published": published[org].get("entriesTotal", 0), "withdrawn": published[org].get("withdrawnTotal", 0), "note": "no longer served by the backend"}
-            report.backend = {"configured": True, "url": self.cfg.backend.url, "organisms": rows, "note": "released counts every version including restricted ones, which are never published; a gap is expected"}
-        except Exception as e:
-            report.backend = {"configured": True, "url": self.cfg.backend.url, "error": str(e)}
-            report.notes.append(f"the backend could not be reached ({e}); this does not affect the record's availability")

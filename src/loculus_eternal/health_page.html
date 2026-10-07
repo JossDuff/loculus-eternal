@@ -68,6 +68,12 @@
   .detail { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1.5em; font-variant-numeric: tabular-nums; }
   pre.quick { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px/1.6 var(--mono); overflow-x: auto; }
   .srcs li { margin: 2px 0; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .fact { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+  .fact .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; }
+  .fact .v { font-size: 16px; font-weight: 650; margin-top: 4px; overflow-wrap: anywhere; line-height: 1.3; }
+  .fact .v.mono { font-size: 13px; font-weight: 500; }
+  .fact .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .group { margin-top: 22px; }
   .group > h3 { font-size: 15px; font-weight: 650; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .group > h3 .sub { font-weight: 400; }
@@ -92,6 +98,8 @@
     <div class="step-names" id="step-names"></div>
     <div class="detail" id="detail"></div>
   </section>
+
+  <div class="facts" id="facts"></div>
 
   <section class="card problems" id="problems" hidden>
     <h2>Problems</h2>
@@ -165,10 +173,28 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       ["Deployed at block", n(cfg.deploymentBlock)],
       ["RPC endpoint", mono(cfg.rpc)],
       ["Blob sources", srcs ? `<ul class="srcs" style="padding-left:16px">${srcs}</ul>` : `<span class="empty">none configured</span>`],
-      cfg.backend ? ["Backend", mono(cfg.backend)] : null,
       cfg.ipfsEndpoints && cfg.ipfsEndpoints.length ? ["IPFS endpoints", mono(cfg.ipfsEndpoints.join(", "))] : null,
       ["Config file", mono(cfg.configFile)],
     ]);
+  }
+
+  function renderFacts(r) {
+    const cfg = r.config || {}, c = r.chain || {}, s = r.sources || {}, i = r.ipfs || {};
+    const has = c.blobCount !== undefined;
+    const fact = (k, v, sub, cls) => `<div class="fact"><div class="k">${esc(k)}</div><div class="v ${cls || ""}">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+    const blobs = s.matrix ? (s.verifiedFromAnySource === s.blobs ? `<span class="ok">${n(s.blobs)} of ${n(s.blobs)} verified</span>` : `<span class="bad">${n(s.verifiedFromAnySource)} of ${n(s.blobs)} verified</span>`) : "—";
+    const blobsSub = s.matrix ? `from ${Object.keys(s.matrix).length} source(s)` : "";
+    const ipfs = i.configured === false ? `<span class="sub">no snapshot configured</span>` : i.configured ? (i.pointerMatches && i.manifestMatchesChain !== false ? `<span class="ok">snapshot verified</span>` : `<span class="bad">snapshot does not verify</span>`) : "—";
+    const ipfsSub = i.blobObjectsRetrievable !== undefined ? `${n(i.blobObjectsRetrievable)} of ${n(i.blobObjectsListed ?? i.manifestBlobs)} blob objects retrievable` : "";
+    const checked = r.finished_at ? new Date(r.finished_at * 1000).toLocaleString() : r.running ? "running now" : "—";
+    const checkedSub = r.finished_at ? `took ${Math.round(r.finished_at - r.started_at)} s · verdict ${esc(r.verdict)}` : "";
+    $("facts").innerHTML =
+      fact("Contract", cfg.contract ? esc(cfg.contract) : "—", cfg.explorer ? `${esc(cfg.network)} · <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : esc(cfg.network || ""), "mono") +
+      fact("Publisher (owner)", has ? esc(c.publisher) : "—", has ? (c.successor && !/^0x0+$/.test(c.successor) ? "a successor contract is set" : "the only key that can publish") : "", "mono") +
+      fact("Last upload", has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds) : "none yet") : "—", has && c.lastPublishBlock ? `block ${n(c.lastPublishBlock)} · ${n(c.blobCount)} blobs on chain` : "") +
+      fact("Blobs", blobs, blobsSub) +
+      fact("IPFS", ipfs, ipfsSub) +
+      fact("Last health check", checked, checkedSub);
   }
 
   function renderProgress(r) {
@@ -185,6 +211,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 
   function render(r) {
     renderDeployment(r.config);
+    renderFacts(r);
     renderProgress(r);
     const verdict = r.running ? "running" : (r.verdict || "idle");
     $("badge").className = `badge ${verdict}`;
@@ -247,12 +274,11 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     }
 
     const orgs = st.organisms || {};
-    const back = (r.backend || {}).organisms || {};
-    const names = [...new Set([...Object.keys(orgs), ...Object.keys(back)])].sort();
+    const names = Object.keys(orgs).sort();
     if (names.length) {
-      const rows = names.map(o => { const p = orgs[o] || {}; const k = back[o] || {}; return `<tr><td class="mono">${esc(o)}</td><td class="num">${n(p.entriesTotal)}</td><td class="num">${n(p.withdrawnTotal)}</td><td class="num">${k.released === undefined ? "—" : k.released === null ? `<span class="sub">${esc(k.note || k.error || "unknown")}</span>` : n(k.released)}</td><td class="mono sub">${esc(short(p.artifactSha256))}</td></tr>`; }).join("");
-      $("organisms").innerHTML = `<table><thead><tr><th>Organism</th><th class="num">Published</th><th class="num">Withdrawn</th><th class="num">Released at backend</th><th>Digest</th></tr></thead><tbody>${rows}</tbody></table>
-        <p class="sub" style="margin:10px 0 0">${esc((r.backend || {}).note || "")}${(r.backend || {}).error ? ` Backend: ${esc(r.backend.error)}` : ""}</p>`;
+      const rows = names.map(o => { const p = orgs[o] || {}; return `<tr><td class="mono">${esc(o)}</td><td class="num">${n(p.entriesTotal)}</td><td class="num">${n(p.withdrawnTotal)}</td><td class="mono sub">${esc(p.artifactSha256)}</td></tr>`; }).join("");
+      $("organisms").innerHTML = `<table><thead><tr><th>Organism</th><th class="num">Published</th><th class="num">Withdrawn</th><th>Digest of the organism's file</th></tr></thead><tbody>${rows}</tbody></table>
+        <p class="sub" style="margin:10px 0 0">Counts and digests come from the record's own last manifest; the recovery command rebuilds each organism's file and must reproduce the digest exactly.</p>`;
     }
 
     const i = r.ipfs || {};
