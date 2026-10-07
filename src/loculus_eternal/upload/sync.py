@@ -44,7 +44,10 @@ class BackendClient:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.client = client or httpx.Client(timeout=timeout)
         self._etags_path = self.cache_dir / "etags.json"
-        self._etags: dict[str, str] = json.loads(self._etags_path.read_text()) if self._etags_path.exists() else {}
+        raw = json.loads(self._etags_path.read_text()) if self._etags_path.exists() else {}
+        # Each organism remembers its ETag and the record count the backend reported, so a
+        # cached feed can still show progress as x of y.
+        self._etags: dict[str, dict] = {k: (v if isinstance(v, dict) else {"etag": v, "total": None}) for k, v in raw.items()}
 
     def organisms(self) -> list[str]:
         """Every organism the backend serves, from the enum in its OpenAPI description."""
@@ -67,13 +70,14 @@ class BackendClient:
         """Download the organism's release feed unless the cached copy is still current."""
         cached = self.cache_dir / f"{organism}.ndjson.zst"
         headers = {"Accept": "application/x-ndjson"}
-        if organism in self._etags and cached.exists():
-            headers["If-None-Match"] = self._etags[organism]
+        remembered = self._etags.get(organism)
+        if remembered and cached.exists():
+            headers["If-None-Match"] = remembered["etag"]
         url = f"{self.base_url}/{organism}/get-released-data"
         try:
             with self.client.stream("GET", url, params={"compression": "zstd"}, headers=headers) as r:
                 if r.status_code == 304:
-                    return OrganismFeed(organism, self._etags.get(organism), None, cached, from_cache=True)
+                    return OrganismFeed(organism, remembered["etag"], remembered.get("total"), cached, from_cache=True)
                 if r.status_code != 200:
                     raise SyncError(f"{url} returned HTTP {r.status_code}")
                 tmp = cached.with_suffix(".tmp")
@@ -85,10 +89,11 @@ class BackendClient:
                 total = r.headers.get("x-total-records")
         except httpx.HTTPError as e:
             raise SyncError(f"cannot reach {url}: {e}") from e
+        count = int(total) if total else None
         if etag:
-            self._etags[organism] = etag
+            self._etags[organism] = {"etag": etag, "total": count}
             self._etags_path.write_text(json.dumps(self._etags, indent=1))
-        return OrganismFeed(organism, etag, int(total) if total else None, cached, from_cache=False)
+        return OrganismFeed(organism, etag, count, cached, from_cache=False)
 
 
 def iter_lines(feed: OrganismFeed) -> Iterator[dict]:
@@ -137,12 +142,18 @@ class SyncStats:
     vanished: list = field(default_factory=list)  # published, not withdrawn, and no longer in the feed
 
 
-def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats) -> Iterator[dict]:
+PROGRESS_EVERY = 10_000
+
+
+def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats, progress=None) -> Iterator[dict]:
     """Yield the projection of every eligible, not-yet-published line, filling `stats` as it
     goes. `is_published(accession, version)` is answered from the chain-derived set. Nothing
-    is held: the caller consumes the entries as they are produced."""
+    is held: the caller consumes the entries as they are produced. `progress(read, total)` is
+    called every PROGRESS_EVERY lines so a long feed shows signs of life."""
     for line in iter_lines(feed):
         stats.total += 1
+        if progress is not None and stats.total % PROGRESS_EVERY == 0:
+            progress(stats.total, feed.total_records)
         check_shape(organism, line)
         stats.seen.add(line["metadata"]["accessionVersion"])
         if not is_eligible(line):

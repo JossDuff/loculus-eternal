@@ -230,7 +230,7 @@ class Submitter:
             selector = data[2:10] if isinstance(data, str) and data.startswith("0x") else ""
             sig, text = ERROR_BY_SELECTOR.get(selector, (None, None))
             reason = f"{text} ({sig})" if sig else err.get("message", str(err))
-            raise Refused(f"transaction {tx.index} of the batch would revert: {reason}")
+            raise Refused(f"transaction {tx.index + 1} of the batch would revert: {reason}")
         return int(response["result"], 16)
 
     def check_fees(self) -> dict:
@@ -311,7 +311,7 @@ class Submitter:
             if receipt is None:
                 continue
             if receipt["status"] != 1:
-                raise RevertedOnChain(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
+                raise RevertedOnChain(f"transaction {tx.index + 1} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
             tx.status = "included"
             tx.included_block = receipt["blockNumber"]
             tx.included_tx = receipt["transactionHash"].hex()
@@ -320,7 +320,8 @@ class Submitter:
             tx.blob_gas_price = receipt.get("blobGasPrice")
             tx.block_timestamp = self.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
             journal.save(self.journal_path)
-            self.log(f"transaction {tx.index}: included in block {tx.included_block}")
+            done = sum(1 for t in journal.txs if t.status in ("included", "finalized"))
+            self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: included in block {tx.included_block} ({done}/{len(journal.txs)} included)")
             pending.remove(tx)
         if not pending:
             return
@@ -331,15 +332,15 @@ class Submitter:
         if head.nonce is not None and self.w3.eth.get_transaction_count(self.account.address) > head.nonce:
             self.sleep(min(self.policy.poll_interval, 2.0))
             if self._receipt_for_any(head) is None:
-                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
+                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index + 1} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
             return  # it landed after all; the next poll records it
         last = head.attempts[-1]
         waited_blocks = self.w3.eth.block_number - (last.sent_block if last.sent_block is not None else self.w3.eth.block_number)
         timed_out = waited_blocks >= self.policy.inclusion_timeout_blocks or time.time() - last.at >= self.policy.inclusion_timeout_seconds
         if timed_out:
             if len(head.attempts) > self.policy.escalation_attempts:
-                raise SubmitError(f"transaction {head.index} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
-            self.log(f"transaction {head.index}: not included yet, replacing with higher fees")
+                raise SubmitError(f"transaction {head.index + 1} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
+            self.log(f"transaction {head.index + 1}/{len(journal.txs)}: not included yet, replacing with higher fees")
             self._send(journal, head, escalation=len(head.attempts), gas=_gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
 
     def _await_finality_all(self, journal: Journal) -> bool:
@@ -351,7 +352,15 @@ class Submitter:
             return True
         last_block = max(t.included_block for t in included)
         started = time.time()
-        while self.w3.eth.get_block("finalized")["number"] < last_block:
+        last_report = 0.0
+        while True:
+            finalized = self.w3.eth.get_block("finalized")["number"]
+            if finalized >= last_block:
+                break
+            if time.time() - last_report >= 60:
+                behind = last_block - finalized
+                self.log(f"waiting for finality: block {finalized} is final, need {last_block} ({behind} blocks, about {max(1, behind * 12 // 60)} min at 12 s per block)")
+                last_report = time.time()
             if time.time() - started > self.policy.finality_timeout_seconds:
                 raise SubmitError(f"transactions were included up to block {last_block} but finality did not arrive within {self.policy.finality_timeout_seconds}s; rerun later to continue waiting")
             self.sleep(self.policy.poll_interval)
@@ -359,7 +368,7 @@ class Submitter:
         for tx in included:
             receipt = self._receipt_for_any(tx)
             if receipt is None or receipt["blockNumber"] != tx.included_block:
-                self.log(f"transaction {tx.index}: dropped by a reorganisation before finality, resending")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: dropped by a reorganisation before finality, resending")
                 tx.status = "planned"
                 tx.included_block = None
                 dropped = True
@@ -368,8 +377,8 @@ class Submitter:
             return False
         for tx in included:
             tx.status = "finalized"
-            self.log(f"transaction {tx.index}: finalized")
         journal.save(self.journal_path)
+        self.log(f"all {len(journal.txs)} transaction(s) are final")
         return True
 
     def _send(self, journal: Journal, tx: PlannedTx, escalation: int = 0, gas: int | None = None) -> None:
@@ -429,7 +438,7 @@ class Submitter:
             try:
                 reported = self.w3.eth.send_raw_transaction(signed.raw_transaction)
             except Exception as e:
-                self.log(f"transaction {tx.index}: broadcast of {tx_hash} failed ({e}); it is journaled and will be waited for or replaced")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: broadcast of {tx_hash} failed ({e}); it is journaled and will be waited for or replaced")
             else:
                 if "0x" + bytes(reported).hex() != tx_hash:
                     raise SubmitError(f"the node reports transaction hash 0x{bytes(reported).hex()} but the signed payload hashes to {tx_hash}")
@@ -437,7 +446,7 @@ class Submitter:
         attempt.sent_block = self.w3.eth.block_number
         attempt.at = time.time()
         journal.save(self.journal_path)
-        self.log(f"transaction {tx.index}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
+        self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
         if self.after_send:
             self.after_send(tx)
 

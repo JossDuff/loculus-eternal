@@ -113,13 +113,20 @@ class Uploader:
     def _sync(self, view: PublishedView, stats: list[SyncStats], client: BackendClient, organisms: list[str]):
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
-        for organism in organisms:
+        n = len(organisms)
+        for k, organism in enumerate(organisms, 1):
             feed = client.fetch(organism)
             st = SyncStats(organism)
             stats.append(st)
-            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st)
+            total_text = f"{feed.total_records:,}" if feed.total_records else "?"
+            self.log(f"[{k}/{n}] {organism}: reading {total_text} released entries" + (" (feed unchanged, from cache)" if feed.from_cache else " (downloaded)"))
+
+            def progress(read, total, o=organism, k=k):
+                self.log(f"[{k}/{n}] {o}: {read:,}/{total:,} read, {st.new:,} new so far" if total else f"[{k}/{n}] {o}: {read:,} read, {st.new:,} new so far")
+
+            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st, progress)
             gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
-            self.log(f"{organism}: {st.total} released, {st.open} open, {st.already_published} already published, {st.new} new" + (f", {len(gone)} published but no longer in the feed" if gone else "") + (" (feed unchanged, from cache)" if feed.from_cache else ""))
+            self.log(f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, {st.already_published:,} already published, {st.new:,} new" + (f", {len(gone)} published but no longer in the feed" if gone else ""))
         # An organism that is in the stream but that the backend no longer serves at all: every
         # one of its published entries has vanished, and the maintainer should hear about it.
         for organism in view.decoded.organisms():
@@ -234,7 +241,9 @@ class Uploader:
                 elif not self._resume(journal, store, report):
                     return self._done(report, started)
 
+            self.log("reading the contract and the published stream")
             view = self._view(store)
+            self.log(f"contract holds {view.state.blob_count} blob(s) in {len(view.decoded.batches)} complete batch(es)")
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
             try:
                 return self._plan_and_publish(mode, view, store, report, started)
@@ -247,7 +256,7 @@ class Uploader:
         tooling = self._tooling(view)
         report.tooling_published = bool(tooling)
         stats: list[SyncStats] = []
-        encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill")
+        encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill", progress=self.log)
 
         try:
             # The entries flow from the backend feeds straight into the encoder's sorted
