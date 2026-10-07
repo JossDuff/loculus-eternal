@@ -25,6 +25,17 @@ contract and the backend (with `organisms = "all"`, or a list); the publisher ke
 `LOCULUS_ETERNAL_PUBLISHER_KEY`; then `loculus-eternal upload --config loculus-eternal.toml`,
 with `--check` first to see what would be published and what it costs.
 
+## How to check that the data is still there
+
+```
+loculus-eternal health --config loculus-eternal.toml
+```
+
+opens a one-page health check: the contract's state, the blob list verified against the
+chain, every blob verified from every configured source, the stream's structure, the IPFS
+snapshot against the on-chain pointer, and the backend's counts per organism. It needs no
+key and trusts nothing; see [`docs/health-page.md`](docs/health-page.md).
+
 ## How to recover
 
 Recovery needs an Ethereum RPC endpoint, the contract address, and a list of places to try
