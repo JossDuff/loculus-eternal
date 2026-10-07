@@ -77,6 +77,7 @@ def world(tmp_path):
 rpc_url = "{anvil.url}"
 contract = "{anvil.contract.address}"
 chain_id = {anvil.chain_id}
+max_requests_per_second = 1000
 beacon_genesis_time = 0
 seconds_per_slot = 1
 deployment_block = 1
@@ -125,7 +126,7 @@ def register_in_archive(world, report):
 
 def recover(world, tmp_path):
     cfg = configuration.load(world["cfg_path"])
-    rc = RecoveryConfig(rpc_url=cfg.chain.rpc_url, contract=cfg.chain.contract, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=cfg.sources, deployment_block=1, log=lambda s: None)
+    rc = RecoveryConfig(rpc_url=cfg.chain.rpc_url, contract=cfg.chain.contract, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=cfg.sources, deployment_block=1, max_requests_per_second=1000, log=lambda s: None)
     return Recovery(rc).run()
 
 
@@ -173,6 +174,8 @@ def test_U3_check_and_dry_run_send_nothing(world):
     assert anvil.contract.functions.blobCount().call() == 0
     data_dir = Path(configuration.load(world["cfg_path"]).upload.data_dir)
     assert not (data_dir / "journal.json").exists() and list((data_dir / "abandoned").glob("*.json"))
+    # A dry run sent nothing, so its blob files are not kept: only the journal of what it planned.
+    assert not list((data_dir / "abandoned").rglob("*.blob"))
 
 
 def test_U4_dry_run_refuses_wrong_key_low_balance_and_high_blob_fee(world):
@@ -235,6 +238,8 @@ def test_U6_unincluded_transaction_is_replaced_with_higher_fees(world):
     assert fees == sorted(fees) and fees[1] > fees[0] and fees[2] > fees[1]
     gas_fees = [a["max_fee_per_gas"] for a in done["txs"][0]["attempts"]]
     assert gas_fees[2] > gas_fees[1] > gas_fees[0]
+    limits = [a["gas_limit"] for a in done["txs"][0]["attempts"]]
+    assert limits[0] and limits == [limits[0]] * 3
 
 
 def test_U7_blobs_enter_the_local_store_only_after_finality(world):
@@ -284,11 +289,25 @@ def test_U8_torn_batch_with_lost_journal_is_skipped_and_the_stream_stays_decodab
     assert fresh.outcome == "published" and fresh.chain["tornBlobs"] == 6
     assert fresh.batch["batch"] == 0 and fresh.batch["firstBlobSeq"] == 6
     assert anvil.contract.functions.blobCount().call() == 6 + fresh.batch["blobs"]
+    assert "6 of them from an abandoned upload" in fresh.message
     register_in_archive(world, fresh)
     report = recover(world, tmp_path)
     assert report.missing == []
     assert [t["first_blob"] for t in report.decode["torn"]] == [0] and report.decode["torn"][0]["last_blob"] == 5
     assert report.decode["allArtifactsMatch"] and report.decode["files"]["mpox"]["entries"] == 9
+
+    # The network forgets the torn blobs, all but blob 0 which holds the stream header.
+    with world["archive"]._lock:
+        for vh, _ in pairs[1:]:
+            del world["archive"].blobs[vh]
+    again = recover(world, tmp_path / "second")
+    assert sorted(m["seq"] for m in again.missing) == [1, 2, 3, 4, 5] and all(m["needed"] is False for m in again.missing)
+    assert again.missing_needed == [] and again.decode["allArtifactsMatch"] and again.decode["files"]["mpox"]["entries"] == 9
+    # A later upload from yet another machine still learns the published set.
+    world["cfg_path"].write_text(world["cfg_path"].read_text().replace(str(lost), str(tmp_path / "third")))
+    world["backend"].add("mpox", released_line("mpox", "PP_T_LATE", 1))
+    later = uploader(world).run()
+    assert later.outcome == "published" and later.new_entries == 1 and later.batch["batch"] == 1
 
 
 def test_U9_another_upload_in_between_is_detected_before_sending(world):
@@ -561,5 +580,118 @@ def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, 
     assert third.outcome == "nothing-to-publish" and third.vanished == {"mpox": ["PP_4.1"]}
     # A backend that cannot enumerate organisms is a plain error before anything is read.
     world["backend"].enumerate_organisms = False
-    with pytest.raises(SystemExit, match="list them in the config"):
-        uploader(world).run()
+    fourth = uploader(world).run()
+    assert fourth.outcome == "failed" and "list them in the config" in fourth.message
+
+
+def test_U16_an_organism_left_out_of_a_configured_list_is_not_reported_vanished(world, tmp_path):
+    first = uploader(world).run()
+    assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
+    register_in_archive(world, first)
+    cfg = world["cfg_path"]
+    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]'))
+    # mpox is still served and still published; the maintainer simply chose not to sync it.
+    second = uploader(world).run(withdraw_vanished=True)
+    assert second.outcome == "nothing-to-publish" and second.vanished == {} and second.withdrawn == {}
+    assert [s["organism"] for s in second.sync] == ["zika"]
+
+
+def test_U18_batch_end_transaction_waits_for_its_predecessors_and_gets_its_own_estimate(world, tmp_path):
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_E{i}") for i in range(9)])  # two transactions
+    up = uploader(world)
+    simulated = []
+    original = up.submitter.simulate
+
+    def spy(tx, fees):
+        simulated.append((tx.index, [t["status"] for t in json.loads((up.data_dir / "journal.json").read_text())["txs"][: tx.index]] if (up.data_dir / "journal.json").exists() else []))
+        return original(tx, fees)
+
+    up.submitter.simulate = spy
+    report = up.run()
+    assert report.outcome == "published", report.message
+    indices = [i for i, _ in simulated]
+    assert indices.count(len(report.transactions) - 1) >= 1, "the batch-end transaction was simulated on its own"
+    last_sim = [pred for i, pred in simulated if i == len(report.transactions) - 1][-1]
+    assert all(s in ("included", "finalized") for s in last_sim), "and only after every predecessor was included"
+    assert up.data_dir.joinpath("reports").exists()
+
+
+def test_U19_a_revert_that_moved_nothing_is_resent_not_abandoned(world, tmp_path):
+    """The batch-end transaction is sent with too little gas on purpose: it reverts on chain
+    without touching the contract, and the submitter sends it again with a fresh estimate."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_G{i}") for i in range(9)])
+    up = uploader(world)
+    starved = []
+
+    def starve_once(tx):
+        if tx.is_batch_end and not starved:
+            starved.append(tx.index)
+            return 30_000  # enough to pass intrinsic checks, far too little to run
+        return None
+
+    up.submitter.gas_override = starve_once
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert starved and report.transactions[-1]["attempts"] == 1
+    done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
+    assert done["txs"][-1]["reverts"] == 1
+    reverted = done["txs"][-1]["reverted_attempts"]
+    assert len(reverted) == 1 and reverted[0]["gas_limit"] == 30_000 and reverted[0]["tx_hash"] != done["txs"][-1]["included_tx"]
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+    register_in_archive(world, report)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"] and rec.decode["torn"] == []
+
+
+def test_U19_a_mid_batch_revert_does_not_take_the_transactions_behind_it_down(world, tmp_path):
+    """The second of four pipelined transactions is starved of gas. It reverts, and the third,
+    already in flight, reverts on the sequence guard behind it (the fourth is the batch end
+    and waits). The contract never moved, so both are sent again and the batch completes."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_M{i}") for i in range(9)])
+    up = uploader(world)
+    up.submitter.policy.max_blobs_per_transaction = 2  # eight or so blobs: four transactions
+    starved = []
+
+    def starve_second_once(tx):
+        if tx.index == 1 and not starved:
+            starved.append(tx.index)
+            return 30_000
+        return None
+
+    up.submitter.gas_override = starve_second_once
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert len(report.transactions) >= 4 and starved
+    done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
+    assert [t["reverts"] for t in done["txs"][:3]] == [0, 1, 1] and all(t["status"] == "finalized" for t in done["txs"])
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+    register_in_archive(world, report)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"] and rec.decode["torn"] == []
+
+
+def test_U20_an_abandoned_batch_ends_the_run_and_keeps_its_blobs(world):
+    """Another upload with the same key breaks the batch mid-way: the run reports failure,
+    keeps the journal and blob files under abandoned/, and plans nothing more."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_K{i}") for i in range(9)])
+    up = uploader(world)
+
+    def race(tx):
+        if tx.index == 0:
+            from loculus_eternal.format.chunks import pack_blobs
+            from loculus_eternal.testkit import publish_blobs
+
+            time.sleep(0.5)
+            publish_blobs(anvil, pack_blobs(b"\x09" * 500), last_blob_chunk_count=17, is_batch_end=True)
+
+    up.submitter.after_send = race
+    report = up.run()
+    assert report.outcome == "failed" and "another upload ran" in report.message
+    aside = list((up.data_dir / "abandoned").glob("batch-*"))
+    listing = {p.name: (sorted(q.name for q in p.iterdir()) if p.is_dir() else "file") for p in aside}
+    assert any(p.suffix == ".json" for p in aside) and any(p.is_dir() and list(p.glob("*.blob")) for p in aside), f"journal and blob files kept: {listing}"
+    assert not (up.data_dir / "journal.json").exists()
+    assert report.batch is not None and len(list((up.data_dir / "abandoned").glob("*.json"))) == 1, "no second batch was planned in the same run"

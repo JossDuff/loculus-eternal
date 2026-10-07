@@ -29,9 +29,10 @@ from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
 from loculus_eternal.ipfs import IpfsError, KuboClient
+from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
-from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
+from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
 from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_vanished, iter_new_entries
 
 
@@ -63,7 +64,7 @@ class Uploader:
             raise SystemExit("configuration error: the upload command needs [backend] and [upload] sections")
         self.cfg = config
         self.log = log
-        self.w3 = w3 or Web3(Web3.HTTPProvider(config.chain.rpc_url, request_kwargs={"timeout": 120}))
+        self.w3 = w3 or connect(config.chain.rpc_url, max_rps=config.chain.max_requests_per_second, timeout=120)
         self.account = account
         self.data_dir = config.upload.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -74,6 +75,7 @@ class Uploader:
             inclusion_timeout_blocks=config.upload.inclusion_timeout_blocks,
             finality_timeout_seconds=config.upload.finality_timeout_seconds,
             max_in_flight=config.upload.max_in_flight,
+            max_blobs_per_transaction=config.upload.max_blobs_per_transaction,
         )
         if poll_interval is not None:
             policy.poll_interval = poll_interval
@@ -113,16 +115,25 @@ class Uploader:
     def _sync(self, view: PublishedView, stats: list[SyncStats], client: BackendClient, organisms: list[str]):
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
-        for organism in organisms:
+        n = len(organisms)
+        for k, organism in enumerate(organisms, 1):
             feed = client.fetch(organism)
             st = SyncStats(organism)
             stats.append(st)
-            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st)
+            total_text = f"{feed.total_records:,}" if feed.total_records else "?"
+            self.log(f"[{k}/{n}] {organism}: reading {total_text} released entries" + (" (feed unchanged, from cache)" if feed.from_cache else " (downloaded)"))
+
+            def progress(read, total, o=organism, k=k):
+                self.log(f"[{k}/{n}] {o}: {read:,}/{total:,} read, {st.new:,} new so far" if total else f"[{k}/{n}] {o}: {read:,} read, {st.new:,} new so far")
+
+            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st, progress)
             gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
-            self.log(f"{organism}: {st.total} released, {st.open} open, {st.already_published} already published, {st.new} new" + (f", {len(gone)} published but no longer in the feed" if gone else "") + (" (feed unchanged, from cache)" if feed.from_cache else ""))
+            self.log(f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, {st.already_published:,} already published, {st.new:,} new" + (f", {len(gone)} published but no longer in the feed" if gone else ""))
         # An organism that is in the stream but that the backend no longer serves at all: every
         # one of its published entries has vanished, and the maintainer should hear about it.
-        for organism in view.decoded.organisms():
+        # Only when the backend chose the list: an organism left out of a configured list was
+        # left out on purpose, and reporting it vanished could lead to withdrawing it.
+        for organism in view.decoded.organisms() if self.cfg.backend.organisms is None else []:
             if organism in organisms:
                 continue
             st = SyncStats(organism)
@@ -210,13 +221,18 @@ class Uploader:
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._withdraw_vanished = withdraw_vanished
-        # Cheap and fallible things first: the backend's organism list before the chain read.
-        client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
+        self._client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
         try:
-            self._organism_list = self._organisms(client)
+            return self._run(mode, report, started)
         except SyncError as e:
-            raise SystemExit(f"cannot determine the organisms to publish: {e}") from e
-        self._client = client
+            # The backend, not the chain, is the problem: nothing was sent because of it,
+            # and the run still ends with its result line and report.
+            report.outcome = "failed"
+            report.message = f"backend problem: {e}"
+            self.log(report.message)
+            return self._done(report, started)
+
+    def _run(self, mode: str, report: UploadReport, started: float) -> UploadReport:
         with BlobStore(self.data_dir / "stream") as store:
             # An interrupted batch comes first, before the chain is even read: its blobs are in
             # the journal, not yet in the store or necessarily in any archive, so finishing it
@@ -233,8 +249,13 @@ class Uploader:
                     self._finish(journal, store, report)
                 elif not self._resume(journal, store, report):
                     return self._done(report, started)
-
+            # The backend is asked only now: an interrupted batch has transactions racing
+            # their inclusion window, and finishing it must not wait on a backend outage.
+            # It still comes before the chain read, which is the expensive step.
+            self._organism_list = self._organisms(self._client)
+            self.log("reading the contract and the published stream")
             view = self._view(store)
+            self.log(f"contract holds {view.state.blob_count} blob(s) in {len(view.decoded.batches)} complete batch(es)")
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
             try:
                 return self._plan_and_publish(mode, view, store, report, started)
@@ -247,7 +268,7 @@ class Uploader:
         tooling = self._tooling(view)
         report.tooling_published = bool(tooling)
         stats: list[SyncStats] = []
-        encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill")
+        encoder = StreamEncoder(self.w3.eth.chain_id, bytes.fromhex(self.cfg.chain.contract[2:]), state=view.encoder_state, work_dir=self.data_dir / "spill", progress=self.log)
 
         try:
             # The entries flow from the backend feeds straight into the encoder's sorted
@@ -272,7 +293,7 @@ class Uploader:
         if report.vanished and not self._withdraw_vanished:
             n = sum(len(v) for v in report.vanished.values())
             self.log(f"{n} published entries are no longer in the backend feed; they stay in the record until a run with --withdraw-vanished confirms their withdrawal")
-        report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
+        report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // self.policy.max_blobs_per_transaction), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
         report.batch["withdrawn"] = batch.withdrawn_count
         self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
@@ -342,9 +363,11 @@ class Uploader:
 
         try:
             self.submitter.run(journal)
-        except RevertedOnChain as e:
+        except (Refused, RevertedOnChain) as e:
+            # A refusal here (after the dry run) comes from a transaction simulated once its
+            # predecessors were in: the chain moved under the batch. Same remedy as a revert.
             report.outcome = "failed"
-            report.message = f"{e}; the batch has been set aside and the next run will start a fresh one after the torn blobs"
+            report.message = f"{e}; the batch has been set aside; wait for the chain to finalise, then run again to start a fresh batch after the torn blobs"
             self.log(f"publishing stopped: {report.message}")
             self._abandon(journal)
             return self._done(report, started)
@@ -355,7 +378,7 @@ class Uploader:
             return self._done(report, started)
         self._finish(journal, store, report)
         report.outcome = "published"
-        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
+        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f", {view.torn_blobs} of them from an abandoned upload that readers skip" if view.torn_blobs else "") + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
         self.log(report.message)
         return self._done(report, started)
 
@@ -365,13 +388,15 @@ class Uploader:
         try:
             self.submitter.run(journal)
         except (Refused, RevertedOnChain) as e:
-            # The contract has moved past what this batch assumed, either because another
-            # upload ran in between or because one of our transactions reverted. Set the
-            # batch aside; the run goes on with a fresh view and a fresh batch.
+            # The contract has moved past what this batch assumed. Set the batch aside and
+            # stop: transactions of this batch may still be landing, and the finalized view a
+            # fresh plan would be built on lags the chain by minutes. The next run, started
+            # once the chain is quiet, starts a fresh batch after the torn blobs.
             self.log(f"the interrupted batch cannot be finished ({e}); setting it aside")
             self._abandon(journal)
-            report.message = f"abandoned interrupted batch {journal.batch}: {e}"
-            return True
+            report.outcome = "failed"
+            report.message = f"abandoned interrupted batch {journal.batch}: {e}. Wait for the chain to finalise, then run again to start a fresh batch after the torn blobs."
+            return False
         except SubmitError as e:
             report.outcome = "failed"
             report.message = f"could not finish the interrupted batch: {e}"
@@ -407,18 +432,45 @@ class Uploader:
     def _abandon(self, journal: Journal) -> None:
         # Whatever this batch already put on IPFS was never published; take the pins back.
         if journal.ipfs_publish:
-            cleaned = unpin_orphans(journal.ipfs_publish, journal.blob_cids, self.log)
+            # Blob 0 holds the stream header, which every later batch relies on even when this
+            # first attempt is abandoned; its object stays pinned.
+            cids = journal.blob_cids[1:] if journal.first_blob_seq == 0 else journal.blob_cids
+            cleaned = unpin_orphans(journal.ipfs_publish, cids, self.log)
             if cleaned:
                 self.log(f"removed the abandoned batch's snapshot and blob objects from {len(cleaned)} IPFS endpoint(s)")
+        # The journal is kept under abandoned/ as the record of what was planned. The blob
+        # files are kept only if something was sent: then they are the exact bytes behind a
+        # transaction on chain and may be wanted to understand what happened. A dry run or a
+        # refusal sent nothing, and its blobs would only pile up on disk.
         aside = self.data_dir / "abandoned"
         aside.mkdir(exist_ok=True)
-        self.submitter.journal_path.replace(aside / f"batch-{journal.batch}-from-{journal.first_blob_seq}-{int(time.time())}.json")
-        for p in Path(journal.blobs_dir).glob("*.blob"):
-            p.unlink()
-        Path(journal.blobs_dir).rmdir()
+        # Nanoseconds, so two batches set aside within the same second never collide.
+        stamp = f"batch-{journal.batch}-from-{journal.first_blob_seq}-{time.time_ns()}"
+        self.submitter.journal_path.replace(aside / f"{stamp}.json")
+        blobs_dir = Path(journal.blobs_dir)
+        if not blobs_dir.exists():
+            return
+        if any(t.attempts or t.reverted_attempts for t in journal.txs):
+            blobs_dir.replace(aside / stamp)
+        else:
+            for p in blobs_dir.glob("*.blob"):
+                p.unlink()
+            blobs_dir.rmdir()
 
     def _done(self, report: UploadReport, started: float) -> UploadReport:
         report.duration_seconds = round(time.time() - started, 2)
+        # The last line of every run says plainly how it ended, in words a maintainer who
+        # only reads the end of a log can act on.
+        verdicts = {
+            "published": "SUCCESS",
+            "resumed": "SUCCESS",
+            "nothing-to-publish": "NOTHING TO DO",
+            "checked": "CHECK COMPLETE (nothing sent)",
+            "dry-run-ok": "DRY RUN PASSED (nothing sent)",
+            "refused": "REFUSED (nothing sent)",
+            "failed": "FAILED",
+        }
+        self.log(f"RESULT: {verdicts.get(report.outcome, report.outcome.upper())}" + (f": {report.message}" if report.message else ""))
         reports = self.data_dir / "reports"
         reports.mkdir(exist_ok=True)
         (reports / f"{time.strftime('%Y%m%dT%H%M%S')}-{report.mode}-{report.outcome}.json").write_text(json.dumps(report.to_json(), indent=1, default=str))

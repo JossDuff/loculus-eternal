@@ -90,6 +90,17 @@ What it means for Sepolia: on a real network each transaction also waits for fin
 is final) genesis would take about 11 hours of mostly waiting. See the sending decision in
 the plan file.
 
+## Two forks
+
+Mainnet is on Fusaka and will move to Glamsterdam some months after this project goes live;
+Sepolia moved to Glamsterdam on 2026-10-06, so the campaign runs on the later fork and the
+test suite's anvil runs on the earlier one. The code is written to survive both without a
+change: every gas figure comes from the node's estimate at the time of sending, never from
+a constant; blob transactions carry the Fusaka sidecar, which Glamsterdam keeps; and the
+one protocol number the command relies on, blobs per transaction, is a configuration value
+(`upload.max_blobs_per_transaction`, 6 today) to be re-checked at each fork. Genesis on
+mainnet happens under Fusaka prices, which are the ones in `docs/design.md`.
+
 ## What the campaign cannot tell us
 
 Sepolia blob fees do not predict mainnet fees, and Sepolia archives are thinner than

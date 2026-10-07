@@ -174,9 +174,10 @@ PreviousEntries = Callable[[str], Iterable[Record]]
 
 
 class StreamEncoder:
-    def __init__(self, chain_id: int, contract: bytes, state: EncoderState | None = None, schema_id: str = "pathoplexus", work_dir: Path | None = None, sort_buffer_bytes: int = DEFAULT_BUFFER_BYTES):
+    def __init__(self, chain_id: int, contract: bytes, state: EncoderState | None = None, schema_id: str = "pathoplexus", work_dir: Path | None = None, sort_buffer_bytes: int = DEFAULT_BUFFER_BYTES, progress: Callable[[str], None] | None = None):
         self.header = Header(chain_id=chain_id, contract=contract, schema_id=schema_id)
         self.state = state or EncoderState()
+        self.progress = progress or (lambda message: None)
         self.work_dir = Path(work_dir) if work_dir else None
         if self.work_dir is not None:
             self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -260,11 +261,13 @@ class StreamEncoder:
                 raise FormatError(f"entry is withdrawn and cannot be published: {(org, acc, ver)}")
         if count == 0 and not withdraw_records:
             raise EmptyBatch("a batch must contain at least one entry or one withdrawal")
+        self.progress(f"encoding: {count:,} entries read; sorting {len(sorters)} organism run(s) on disk")
         runs: dict[str, Path] = {}
         for org, sorter in sorters.items():
             path = work / f"{org}.run"
             sorter.finish(path)
             runs[org] = path
+        self.progress("encoding: compressing the batch body")
 
         # Pass 2: the body, compressed as it is produced. Schema records first, tooling second,
         # then entries by organism, accession, version.
@@ -283,6 +286,7 @@ class StreamEncoder:
         sink.close()
         compressed_bytes = compressed.getvalue()
         body_digest = sha256(compressed_bytes)
+        self.progress(f"encoding: body is {uncompressed_length:,} bytes, {len(compressed_bytes):,} compressed; computing cumulative digests")
 
         # Pass 3: cumulative artifact digests by merging previous entries with the new run,
         # leaving out anything withdrawn so far or in this batch.
@@ -365,6 +369,7 @@ class StreamEncoder:
 
         blob_count = blob_count_after - st.next_blob_seq
         stream = unpadded + b"\x00" * (blob_count * BLOB_DATA_BYTES - len(unpadded))
+        self.progress(f"encoding: packing {blob_count} blob(s)")
         blobs = pack_blobs(stream)
         manifest_digest = sha256(manifest_payload)
 

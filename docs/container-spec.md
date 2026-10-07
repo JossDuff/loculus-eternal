@@ -111,6 +111,9 @@ schemaId              uvarint(n) ‖ n bytes UTF-8   "pathoplexus"
 
 The header is at stream position 0 and appears exactly once. A decoder MUST refuse a stream
 whose magic differs or whose `major` it does not implement, and MUST accept any `minor`.
+Because the header is written only at position 0, it stays in blob 0 even when the first
+attempt at batch 0 was torn and batch 0 was later started again at another blob boundary:
+blob 0 is then needed by every reader although the rest of that attempt is not.
 `chainId` and `contract` bind the stream to one deployment so that a stream cannot be
 replayed as another instance's data. `schemaId` names the dataset; readers use it to select
 the materialisation rules below.
@@ -308,6 +311,12 @@ for a `BATCH_BEGIN` whose `batch` equals the expected number and whose
 `previousManifestDigest` matches the last good manifest, and resumes there. The blobs skipped
 are reported as torn. This is how an interrupted upload whose journal was lost is recovered
 from: the publisher simply starts the batch again at the next blob boundary.
+
+The blobs of a torn batch that a complete batch follows are **dead**: the later batch header
+proves the publisher started over, so no reader needs them, and a reader MUST NOT treat
+their absence as incompleteness. Blob 0 is never dead, since it holds the header. A torn
+range at the end of the stream is not dead: it may be an upload in progress, or a complete
+batch whose blobs the reader could not obtain, and a reader cannot tell which from the bytes.
 
 A decoder MAY start from the most recent `INDEX` instead of the stream start when it only
 needs the published set.

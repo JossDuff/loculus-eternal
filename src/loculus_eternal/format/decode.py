@@ -80,6 +80,26 @@ class DecodedStream:
     blobs_consumed: int = 0
     _cleanup: object = field(default=None, repr=False)
 
+    # --- structure --------------------------------------------------------------------------
+
+    def dead_blobs(self) -> set[int]:
+        """Blobs no reader needs: those of a torn batch that a complete batch follows.
+
+        A later batch header at a blob boundary with the expected number and previous digest
+        proves the publisher started over, so the torn blobs before it are dead bytes. Blob 0
+        is never dead: it holds the stream header even when the first attempt at batch 0 was
+        torn. A torn range at the end of the stream is not dead either: it may be an upload
+        still in progress, or a real batch whose blobs could not be obtained."""
+        if not self.batches:
+            return set()
+        last_complete = self.batches[-1].blob_count_after
+        dead: set[int] = set()
+        for t in self.torn:
+            if t.last_blob < last_complete:
+                dead.update(range(t.first_blob, t.last_blob + 1))
+        dead.discard(0)
+        return dead
+
     # --- entries ----------------------------------------------------------------------------
 
     def organisms(self) -> list[str]:

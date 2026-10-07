@@ -130,6 +130,10 @@ class KuboClient:
         blocks stay until the node's next garbage collection."""
         self._post("pin/rm", params={"arg": cid, "recursive": "true" if recursive else "false"})
 
+    def pinned_cids(self) -> set[str]:
+        """Every CID the node pins, directly or recursively, in one request."""
+        return set(self._post("pin/ls", params={"type": "all"}).json().get("Keys", {}))
+
     def is_pinned(self, cid: str) -> bool:
         try:
             self._post("pin/ls", params={"arg": cid, "type": "all"})

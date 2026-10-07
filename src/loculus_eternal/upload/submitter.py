@@ -73,6 +73,7 @@ class SentAttempt:
     at: float
     max_priority_fee_per_gas: int = 0
     sent_block: int | None = None
+    gas_limit: int | None = None
 
 
 @dataclass
@@ -92,6 +93,8 @@ class PlannedTx:
     blob_gas_price: int | None = None
     effective_gas_price: int | None = None
     block_timestamp: int | None = None
+    reverts: int = 0
+    reverted_attempts: list[SentAttempt] = field(default_factory=list)   # what was sent and reverted; the only record of that spending
 
 
 @dataclass
@@ -120,7 +123,7 @@ class Journal:
     @classmethod
     def load(cls, path: Path) -> "Journal":
         d = json.loads(path.read_text())
-        d["txs"] = [PlannedTx(**{**t, "attempts": [SentAttempt(**a) for a in t["attempts"]]}) for t in d["txs"]]
+        d["txs"] = [PlannedTx(**{**t, "attempts": [SentAttempt(**a) for a in t["attempts"]], "reverted_attempts": [SentAttempt(**a) for a in t.get("reverted_attempts", [])]}) for t in d["txs"]]
         return cls(**d)
 
 
@@ -134,6 +137,7 @@ class FeePolicy:
     finality_timeout_seconds: float = 1800.0
     poll_interval: float = 6.0
     max_in_flight: int = 8        # transactions sent but not yet included; nodes cap pending blob transactions per account
+    max_blobs_per_transaction: int = MAX_BLOBS_PER_TX   # the protocol's cap; configurable because forks change it
 
 
 class Submitter:
@@ -151,6 +155,7 @@ class Submitter:
         # transaction evicted from the mempool looks like from here.
         self.after_send: Callable[[PlannedTx], None] | None = None
         self.drop_sends = 0
+        self.gas_override: Callable[[PlannedTx], int | None] | None = None
 
     # --- planning ---------------------------------------------------------------------------
 
@@ -164,8 +169,9 @@ class Submitter:
         blobs_dir = self.pending_dir / f"batch-{batch.batch}-from-{batch.first_blob_seq}"
         blobs_dir.mkdir(parents=True, exist_ok=True)
         txs = []
-        for i, start in enumerate(range(0, len(blobs), MAX_BLOBS_PER_TX)):
-            group = blobs[start : start + MAX_BLOBS_PER_TX]
+        per_tx = self.policy.max_blobs_per_transaction
+        for i, start in enumerate(range(0, len(blobs), per_tx)):
+            group = blobs[start : start + per_tx]
             last = start + len(group) == len(blobs)
             seqs = [batch.first_blob_seq + start + j for j in range(len(group))]
             for seq, blob in zip(seqs, group):
@@ -230,7 +236,7 @@ class Submitter:
             selector = data[2:10] if isinstance(data, str) and data.startswith("0x") else ""
             sig, text = ERROR_BY_SELECTOR.get(selector, (None, None))
             reason = f"{text} ({sig})" if sig else err.get("message", str(err))
-            raise Refused(f"transaction {tx.index} of the batch would revert: {reason}")
+            raise Refused(f"transaction {tx.index + 1} of the batch would revert: {reason}")
         return int(response["result"], 16)
 
     def check_fees(self) -> dict:
@@ -278,20 +284,35 @@ class Submitter:
             # A reorganisation dropped something before finality; the loop resends it.
 
     def _send_and_include_all(self, journal: Journal) -> None:
-        """Keep up to max_in_flight transactions pending until every one is included."""
-        gas: int | None = None
+        """Keep up to max_in_flight transactions pending until every one is included.
+
+        A transaction whose predecessors are all included is simulated against the live
+        state, which gives the node's exact gas estimate. One behind pending predecessors
+        cannot be simulated (it assumes they executed), so it reuses the limit of the last
+        transaction that could be; mid-batch transactions are identical in shape. The
+        batch-end transaction differs, with a storage write and an event the others lack,
+        so it is never sent on a borrowed limit: it waits until everything before it is
+        included and gets its own estimate. The first genesis attempt on Sepolia lost its
+        batch-end transaction to exactly that: a borrowed limit under repriced gas.
+        """
+        mid_gas: int | None = None
         while True:
             pending = [t for t in journal.txs if t.status == "sent"]
             planned = [t for t in journal.txs if t.status == "planned"]
             if not pending and not planned:
                 return
-            # Fill the window in order. Only the first transaction of a run is simulated: the
-            # ones behind it would fail a simulation against the current state by design,
-            # because they assume their predecessors have executed.
             while planned and len(pending) < self.policy.max_in_flight:
-                tx = planned.pop(0)
-                if gas is None:
-                    gas = self.simulate(tx, self.fees()) if not pending and not any(t.status in ("included", "finalized") for t in journal.txs) else self._gas_from_journal(journal)
+                tx = planned[0]
+                predecessors_done = all(t.status in ("included", "finalized") for t in journal.txs[: tx.index])
+                if tx.is_batch_end and not predecessors_done:
+                    break
+                if predecessors_done:
+                    gas = _gas_limit(self.simulate(tx, self.fees()))
+                    if not tx.is_batch_end:
+                        mid_gas = gas
+                else:
+                    gas = mid_gas if mid_gas is not None else self._gas_from_journal(journal)
+                planned.pop(0)
                 self._send(journal, tx, gas=gas)
                 pending.append(tx)
             self._poll_inclusion(journal, pending)
@@ -311,7 +332,25 @@ class Submitter:
             if receipt is None:
                 continue
             if receipt["status"] != 1:
-                raise RevertedOnChain(f"transaction {tx.index} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
+                # The blob gas of this attempt is gone either way. Whether the batch can go
+                # on depends on the contract: if its blob count still sits where the earliest
+                # unincluded transaction expects it, nothing moved and the transaction is
+                # simply sent again with a fresh estimate at a new nonce. That covers an
+                # out-of-gas revert, and the transactions behind it that reverted on the
+                # sequence guard because of it. If the count moved past, the batch is broken.
+                count_now = self.contract.functions.blobCount().call()
+                expected_now = next(t.seqs[0] for t in journal.txs if t.status not in ("included", "finalized"))
+                tx.reverts += 1
+                if count_now != expected_now or tx.reverts > 3:
+                    raise RevertedOnChain(f"transaction {tx.index + 1} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: {receipt['transactionHash'].hex()} reverted in block {receipt['blockNumber']} (used {receipt['gasUsed']} of its gas limit) without moving the contract; sending it again with a fresh gas estimate")
+                tx.status = "planned"
+                tx.nonce = None
+                tx.reverted_attempts.extend(tx.attempts)
+                tx.attempts = []
+                journal.save(self.journal_path)
+                pending.remove(tx)
+                continue
             tx.status = "included"
             tx.included_block = receipt["blockNumber"]
             tx.included_tx = receipt["transactionHash"].hex()
@@ -320,7 +359,8 @@ class Submitter:
             tx.blob_gas_price = receipt.get("blobGasPrice")
             tx.block_timestamp = self.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
             journal.save(self.journal_path)
-            self.log(f"transaction {tx.index}: included in block {tx.included_block}")
+            done = sum(1 for t in journal.txs if t.status in ("included", "finalized"))
+            self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: included in block {tx.included_block} ({done}/{len(journal.txs)} included)")
             pending.remove(tx)
         if not pending:
             return
@@ -331,16 +371,17 @@ class Submitter:
         if head.nonce is not None and self.w3.eth.get_transaction_count(self.account.address) > head.nonce:
             self.sleep(min(self.policy.poll_interval, 2.0))
             if self._receipt_for_any(head) is None:
-                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
+                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index + 1} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
             return  # it landed after all; the next poll records it
         last = head.attempts[-1]
         waited_blocks = self.w3.eth.block_number - (last.sent_block if last.sent_block is not None else self.w3.eth.block_number)
         timed_out = waited_blocks >= self.policy.inclusion_timeout_blocks or time.time() - last.at >= self.policy.inclusion_timeout_seconds
         if timed_out:
             if len(head.attempts) > self.policy.escalation_attempts:
-                raise SubmitError(f"transaction {head.index} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
-            self.log(f"transaction {head.index}: not included yet, replacing with higher fees")
-            self._send(journal, head, escalation=len(head.attempts), gas=_gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
+                raise SubmitError(f"transaction {head.index + 1} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
+            self.log(f"transaction {head.index + 1}/{len(journal.txs)}: not included yet, replacing with higher fees")
+            # A replacement carries the same transaction, so it keeps the limit it was sent with.
+            self._send(journal, head, escalation=len(head.attempts), gas=last.gas_limit or _gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
 
     def _await_finality_all(self, journal: Journal) -> bool:
         """Wait until the block of the last included transaction is final, then confirm every
@@ -351,7 +392,15 @@ class Submitter:
             return True
         last_block = max(t.included_block for t in included)
         started = time.time()
-        while self.w3.eth.get_block("finalized")["number"] < last_block:
+        last_report = 0.0
+        while True:
+            finalized = self.w3.eth.get_block("finalized")["number"]
+            if finalized >= last_block:
+                break
+            if time.time() - last_report >= 60:
+                behind = last_block - finalized
+                self.log(f"waiting for finality: block {finalized} is final, need {last_block} ({behind} blocks, about {max(1, behind * 12 // 60)} min at 12 s per block)")
+                last_report = time.time()
             if time.time() - started > self.policy.finality_timeout_seconds:
                 raise SubmitError(f"transactions were included up to block {last_block} but finality did not arrive within {self.policy.finality_timeout_seconds}s; rerun later to continue waiting")
             self.sleep(self.policy.poll_interval)
@@ -359,7 +408,7 @@ class Submitter:
         for tx in included:
             receipt = self._receipt_for_any(tx)
             if receipt is None or receipt["blockNumber"] != tx.included_block:
-                self.log(f"transaction {tx.index}: dropped by a reorganisation before finality, resending")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: dropped by a reorganisation before finality, resending")
                 tx.status = "planned"
                 tx.included_block = None
                 dropped = True
@@ -368,8 +417,8 @@ class Submitter:
             return False
         for tx in included:
             tx.status = "finalized"
-            self.log(f"transaction {tx.index}: finalized")
         journal.save(self.journal_path)
+        self.log(f"all {len(journal.txs)} transaction(s) are final")
         return True
 
     def _send(self, journal: Journal, tx: PlannedTx, escalation: int = 0, gas: int | None = None) -> None:
@@ -385,12 +434,18 @@ class Submitter:
                     tx.status = "sent"
                     return
                 raise
+        if self.gas_override is not None:
+            gas = self.gas_override(tx) or gas
         factor = 1.25**escalation
         if tx.nonce is None:
             # Consecutive nonces within the batch: the one after the predecessor's, or the
             # account's next pending nonce for the first transaction.
             previous = journal.txs[tx.index - 1] if tx.index > 0 else None
-            tx.nonce = previous.nonce + 1 if previous is not None and previous.nonce is not None else self.w3.eth.get_transaction_count(self.account.address, "pending")
+            pending_count = self.w3.eth.get_transaction_count(self.account.address, "pending")
+            candidate = previous.nonce + 1 if previous is not None and previous.nonce is not None else pending_count
+            # After a revert the predecessor's successor nonce is already spent; the account's
+            # pending count is then the truth.
+            tx.nonce = max(candidate, pending_count)
         max_fee = int(fees["maxFeePerGas"] * factor)
         priority = int(fees["maxPriorityFeePerGas"] * factor)
         blob_fee = int(fees["maxFeePerBlobGas"] * factor)
@@ -419,7 +474,7 @@ class Submitter:
         # Record the attempt before broadcasting. If the broadcast's response is lost, the
         # node may still have the transaction; a resume then waits for this hash at this
         # nonce instead of sending a second copy at a fresh nonce.
-        attempt = SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"])
+        attempt = SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"], gas_limit=gas)
         tx.attempts.append(attempt)
         tx.status = "sent"
         journal.save(self.journal_path)
@@ -429,7 +484,7 @@ class Submitter:
             try:
                 reported = self.w3.eth.send_raw_transaction(signed.raw_transaction)
             except Exception as e:
-                self.log(f"transaction {tx.index}: broadcast of {tx_hash} failed ({e}); it is journaled and will be waited for or replaced")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: broadcast of {tx_hash} failed ({e}); it is journaled and will be waited for or replaced")
             else:
                 if "0x" + bytes(reported).hex() != tx_hash:
                     raise SubmitError(f"the node reports transaction hash 0x{bytes(reported).hex()} but the signed payload hashes to {tx_hash}")
@@ -437,7 +492,7 @@ class Submitter:
         attempt.sent_block = self.w3.eth.block_number
         attempt.at = time.time()
         journal.save(self.journal_path)
-        self.log(f"transaction {tx.index}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
+        self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: sent {tx_hash} with {len(tx.seqs)} blob(s) (attempt {len(tx.attempts)})")
         if self.after_send:
             self.after_send(tx)
 

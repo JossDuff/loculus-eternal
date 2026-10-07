@@ -26,6 +26,23 @@ Glamsterdam yet, so Sepolia gas figures in this report do not predict mainnet.
 
 ## Genesis
 
+**Second surprise: the batch-end transaction ran out of gas (2026-10-07).** The first genesis
+attempt on the real network sent 59 transactions back to back. 58 were included, publishing
+blobs 0 to 347; the 59th, which carries the manifest and the pointer, reverted with exactly
+its gas limit used (150,863). The limit had been borrowed from the first transaction's
+estimate plus a fixed margin, and under Glamsterdam the pointer's fresh storage write alone
+costs about 130,000 gas, so the batch-end transaction needed around 180,000. The 348 blobs
+are a torn batch that every reader skips; on Sepolia that cost nothing, on mainnet it would
+have been the whole genesis. The submitter now waits for the batch-end transaction's
+predecessors to be included and asks the node for its own estimate, resends a transaction
+that reverted without moving the contract instead of abandoning the batch, and stops a run
+outright when a batch is abandoned rather than planning another on a lagging finalized
+view. A third thing surfaced at the same time: Infura's free tier answered the first burst
+of fee lookups with HTTP 429, and the run died with a traceback before sending anything; the
+connection now spaces its requests and retries.
+
+**Genesis, second attempt**
+
 | | |
 |---|---|
 | Date | |

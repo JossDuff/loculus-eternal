@@ -86,6 +86,7 @@ def world(tmp_path, kubo_pair):
 rpc_url = "{anvil.url}"
 contract = "{anvil.contract.address}"
 chain_id = {anvil.chain_id}
+max_requests_per_second = 1000
 beacon_genesis_time = 0
 seconds_per_slot = 1
 deployment_block = 1
@@ -156,7 +157,7 @@ def test_I4_recovery_from_ipfs_alone_with_logs_unavailable(world, tmp_path):
 
     source = IpfsSource([a.api_url], cid)
     flaky = FlakyProvider(Web3.HTTPProvider(anvil.url), fail_methods={"eth_getLogs"}, fail_count=10**6)
-    cfg = RecoveryConfig(rpc_url=anvil.url, contract=anvil.contract.address, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=[source], manifest_sources=[ManifestSource(ipfs=source)], deployment_block=1, log=lambda s: None)
+    cfg = RecoveryConfig(rpc_url=anvil.url, contract=anvil.contract.address, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=[source], manifest_sources=[ManifestSource(ipfs=source)], deployment_block=1, max_requests_per_second=1000, log=lambda s: None)
     report = Recovery(cfg, w3=Web3(flaky)).run()
     assert report.manifest_source == f"IPFS snapshot {cid}" and report.missing == []
     assert report.decode["allArtifactsMatch"]
@@ -242,7 +243,9 @@ def test_I8_refused_batch_takes_its_snapshot_and_blob_objects_back(world):
     for node in (a, b):
         assert not node.is_pinned(orphan)
     manifest = parse_manifest(a.cat(f"{orphan}/manifest.json"))  # blocks linger until GC, but unpinned
-    assert all(not a.is_pinned(entry["cid"]) for entry in manifest["blobs"])
+    assert all(not a.is_pinned(entry["cid"]) for entry in manifest["blobs"][1:])
+    # Blob 0 holds the stream header, which the next genesis attempt relies on: it stays pinned.
+    assert a.is_pinned(manifest["blobs"][0]["cid"]) and b.is_pinned(manifest["blobs"][0]["cid"])
     assert not (world["tmp"] / "upload-data" / "snapshot-cid.txt").exists()
     # And a fee refusal happens before any IPFS work at all.
     world["cfg_path"].write_text(world["cfg_path"].read_text().replace("[ipfs]", "[upload.extra]\n[ipfs]").replace("inclusion_timeout_blocks = 3", "inclusion_timeout_blocks = 3\nmax_blob_fee_gwei = 0"))
@@ -272,6 +275,21 @@ def test_I9_an_endpoint_that_missed_a_batch_still_ends_with_one_snapshot(world):
     assert third.ipfs_finalised["previousUnpinned"] == {a.api_url: s2, b.api_url: s1}
     for node in (a, b):
         assert node.is_pinned(s3) and not node.is_pinned(s1) and not node.is_pinned(s2)
+
+
+def test_I12_a_needed_blob_object_an_endpoint_lost_is_added_again(world):
+    a, b = world["kubo"]
+    first = uploader(world).run()
+    assert first.outcome == "published", first.message
+    manifest = parse_manifest(a.cat(f"{first.ipfs['snapshotCid']}/manifest.json"))
+    lost = manifest["blobs"][0]["cid"]
+    a.pin_rm(lost)
+    assert not a.is_pinned(lost) and b.is_pinned(lost)
+    world["backend"].add("zika", released_line("zika", "PP_9", 1))
+    second = uploader(world).run()
+    assert second.outcome == "published", second.message
+    assert a.is_pinned(lost) and b.is_pinned(lost)
+    assert all("cid" in entry for entry in parse_manifest(a.cat(f"{second.ipfs['snapshotCid']}/manifest.json"))["blobs"])
 
 
 def test_I10_required_without_endpoints_is_a_configuration_error(world):

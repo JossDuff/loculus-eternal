@@ -17,6 +17,7 @@ from typing import Callable
 from web3 import Web3
 
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
+from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND, connect
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
 from loculus_eternal.format.entrystore import safe_dirname
 from loculus_eternal.sources.base import BlobSource, SourceChain
@@ -51,6 +52,7 @@ class RecoveryConfig:
     manifest_sources: list[ManifestSource] = field(default_factory=lambda: [ManifestSource(logs=True)])
     deployment_block: int = 0
     decode: bool = True
+    max_requests_per_second: float = DEFAULT_MAX_REQUESTS_PER_SECOND
     log: Callable[[str], None] = print
 
 
@@ -70,11 +72,18 @@ class RecoveryReport:
     def to_json(self) -> dict:
         return self.__dict__
 
+    @property
+    def missing_needed(self) -> list[dict]:
+        """Missing blobs a reader needs. A missing blob of a torn batch that a complete batch
+        follows is marked unneeded once the decode step has seen the stream; until then every
+        missing blob counts."""
+        return [m for m in self.missing if m.get("needed", True)]
+
 
 class Recovery:
     def __init__(self, config: RecoveryConfig, w3: Web3 | None = None):
         self.cfg = config
-        self.w3 = w3 or Web3(Web3.HTTPProvider(config.rpc_url, request_kwargs={"timeout": 60}))
+        self.w3 = w3 or connect(config.rpc_url, max_rps=config.max_requests_per_second, timeout=60)
         self.reader = ChainReader(self.w3, config.contract)
         self.chain = SourceChain(config.sources)
 
@@ -189,10 +198,18 @@ class Recovery:
                     self.cfg.log(decode_report["skipped"])
                 else:
                     try:
-                        _, decode_report = self.decode(store, len(refs))
+                        decoded, decode_report = self.decode(store, len(refs))
                     except FormatError as e:
                         decode_report = {"skipped": f"decoding failed: {e}", "allArtifactsMatch": False}
                         self.cfg.log(decode_report["skipped"])
+                    else:
+                        dead = decoded.dead_blobs()
+                        for m in missing:
+                            m["needed"] = m["seq"] not in dead
+                        unneeded = sum(1 for m in missing if not m["needed"])
+                        if unneeded:
+                            self.cfg.log(f"{unneeded} missing blob(s) belong to an abandoned upload that a later batch skips; no reader needs them")
+                        (self.cfg.data_dir / "missing.json").write_text(json.dumps(missing, indent=1))
             report = RecoveryReport(
                 chain={"contract": self.cfg.contract, "blockNumber": state.block_number, "blobCount": state.blob_count, "head": "0x" + state.head.hex(), "appPointer": "0x" + state.app_pointer.hex(), "publisher": state.publisher},
                 manifest_source=manifest_source,

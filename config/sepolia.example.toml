@@ -6,6 +6,7 @@
 rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"   # ${NAME} is read from the environment, so no key lives in this file
 contract = "0x0000000000000000000000000000000000000000"   # CHANGE: after deployment
 chain_id = 11155111
+max_requests_per_second = 5                    # Infura's free tier meters requests; spaced and retried
 deployment_block = 0                           # CHANGE: the block the contract was deployed in
 
 [backend]
@@ -21,6 +22,7 @@ max_priority_fee_gwei = 1
 inclusion_timeout_blocks = 6
 escalation_attempts = 8
 max_in_flight = 8                              # transactions sent before the first is included
+max_blobs_per_transaction = 6                  # the protocol's cap since Fusaka; re-check at each fork
 finality_timeout_seconds = 1800
 
 [ipfs]

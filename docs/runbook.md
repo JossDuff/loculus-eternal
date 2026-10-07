@@ -34,7 +34,8 @@ One run does, in order:
 
    ```toml
    [chain]
-   rpc_url = "https://your-ethereum-rpc"         # CHANGE: an Ethereum JSON-RPC endpoint
+   rpc_url = "${RPC_URL}"                        # CHANGE: the JSON-RPC URL, read from the environment so its key stays out of this file
+   max_requests_per_second = 5                   # hosted endpoints are metered; the command spaces and retries its requests
    contract = "0x…"                              # CHANGE: the LoculusEternal address
    chain_id = 1                                  # 1 mainnet, 11155111 Sepolia
    deployment_block = 0                          # CHANGE: block the contract was deployed in
@@ -84,9 +85,13 @@ loculus-eternal upload --config loculus-eternal.toml --dry-run   # everything ex
 loculus-eternal upload --config loculus-eternal.toml             # publish
 ```
 
-Exit status 0 means published or nothing to do. Status 1 means the command refused before
-spending anything; the message says why. Status 3 means sending started and stopped; the
-journal is kept and the next run resumes it.
+The last line of every run begins with `RESULT:` and says SUCCESS, NOTHING TO DO, CHECK
+COMPLETE, DRY RUN PASSED, REFUSED or FAILED, followed by the reason. Exit status 0 means
+published or nothing to do. Status 1 means the command refused before spending anything;
+the message says why. Status 3 means the run failed: the backend or the RPC endpoint
+could not be used, or sending started and stopped; the journal is kept and
+the next run resumes it, or, if the batch had to be set aside, the next run starts a fresh
+one after the torn blobs once the chain has finalised.
 
 A report for every run is written to `upload-data/reports/`.
 
@@ -109,6 +114,11 @@ will see what they published and publish only the rest.
 publish until someone has reviewed the pinned schema in `docs/container-spec.md` and updated
 the code. This check exists so that a format change is caught here and not in the permanent
 record.
+
+**"the RPC endpoint failed"** (or a line mentioning HTTP 429): the hosted endpoint is
+rate-limiting or down. Requests are already spaced to `max_requests_per_second` and retried
+with growing pauses for about two minutes; if that was not enough, lower the number or wait,
+then run again. Nothing is lost: the journal resumes exactly where the run stopped.
 
 **"blob N of the published stream could not be obtained from any source"**: the command needs
 the whole published stream to know what is already published, and none of the configured
@@ -153,7 +163,11 @@ record it expects, and the contract rejects anything out of order.
 
 If the local `upload-data` directory is lost as well, the next run notices blobs on the chain
 that belong to no complete batch, reports them as a torn batch, and starts a fresh batch
-after them. The torn blobs cost their fees but harm nothing: every reader skips them.
+after them. The torn blobs cost their fees but harm nothing: every reader skips them, no
+snapshot pins them, and once the network has forgotten their bytes a recovery still ends
+with SUCCESS and a note that they were unavailable. The one exception is blob 0, which
+holds the stream header; it stays pinned even when the first attempt at the genesis batch
+was the one abandoned. Your Kubo node keeps unpinned blocks until `ipfs repo gc` runs.
 
 ## Sources for reading the stream back
 

@@ -7,7 +7,10 @@ import json
 import sys
 from pathlib import Path
 
+from requests.exceptions import RequestException
+
 from loculus_eternal import config as configuration
+from loculus_eternal.chain import ChainError
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 
 
@@ -39,6 +42,7 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
         manifest_sources=manifest_sources,
         deployment_block=cfg.chain.deployment_block,
         decode=not (cfg.recover.skip_decode or skip_decode),
+        max_requests_per_second=cfg.chain.max_requests_per_second,
     )
 
 
@@ -49,14 +53,18 @@ def cmd_recover(args: argparse.Namespace) -> int:
     rc.data_dir.mkdir(parents=True, exist_ok=True)
     (rc.data_dir / "run-report.json").write_text(json.dumps(report.to_json(), indent=1))
     if report.manifest_source is None:
-        print("FAILED: no verified blob list", file=sys.stderr)
+        print("RESULT: FAILED: no source produced a blob list that matches the chain", file=sys.stderr)
         return 2
-    if report.missing:
-        print(f"INCOMPLETE: {len(report.missing)} blobs missing; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
+    needed = report.missing_needed
+    if needed:
+        print(f"RESULT: INCOMPLETE: {len(needed)} blob(s) missing from every source; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
         return 1
     if report.decode and not report.decode.get("allArtifactsMatch"):
-        print("DECODED WITH ERRORS: see recovery-report.json", file=sys.stderr)
+        print("RESULT: DECODED WITH ERRORS: a digest did not match; see recovery-report.json", file=sys.stderr)
         return 1
+    unneeded = len(report.missing) - len(needed)
+    note = f" ({unneeded} blob(s) of an abandoned upload unavailable; no reader needs them)" if unneeded else ""
+    print(f"RESULT: SUCCESS: {report.blobs_present} blobs verified, every digest matches{note}; files are in {rc.out_dir}")
     return 0
 
 
@@ -65,17 +73,18 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
-    if mode == "check" and not args.with_key:
-        uploader = Uploader(cfg)
-    else:
-        uploader = Uploader.with_key(cfg, configuration.publisher_key())
-    from loculus_eternal.upload.sync import SyncError
-
     try:
+        # Construction already talks to the endpoint (for the chain id), so it is inside the try.
+        if mode == "check" and not args.with_key:
+            uploader = Uploader(cfg)
+        else:
+            uploader = Uploader.with_key(cfg, configuration.publisher_key())
         report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
-    except SyncError as e:
-        print(f"backend problem: {e}", file=sys.stderr)
-        return 1
+    except (RequestException, ChainError) as e:
+        # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
+        # in the journal; the next run resumes from it.
+        print(f"the RPC endpoint failed: {e}\nnothing is lost: run the same command again to resume", file=sys.stderr)
+        return 3
     if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":
@@ -86,6 +95,10 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Progress lines must reach a pipe or a log file as they happen, not when a buffer fills.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(prog="loculus-eternal", description="Permanent, verifiable backup of Pathoplexus released data in Ethereum blobs.")
     sub = parser.add_subparsers(dest="command", required=True)
 

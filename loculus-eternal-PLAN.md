@@ -587,6 +587,10 @@ machine for IPFS. The publisher is a fresh development key, `0xE30036308E139D4aC
 funded with 6 Sepolia ETH. The maintainer runs every command; the agent supplies each with
 an explanation and writes `docs/testnet-report.md` from the outputs.
 
+**Forks — NOTED 2026-10-07.** Mainnet is on Fusaka at launch and moves to Glamsterdam a few
+months later; Sepolia is already on Glamsterdam. The code must work on both: gas from node
+estimates only, the Fusaka sidecar shape, blobs per transaction as configuration.
+
 **Hosting — DEFERRED 2026-09-30 to before mainnet genesis.** The upload command is a plain
 CLI with file and environment configuration so it can run anywhere. Likely answer: a
 maintainer's machine or Pathoplexus's existing infrastructure with the key in their secret
