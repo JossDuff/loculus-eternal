@@ -117,3 +117,16 @@ def test_U16_organisms_are_discovered_from_the_backend(backend, tmp_path):
     backend.enumerate_organisms = False
     with pytest.raises(SyncError, match="list them in the config"):
         BackendClient(backend.url, tmp_path / "feeds2").organisms()
+
+
+def test_U22_progress_counts_the_line_just_read(backend, tmp_path, monkeypatch):
+    from loculus_eternal.upload import sync
+
+    monkeypatch.setattr(sync, "PROGRESS_EVERY", 2)
+    backend.set_lines("zika", [released_line("zika", f"PP_{i}", 1) for i in range(1, 5)])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    stats = sync.SyncStats("zika")
+    seen = []
+    entries = list(sync.iter_new_entries("zika", feed, lambda acc, ver: False, stats, lambda read, total: seen.append((read, total, stats.new))))
+    # Every line is open and unpublished, so the new count keeps pace with the lines read.
+    assert len(entries) == 4 and seen == [(2, 4, 2), (4, 4, 4)]
