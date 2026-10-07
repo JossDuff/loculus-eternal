@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loculus Eternal health</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1a1d21; --muted: #5f6b7a; --line: #e3e7ec;
+    --ok: #1d7a46; --ok-bg: #e4f4ea; --warn: #9a6400; --warn-bg: #fff3d6; --bad: #b3261e; --bad-bg: #fde7e5;
+    --accent: #2457d6; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101316; --card: #171b20; --text: #e7eaee; --muted: #9aa5b1; --line: #2a3139;
+      --ok: #5cc98a; --ok-bg: #12301f; --warn: #e8b84a; --warn-bg: #3a2d0c; --bad: #ff7b72; --bad-bg: #3d1816; --accent: #7aa2ff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101316; --card: #171b20; --text: #e7eaee; --muted: #9aa5b1; --line: #2a3139;
+    --ok: #5cc98a; --ok-bg: #12301f; --warn: #e8b84a; --warn-bg: #3a2d0c; --bad: #ff7b72; --bad-bg: #3d1816; --accent: #7aa2ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-weight: 650; font-size: 14px; }
+  .badge.healthy { background: var(--ok-bg); color: var(--ok); }
+  .badge.degraded { background: var(--warn-bg); color: var(--warn); }
+  .badge.failing { background: var(--bad-bg); color: var(--bad); }
+  .badge.running, .badge.idle { background: var(--line); color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .running .dot { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .25 } 50% { opacity: 1 } }
+  button { margin-left: auto; background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+  .card.wide { grid-column: 1 / -1; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  code, .mono { font-family: var(--mono); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  ul { margin: 0; padding-left: 18px; } li { margin: 4px 0; }
+  .problems { border-color: var(--bad); } .problems h2 { color: var(--bad); }
+  .notes h2 { color: var(--warn); }
+  pre.log { max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0; font: 12px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; }
+  .empty { color: var(--muted); font-style: italic; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Loculus Eternal health</h1>
+      <div class="sub" id="subtitle">Loading…</div>
+    </div>
+    <span class="badge idle" id="badge"><span class="dot"></span><span id="verdict">idle</span></span>
+    <button id="run" type="button">Run check</button>
+  </header>
+
+  <section class="card problems" id="problems" hidden>
+    <h2>Problems</h2>
+    <ul id="problem-list"></ul>
+  </section>
+
+  <div class="grid">
+    <section class="card"><h2>Chain</h2><div id="chain" class="empty">No check yet.</div></section>
+    <section class="card"><h2>Blob list</h2><div id="bloblist" class="empty">No check yet.</div></section>
+    <section class="card"><h2>IPFS snapshot</h2><div id="ipfs" class="empty">No check yet.</div></section>
+    <section class="card wide"><h2>Sources</h2><div id="sources" class="empty">No check yet.</div></section>
+    <section class="card wide"><h2>Stream</h2><div id="stream" class="empty">No check yet.</div></section>
+    <section class="card wide"><h2>Organisms</h2><div id="organisms" class="empty">No check yet.</div></section>
+    <section class="card wide notes" id="notes" hidden><h2>Notes</h2><ul id="note-list"></ul></section>
+    <section class="card wide"><h2>Check log</h2><pre class="log" id="log"></pre></section>
+  </div>
+
+  <footer>
+    This page verifies the published record against the chain and the configured sources without trusting any of them.
+    It materialises nothing; to rebuild the dataset, run <code>loculus-eternal recover</code>.
+  </footer>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const n = v => v === null || v === undefined ? "—" : Number(v).toLocaleString();
+  const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
+  const short = h => h && h.length > 20 ? `${h.slice(0, 10)}…${h.slice(-6)}` : h;
+  const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const mono = v => `<span class="mono">${esc(v)}</span>`;
+  let timer = null;
+
+  function render(r) {
+    const verdict = r.running ? "running" : (r.verdict || "idle");
+    $("badge").className = `badge ${verdict}`;
+    $("verdict").textContent = verdict;
+    $("run").disabled = !!r.running;
+    const when = r.finished_at ? new Date(r.finished_at * 1000).toLocaleString() : null;
+    $("subtitle").textContent = `Contract ${r.chain?.contract || r.contract || ""}` + (when ? ` · last checked ${when}` : r.running ? " · checking…" : "");
+
+    const problems = r.problems || [];
+    $("problems").hidden = problems.length === 0;
+    $("problem-list").innerHTML = problems.map(p => `<li>${esc(p)}</li>`).join("");
+    const notes = r.notes || [];
+    $("notes").hidden = notes.length === 0;
+    $("note-list").innerHTML = notes.map(p => `<li>${esc(p)}</li>`).join("");
+    $("log").textContent = (r.log || []).join("\n");
+    $("log").scrollTop = $("log").scrollHeight;
+
+    const c = r.chain || {};
+    if (c.blobCount !== undefined) {
+      $("chain").innerHTML = dl([
+        ["Chain id", esc(c.chainId)],
+        ["Finalized block", `${n(c.finalizedBlock)} <span class="sub">(${ago(c.finalizedAgeSeconds)})</span>`],
+        ["Blobs published", n(c.blobCount)],
+        ["Last publish", c.lastPublishBlock ? `block ${n(c.lastPublishBlock)} <span class="sub">(${ago(c.lastPublishAgeSeconds)})</span>` : "none yet"],
+        ["Head", mono(short(c.head))],
+        ["Pointer", mono(short(c.appPointer))],
+        ["Publisher", mono(c.publisher)],
+        c.successor && !/^0x0+$/.test(c.successor) ? ["Successor", mono(c.successor)] : null,
+      ]);
+    } else if (c.error) {
+      $("chain").innerHTML = `<span class="bad">${esc(c.error)}</span>`;
+    }
+
+    const b = r.blob_list || {};
+    if (b.source) {
+      $("bloblist").innerHTML = dl([
+        ["Obtained from", esc(b.source)],
+        ["Verified against head", b.verified ? `<span class="ok">yes, ${n(b.count)} blobs</span>` : `<span class="bad">no: ${esc(b.error)}</span>`],
+      ]);
+    }
+
+    const s = r.sources || {};
+    if (s.matrix) {
+      const rows = Object.entries(s.matrix).map(([name, m]) => `<tr><td class="mono">${esc(name)}</td><td class="num ok">${n(m.verified)}</td><td class="num ${m.missing ? "warn" : ""}">${n(m.missing)}${m.missingOutsideRetention ? ` <span class="sub">(${n(m.missingOutsideRetention)} older than retention)</span>` : ""}</td><td class="num ${m.corrupt ? "bad" : ""}">${n(m.corrupt)}</td><td class="num ${m.error ? "bad" : ""}">${n(m.error)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td></tr>`).join("");
+      const all = s.verifiedFromAnySource === s.blobs;
+      $("sources").innerHTML = `<p style="margin:0 0 10px">${all ? `<span class="ok">Every one of the ${n(s.blobs)} blobs is verifiable from at least one source.</span>` : `<span class="bad">${n(s.blobs - s.verifiedFromAnySource)} of ${n(s.blobs)} blobs could not be verified from any source.</span>`} <span class="sub">${n(s.withinRetention)} blobs are still inside consensus retention.</span></p>
+        <table><thead><tr><th>Source</th><th class="num">Verified</th><th class="num">Missing</th><th class="num">Corrupt</th><th class="num">Errors</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">no sources configured</td></tr>`}</tbody></table>`;
+    }
+
+    const st = r.stream || {};
+    if (st.header !== undefined) {
+      const batches = (st.batchList || []).map(x => `<tr><td class="num">${x.batch}</td><td class="num">${n(x.firstBlobSeq)}–${n(x.blobCountAfter - 1)}</td><td class="num">${n(x.blobCountAfter - x.firstBlobSeq)}</td><td class="num">${n(x.compressedBytes)}</td><td class="num">${n(x.uncompressedBytes)}</td><td>${x.hasIndex ? "yes" : ""}</td></tr>`).join("");
+      $("stream").innerHTML = dl([
+        ["Container", st.header ? `version ${esc(st.header.version)}, schema ${esc(st.header.schemaId)}, bound to chain ${esc(st.header.chainId)} and ${mono(short(st.header.contract))}` : `<span class="bad">header unreadable</span>`],
+        ["Complete batches", n(st.batches)],
+        ["Entries", `${n(st.entriesTotal)} published${st.withdrawnTotal ? `, ${n(st.withdrawnTotal)} withdrawn` : ""}`],
+        ["Torn ranges", (st.torn || []).length ? `<span class="warn">${(st.torn).map(t => `blobs ${t.first_blob}–${t.last_blob}: ${esc(t.reason)}`).join("; ")}</span>` : "none"],
+      ]) + (batches ? `<table style="margin-top:12px"><thead><tr><th class="num">Batch</th><th class="num">Blobs</th><th class="num">Count</th><th class="num">Compressed</th><th class="num">Decoded</th><th>Index</th></tr></thead><tbody>${batches}</tbody></table>` : "");
+    }
+
+    const orgs = st.organisms || {};
+    const back = (r.backend || {}).organisms || {};
+    const names = [...new Set([...Object.keys(orgs), ...Object.keys(back)])].sort();
+    if (names.length) {
+      const rows = names.map(o => { const p = orgs[o] || {}; const k = back[o] || {}; return `<tr><td class="mono">${esc(o)}</td><td class="num">${n(p.entriesTotal)}</td><td class="num">${n(p.withdrawnTotal)}</td><td class="num">${k.released === undefined ? "—" : k.released === null ? `<span class="sub">${esc(k.note || k.error || "unknown")}</span>` : n(k.released)}</td><td class="mono sub">${esc(short(p.artifactSha256))}</td></tr>`; }).join("");
+      $("organisms").innerHTML = `<table><thead><tr><th>Organism</th><th class="num">Published</th><th class="num">Withdrawn</th><th class="num">Released at backend</th><th>Digest</th></tr></thead><tbody>${rows}</tbody></table>
+        <p class="sub" style="margin:10px 0 0">${esc((r.backend || {}).note || "")}${(r.backend || {}).error ? ` Backend: ${esc(r.backend.error)}` : ""}</p>`;
+    }
+
+    const i = r.ipfs || {};
+    if (i.configured === false) $("ipfs").innerHTML = `<span class="empty">No snapshot CID configured.</span>`;
+    else if (i.configured) $("ipfs").innerHTML = dl([
+      ["Snapshot", mono(short(i.snapshotCid))],
+      ["Matches chain pointer", i.pointerMatches ? `<span class="ok">yes</span>` : `<span class="bad">no</span>`],
+      i.manifestBlobs !== undefined ? ["Manifest", i.manifestMatchesChain ? `<span class="ok">${n(i.manifestBlobs)} blobs, matches the chain</span>` : `<span class="bad">does not match the chain</span>`] : null,
+      i.blobObjectsRetrievable !== undefined ? ["Blob objects retrievable", `${n(i.blobObjectsRetrievable)} of ${n(i.manifestBlobs)}`] : null,
+      i.files ? ["Files present", esc(i.files.join(", "))] : null,
+      i.error ? ["Error", `<span class="bad">${esc(i.error)}</span>`] : null,
+    ]);
+  }
+
+  async function poll() {
+    try {
+      const r = await (await fetch("/api/report", {cache: "no-store"})).json();
+      render(r);
+      if (r.running) timer = setTimeout(poll, 1500);
+    } catch (e) {
+      $("subtitle").textContent = `Cannot reach the local server: ${e}`;
+    }
+  }
+  async function start() {
+    $("run").disabled = true;
+    await fetch("/api/check", {method: "POST"});
+    clearTimeout(timer); poll();
+  }
+  $("run").addEventListener("click", start);
+  fetch("/api/report").then(r => r.json()).then(r => { render(r); if (r.verdict === "idle" && !r.running) start(); else if (r.running) poll(); });
+})();
+</script>
+</body>
+</html>

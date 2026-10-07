@@ -94,6 +94,30 @@ def cmd_upload(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_health(args: argparse.Namespace) -> int:
+    from loculus_eternal.health import HealthCheck
+    from loculus_eternal.health_server import HealthServer
+
+    cfg = configuration.load(args.config)
+    if args.once:
+        report = HealthCheck(cfg, log=lambda m: print(m, file=sys.stderr)).run()
+        print(json.dumps(report.to_json(), indent=1, default=str))
+        return 0 if report.verdict == "healthy" else 1
+    server = HealthServer(cfg, host=args.host, port=args.port)
+    print(f"health page for {cfg.chain.contract} at {server.url} (Ctrl-C to stop)")
+    if not args.no_open:
+        import webbrowser
+
+        webbrowser.open(server.url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Progress lines must reach a pipe or a log file as they happen, not when a buffer fills.
     for stream in (sys.stdout, sys.stderr):
@@ -109,6 +133,14 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
     up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
     up.set_defaults(func=cmd_upload)
+
+    health = sub.add_parser("health", help="serve a one-page health check of the published record for anyone to verify")
+    health.add_argument("--config", type=Path, required=True, help="TOML config file naming the contract, the chain RPC and the sources")
+    health.add_argument("--port", type=int, default=8765)
+    health.add_argument("--host", default="127.0.0.1")
+    health.add_argument("--once", action="store_true", help="run one check, print the report as JSON, exit 0 only if healthy")
+    health.add_argument("--no-open", action="store_true", help="do not open a browser")
+    health.set_defaults(func=cmd_health)
 
     rec = sub.add_parser("recover", help="rebuild the dataset from the contract address and the configured sources")
     rec.add_argument("--config", type=Path, required=True, help="TOML config file (see README)")
