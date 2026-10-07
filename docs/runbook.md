@@ -41,8 +41,7 @@ One run does, in order:
 
    [backend]
    url = "https://backend.pathoplexus.org"
-   organisms = ["andv", "cchf", "dengue", "ebola-bdbv", "ebola-sudan", "ebola-zaire", "hmpv",
-                "marburg", "measles", "mpox", "rsv-a", "rsv-b", "west-nile", "yellow-fever", "zika"]
+   organisms = "all"                             # every organism the backend serves; a new organism needs no config change
 
    [upload]
    data_dir = "upload-data"                      # local state; keep it, but losing it is survivable

@@ -21,7 +21,7 @@ and IPFS plus public blob archives for keeping the bytes around.
 ## How to publish
 
 See [`docs/runbook.md`](docs/runbook.md). In short: a config file naming the chain, the
-contract, the backend and the organisms; the publisher key in the environment variable
+contract and the backend (with `organisms = "all"`, or a list); the publisher key in the environment variable
 `LOCULUS_ETERNAL_PUBLISHER_KEY`; then `loculus-eternal upload --config loculus-eternal.toml`,
 with `--check` first to see what would be published and what it costs.
 

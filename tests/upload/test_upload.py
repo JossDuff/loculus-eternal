@@ -541,3 +541,25 @@ def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
     register_in_archive(world, report)
     rec = recover(world, tmp_path)
     assert rec.missing == [] and rec.decode["allArtifactsMatch"]
+
+
+def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, tmp_path):
+    cfg = world["cfg_path"]
+    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = "all"'))
+    first = uploader(world).run()
+    assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
+    register_in_archive(world, first)
+    # The backend gains an organism: the next run publishes it with no config change.
+    world["backend"].set_lines("hmpv", [released_line("hmpv", "PP_H1", 1)])
+    second = uploader(world).run()
+    assert second.outcome == "published" and second.new_entries == 1 and "hmpv" in {s["organism"] for s in second.sync}
+    register_in_archive(world, second)
+    # The backend drops an organism: its published entries are reported as vanished.
+    with world["backend"]._lock:
+        del world["backend"].lines["mpox"]
+    third = uploader(world).run()
+    assert third.outcome == "nothing-to-publish" and third.vanished == {"mpox": ["PP_4.1"]}
+    # A backend that cannot enumerate organisms is a plain error before anything is read.
+    world["backend"].enumerate_organisms = False
+    with pytest.raises(SystemExit, match="list them in the config"):
+        uploader(world).run()

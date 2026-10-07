@@ -69,7 +69,13 @@ def cmd_upload(args: argparse.Namespace) -> int:
         uploader = Uploader(cfg)
     else:
         uploader = Uploader.with_key(cfg, configuration.publisher_key())
-    report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
+    from loculus_eternal.upload.sync import SyncError
+
+    try:
+        report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
+    except SyncError as e:
+        print(f"backend problem: {e}", file=sys.stderr)
+        return 1
     if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":

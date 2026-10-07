@@ -8,6 +8,7 @@ in this file; it comes from the environment variable named below.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,7 +41,7 @@ class ChainConfig:
 @dataclass
 class BackendConfig:
     url: str
-    organisms: list[str]
+    organisms: list[str] | None   # None means every organism the backend serves, asked each run
 
 
 @dataclass
@@ -104,10 +105,32 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
     return out
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand(value):
+    """Replace ${NAME} in string values with the environment variable NAME, so that an RPC
+    URL carrying an API key can be written as https://…/v3/${RPC_API} and the file stays
+    free of secrets. A missing variable is a configuration error, not an empty string."""
+    if isinstance(value, str):
+        def sub(m):
+            name = m.group(1)
+            if name not in os.environ:
+                raise ConfigError(f"the config refers to ${{{name}}} but that environment variable is not set")
+            return os.environ[name]
+
+        return _ENV_REF.sub(sub, value)
+    if isinstance(value, list):
+        return [_expand(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _expand(v) for k, v in value.items()}
+    return value
+
+
 def load(path: str | Path) -> Config:
     path = Path(path)
     try:
-        raw = tomllib.loads(path.read_text())
+        raw = _expand(tomllib.loads(path.read_text()))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
     try:
@@ -127,7 +150,16 @@ def load(path: str | Path) -> Config:
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
         backend = None
         if "backend" in raw:
-            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=list(raw["backend"]["organisms"]))
+            if "organisms" not in raw["backend"]:
+                # Publishing into an immutable stream is not something to default into: the
+                # operator writes "all" or a list.
+                raise ConfigError('backend.organisms is required: "all" to publish every organism the backend serves, or a list of organism names')
+            organisms = raw["backend"]["organisms"]
+            if organisms == "all":
+                organisms = None
+            elif not isinstance(organisms, list) or not organisms or not all(isinstance(o, str) and o.strip() for o in organisms):
+                raise ConfigError('backend.organisms must be "all" or a non-empty list of non-empty organism names')
+            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms)
         upload = None
         if "upload" in raw:
             u = raw["upload"]

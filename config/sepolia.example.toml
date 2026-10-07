@@ -3,15 +3,14 @@
 # four marked lines. The publisher key is never in this file: export LOCULUS_ETERNAL_PUBLISHER_KEY.
 
 [chain]
-rpc_url = "https://sepolia.example-rpc"       # CHANGE: a Sepolia JSON-RPC endpoint
+rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"   # ${NAME} is read from the environment, so no key lives in this file
 contract = "0x0000000000000000000000000000000000000000"   # CHANGE: after deployment
 chain_id = 11155111
 deployment_block = 0                           # CHANGE: the block the contract was deployed in
 
 [backend]
 url = "https://backend.pathoplexus.org"
-organisms = ["andv", "cchf", "dengue", "ebola-bdbv", "ebola-sudan", "ebola-zaire", "hmpv",
-             "marburg", "measles", "mpox", "rsv-a", "rsv-b", "west-nile", "yellow-fever", "zika"]
+organisms = "all"                              # every organism the backend serves, asked each run; or a list of names
 
 [upload]
 data_dir = "upload-data"
@@ -38,7 +37,7 @@ manifest_sources = ["logs"]
 # so order is about speed and cost, not trust.
 [[sources]]
 type = "beacon"
-endpoints = ["https://sepolia-beacon.example"] # CHANGE: a beacon API with historical blobs, or your semi-supernode
+endpoints = ["https://ethereum-sepolia-beacon-api.publicnode.com"]   # recent blobs; Blobscan below has the history
 
 [[sources]]
 type = "blobscan"

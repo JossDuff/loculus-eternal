@@ -20,9 +20,12 @@ IPFS profile are frozen.
 1. **Deploy.** From `contracts/`:
 
    ```
-   PUBLISHER=0x<publisher address> forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --private-key $DEPLOYER_KEY
+   PUBLISHER=0x<publisher address> forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --private-key $DEPLOYER_KEY --gas-estimate-multiplier 800
    ```
 
+   The multiplier matters when the network runs a fork Foundry's local simulation does not
+   know: Sepolia moved to Glamsterdam on 2026-10-06, gas was repriced, and the default
+   estimate ran out of gas. Unused gas is refunded, so a generous limit costs nothing.
    Record the address and the deployment block in the config and in `docs/testnet-report.md`.
    Verify the source on a block explorer so the bytecode is checkable.
 
