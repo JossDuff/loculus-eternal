@@ -14,14 +14,18 @@ check over today's stream takes well under a minute. To rebuild the files, run
 
 ## What one check does
 
+The page presents the work as three checks: the **contract check** (the first two rows
+below), the **blob check** (the next three, with the backend's counts shown beside the
+published ones) and the **IPFS check** (the last). The steps in detail:
+
 | Step | What is checked | What a problem looks like |
 |---|---|---|
 | Chain | The contract has code at the finalized block; its publisher, blob count, head, pointer and successor; the block and age of the most recent publish | the contract cannot be read; a successor is set (noted) |
 | Blob list | The ordered list of versioned hashes from event logs reproduces `head` and `blobCount` | the list does not match the chain, or logs cannot be read |
 | Sources | Every configured source is asked for every blob; each candidate is verified by recomputing its KZG commitment | a blob that no source can supply (failing); a source serving corrupt bytes (noted, rejected) |
 | Stream | The outer records of the verified blobs: header, batch headers, body lengths and digests, indexes, manifests; the header's chain and contract binding; torn ranges | a torn range at the end (an unfinished or lost upload); a header naming another chain or contract |
-| IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; its manifest matches the chain; its blob objects are retrievable and verify; the spec is present | a snapshot that is not the publisher's current one |
 | Backend | Per organism, the backend's released count against published and withdrawn entries | the backend unreachable (noted only: it does not affect the record) |
+| IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; its manifest matches the chain; its blob objects are retrievable and verify; the spec is present | a snapshot that is not the publisher's current one |
 
 The **verdict** is healthy when the contract is reachable, the blob list verifies, every
 blob verifies from at least one source, the stream has no torn tail, and the snapshot matches
@@ -47,8 +51,8 @@ point: anyone can run this against anyone's deployment.
 
 The page is one HTML file with inline styles and script and loads nothing from anywhere, so
 it works offline against a local node. A check runs when the page opens; the button runs
-another. While a check runs, a bar across the top shows which of the six steps it is on and,
-during the long one, how many blobs each source has been asked for so far.
+another. While a check runs, a bar across the top shows which of the three checks it is on
+and what it is doing, including how many blobs each source has been asked for so far.
 
 The page opens with a **Deployment** card: the contract address with a link to a block
 explorer, the network, the deployment block, and the inputs this check runs with: the RPC
