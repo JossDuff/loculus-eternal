@@ -37,7 +37,7 @@ The directory contains, by these exact names:
 
 | Name | Content |
 |---|---|
-| `manifest.json` | the chain id, the contract address, `blobCount` and `head` after the batch, the list of batches (`batch`, `firstBlobSeq`, `lastBlobSeq`, `manifestDigest`), and every blob in order as `seq`, `versionedHash`, `cid`, plus `blockNumber` and `blockTimestamp` when the publisher knew them at the time (always for blobs of earlier batches, never for the batch the snapshot was built for, since it had not been sent yet) |
+| `manifest.json` | the chain id, the contract address, `blobCount` and `head` after the batch, the list of batches (`batch`, `firstBlobSeq`, `lastBlobSeq`, `manifestDigest`), and every blob in order as `seq`, `versionedHash`, `cid`, plus `blockNumber` and `blockTimestamp` when the publisher knew them at the time (always for blobs of earlier batches, never for the batch the snapshot was built for, since it had not been sent yet). `cid` is absent for a dead blob of an abandoned upload whose bytes the publisher could not obtain; no reader needs such a blob |
 | `container-spec.md` | the container specification the stream was written to |
 | `<organism>.ndjson.zst` | the materialised file of each organism, as the recovery command writes it, compressed with zstd (one frame, no dictionary) |
 
@@ -82,8 +82,11 @@ The recovery command does this when an `ipfs` source with a `snapshot_cid` is co
 ## Who pins
 
 Pinning targets are configuration in the upload command's `[ipfs]` section: every listed
-Kubo endpoint receives every blob object and the snapshot. Each blob object carries its own
-pin and is never unpinned. Snapshots are kept one at a time: once the batch whose pointer
+Kubo endpoint receives every blob object a reader needs and the snapshot. Each blob object
+carries its own pin and is never unpinned; before each batch the upload command adds again
+any earlier blob object a reader needs that the endpoint no longer pins. The dead blobs of
+an abandoned upload are not pinned, except blob 0, which holds the stream header and stays
+pinned even when the first attempt at batch 0 is abandoned. Snapshots are kept one at a time: once the batch whose pointer
 names a new snapshot is final, the upload command unpins the previous snapshot on every
 endpoint that holds the new one, so a node carries every blob object plus the latest
 snapshot and nothing accumulates. An old snapshot's blocks leave the node at its next

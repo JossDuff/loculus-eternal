@@ -163,7 +163,11 @@ record it expects, and the contract rejects anything out of order.
 
 If the local `upload-data` directory is lost as well, the next run notices blobs on the chain
 that belong to no complete batch, reports them as a torn batch, and starts a fresh batch
-after them. The torn blobs cost their fees but harm nothing: every reader skips them.
+after them. The torn blobs cost their fees but harm nothing: every reader skips them, no
+snapshot pins them, and once the network has forgotten their bytes a recovery still ends
+with SUCCESS and a note that they were unavailable. The one exception is blob 0, which
+holds the stream header; it stays pinned even when the first attempt at the genesis batch
+was the one abandoned. Your Kubo node keeps unpinned blocks until `ipfs repo gc` runs.
 
 ## Sources for reading the stream back
 
