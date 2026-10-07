@@ -289,11 +289,25 @@ def test_U8_torn_batch_with_lost_journal_is_skipped_and_the_stream_stays_decodab
     assert fresh.outcome == "published" and fresh.chain["tornBlobs"] == 6
     assert fresh.batch["batch"] == 0 and fresh.batch["firstBlobSeq"] == 6
     assert anvil.contract.functions.blobCount().call() == 6 + fresh.batch["blobs"]
+    assert "6 of them from an abandoned upload" in fresh.message
     register_in_archive(world, fresh)
     report = recover(world, tmp_path)
     assert report.missing == []
     assert [t["first_blob"] for t in report.decode["torn"]] == [0] and report.decode["torn"][0]["last_blob"] == 5
     assert report.decode["allArtifactsMatch"] and report.decode["files"]["mpox"]["entries"] == 9
+
+    # The network forgets the torn blobs, all but blob 0 which holds the stream header.
+    with world["archive"]._lock:
+        for vh, _ in pairs[1:]:
+            del world["archive"].blobs[vh]
+    again = recover(world, tmp_path / "second")
+    assert sorted(m["seq"] for m in again.missing) == [1, 2, 3, 4, 5] and all(m["needed"] is False for m in again.missing)
+    assert again.missing_needed == [] and again.decode["allArtifactsMatch"] and again.decode["files"]["mpox"]["entries"] == 9
+    # A later upload from yet another machine still learns the published set.
+    world["cfg_path"].write_text(world["cfg_path"].read_text().replace(str(lost), str(tmp_path / "third")))
+    world["backend"].add("mpox", released_line("mpox", "PP_T_LATE", 1))
+    later = uploader(world).run()
+    assert later.outcome == "published" and later.new_entries == 1 and later.batch["batch"] == 1
 
 
 def test_U9_another_upload_in_between_is_detected_before_sending(world):

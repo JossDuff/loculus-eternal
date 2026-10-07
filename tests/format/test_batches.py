@@ -323,6 +323,35 @@ def test_F11_missing_blob_tears_only_its_batch():
     assert dec.torn[0].last_blob == len(blobs) - 1
 
 
+def test_F20_dead_blobs_are_the_torn_range_a_complete_batch_follows_minus_blob_0():
+    chain_id, contract = 11155111, bytes(20)
+    big = [sample_entry("zika", f"PP_00060{i}", 1, seq_len=60000) for i in range(3)]
+    # A genesis attempt that was never completed, then genesis started again after it.
+    # Its batch-end transaction never landed, so the blob with the manifest is not on chain.
+    torn_blobs = StreamEncoder(chain_id, contract).encode_batch(big, codec=CODEC_RAW).blobs[:-1]
+    assert len(torn_blobs) >= 2
+    retry_enc = StreamEncoder(chain_id, contract)
+    retry_enc.state.next_blob_seq = len(torn_blobs)
+    retry = retry_enc.encode_batch(big, codec=CODEC_RAW)
+    blobs = torn_blobs + retry.blobs
+    dec = StreamDecoder(blobs).decode()
+    assert [b.batch for b in dec.batches] == [0] and dec.batches[0].first_blob_seq == len(torn_blobs)
+    assert dec.dead_blobs() == set(range(1, len(torn_blobs)))
+    # The header is in blob 0, so the stream decodes the same without the other torn blobs.
+    without = [b if i == 0 or i >= len(torn_blobs) else None for i, b in enumerate(blobs)]
+    dec2 = StreamDecoder(without).decode()
+    assert dec2.published() == dec.published() and dec2.dead_blobs() == dec.dead_blobs()
+    # Without blob 0 nothing decodes at all: the header cannot be read.
+    with pytest.raises(FormatError, match="blob 0 is missing"):
+        StreamDecoder([None] + blobs[1:]).decode()
+    # A torn range at the end of the stream is not dead.
+    enc, b0 = encode_genesis()
+    dec0 = StreamDecoder(b0.blobs).decode()
+    b1 = enc.encode_batch(big, previous_entries=dec0.records, codec=CODEC_RAW)
+    tail = StreamDecoder(b0.blobs + b1.blobs[:-1]).decode()
+    assert tail.torn and tail.dead_blobs() == set()
+
+
 def test_F11_stream_ending_mid_batch_is_torn():
     enc, b0 = encode_genesis()
     dec0 = StreamDecoder(b0.blobs).decode()
