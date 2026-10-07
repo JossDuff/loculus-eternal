@@ -69,13 +69,19 @@ Loss requires every archive, every pinner, and every local holder to lose the sa
 Nothing prevents that; the design makes it unlikely, and makes partial loss both detectable
 and repairable from any surviving copy.
 
-**Nothing can ever be removed.** Once a record is published it is in Ethereum's history and in
-archives we do not control. A revocation can be appended, and the recovery output will mark
-the entry revoked, but the original bytes remain retrievable by anyone. If a submitter uploads
-something that must legally disappear, the only remedy is to stop including it in our own
-IPFS snapshots and to document publicly that it is disowned. Pathoplexus accepted this
-trade-off on 2026-09-30: its data use terms already contain no deletion provision after
-release, and a backup that could be edited would not be a backup.
+**Nothing can ever be removed, but it can be withdrawn.** Once a record is published it is in
+Ethereum's history and in archives we do not control, and anyone can still read it. Loculus's
+own revocation is just another version and is published like one; a consumer derives that the
+accession is revoked. For data that has to be taken down, the publisher appends a
+**withdrawal record** naming the accessionVersions. The bytes stay, but every conforming
+reader excludes withdrawn entries from the files it produces and from the snapshots it pins,
+offers no way to produce them, and the stream's own digests are defined over the output
+without them. It is a request that honest readers honour, not an erasure, and the public
+page must say so. The upload command
+never withdraws on its own: it reports published entries that the backend no longer serves,
+and withdraws them only when the maintainer confirms it for that run, so that a half-finished
+backend migration cannot withdraw a dataset by accident. Pathoplexus accepted this on
+2026-09-30 and chose the withdrawal mechanism on 2026-10-05.
 
 **Restricted data is never published.** Pathoplexus lets submitters mark data Restricted-Use
 for up to a year, during which it may only be shared onward under the same terms. A permanent

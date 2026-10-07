@@ -236,6 +236,8 @@ Proposed shape (refined in the container format phase):
     - `DICTIONARY`: reserved for codec dictionaries. Unused in v1.
     - `REPROCESSED`: reserved for a future decision to republish processed fields after a
       pipeline change. Unused in v1.
+    - `WITHDRAW`: accessionVersions the publisher withdraws; excluded from materialised output
+      and snapshots from that batch on, bytes retained.
   - `BATCH_MANIFEST` (uncompressed, terminates every batch): batch number, per-organism
     entry counts, **the sha256 of each materialized per-organism NDJSON artifact** so any
     decoder can prove its output is what the publisher intended, the previous manifest's
@@ -275,9 +277,13 @@ safe to interrupt and rerun. Steps:
 6. **Dry run.** Simulate every transaction against the contract with blob fields, check the
    wallet covers execution + blob fees, refuse if not, with a message written for the
    maintainer.
-7. **Publish to Ethereum.** Send the type-3 transactions in order with a fee-escalating
-   resubmitter. Only the last transaction of the batch sets `isBatchEnd = true` and the new
-   `appPointer`. Wait for **finality** (not just inclusion) before marking anything published.
+7. **Publish to Ethereum.** Send the type-3 transactions back to back with consecutive
+   nonces (decided 2026-10-05 after the full-scale rehearsal showed a finality wait per
+   transaction would make genesis take eleven hours; nonce order makes a reordering revert
+   impossible, so the waits bought nothing), a bounded number in flight, with a fee-escalating
+   resubmitter for the head of the line. Only the last transaction of the batch sets
+   `isBatchEnd = true` and the new `appPointer`. Wait for **finality** once, for every
+   transaction, before marking anything published.
    Crash-safety: a journal on disk records planned → sent → included → finalized per
    transaction so a restart resumes rather than duplicating. If a transaction is included but
    a later one fails, the batch is torn on-chain but harmless: the manifest is absent, the

@@ -11,7 +11,7 @@ so that a backend change is caught before it reaches the stream.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
@@ -116,6 +116,8 @@ class SyncStats:
     restricted: int = 0
     already_published: int = 0
     new: int = 0
+    seen: set = field(default_factory=set)       # every accessionVersion the feed contained, any terms
+    vanished: list = field(default_factory=list)  # published, not withdrawn, and no longer in the feed
 
 
 def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats) -> Iterator[dict]:
@@ -125,6 +127,7 @@ def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: Syn
     for line in iter_lines(feed):
         stats.total += 1
         check_shape(organism, line)
+        stats.seen.add(line["metadata"]["accessionVersion"])
         if not is_eligible(line):
             stats.restricted += 1
             continue
@@ -145,3 +148,16 @@ def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple
     """The in-memory form of iter_new_entries, for tests and small feeds."""
     stats = SyncStats(organism)
     return list(iter_new_entries(organism, feed, is_published, stats)), stats
+
+
+def find_vanished(organism: str, stats: SyncStats, published: dict[str, list[list[int]]], withdrawn: dict[str, list[int]]) -> list[str]:
+    """accessionVersions published for this organism, not withdrawn, that the feed no longer
+    contains. These are reported, never acted on without the maintainer's say-so."""
+    gone = []
+    for accession, versions in published.items():
+        for version, _ in versions:
+            av = f"{accession}.{version}"
+            if av not in stats.seen and version not in withdrawn.get(accession, []):
+                gone.append(av)
+    stats.vanished = sorted(gone)
+    return stats.vanished

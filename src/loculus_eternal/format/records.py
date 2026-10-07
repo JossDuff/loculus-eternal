@@ -44,6 +44,7 @@ class RecordType(IntEnum):
     TOOLING = 0x12
     DICTIONARY = 0x13
     REPROCESSED = 0x14
+    WITHDRAW = 0x15
 
 
 OUTER_TYPES = {RecordType.HEADER, RecordType.BATCH_BEGIN, RecordType.BODY, RecordType.BATCH_MANIFEST, RecordType.INDEX}

@@ -69,7 +69,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         uploader = Uploader(cfg)
     else:
         uploader = Uploader.with_key(cfg, configuration.publisher_key())
-    report = uploader.run(mode)
+    report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
     if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":
@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
+    up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
     up.set_defaults(func=cmd_upload)
 
     rec = sub.add_parser("recover", help="rebuild the dataset from the contract address and the configured sources")

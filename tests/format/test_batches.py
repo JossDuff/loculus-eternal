@@ -136,7 +136,7 @@ def test_F8_manifest_fields_are_recomputed_by_the_decoder():
     assert m["batch"] == 0 and m["firstBlobSeq"] == 0 and m["blobCountAfter"] == len(b0.blobs)
     assert m["previousManifestDigest"] == "00" * 32 and m["bodyDigest"] == b0.body_digest.hex()
     assert set(m["organisms"]) == {"zika", "mpox"}
-    assert m["organisms"]["zika"] == {"entriesInBatch": 3, "entriesTotal": 3, "artifactSha256": dec.artifact_digests()["zika"]}
+    assert m["organisms"]["zika"] == {"entriesInBatch": 3, "entriesTotal": 3, "withdrawnInBatch": 0, "withdrawnTotal": 0, "artifactSha256": dec.artifact_digests()["zika"]}
 
 
 def test_F8_manifest_with_wrong_cumulative_digest_is_torn():

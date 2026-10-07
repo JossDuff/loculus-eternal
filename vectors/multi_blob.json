@@ -8,12 +8,12 @@
   "blobSha256": [
    "26fd394dc9f1e0f8910c35dec55140ed7692e00cf35e5d581cab76a68227ac93",
    "8493779345a70ca3a0919a297d3aa6579eab9508df925b3e84b1db20a91749b8",
-   "81ba17e58760d6447cc2f948830de19cb03b06405bb8d28a593c94f7a2f42a35"
+   "9b2d29727006a83fcf0bd3c91062f7dbf48a7370845f7c285465f6b311d1734f"
   ],
   "bodyDigest": "0aa608eba21bfdfb83e4a7974b9bfa57996fb08a0244e6425a1f2c6bec57a23e",
   "firstBlobSeq": 0,
   "index": null,
-  "lastBlobChunkCount": 3501,
+  "lastBlobChunkCount": 3502,
   "manifest": {
    "batch": 0,
    "blobCountAfter": 3,
@@ -24,17 +24,19 @@
     "mpox": {
      "artifactSha256": "015333e197443b8a3fe00c91c5252c550b68d51d01987a1a25de9da036ef6b70",
      "entriesInBatch": 3,
-     "entriesTotal": 3
+     "entriesTotal": 3,
+     "withdrawnInBatch": 0,
+     "withdrawnTotal": 0
     }
    },
    "previousManifestDigest": "0000000000000000000000000000000000000000000000000000000000000000"
   },
-  "manifestDigest": "ef86fc41a020ff2357b645d050156de6bf6c6db5db2addd7df774cb3f3ba1bf5",
+  "manifestDigest": "970e15db50c380462693f7ca3d0acbab572b99a6d15d8357d3b1925b26ebd12d",
   "schemasPublished": [
    "mpox"
   ],
   "streamLength": 380928,
-  "streamSha256": "b95762be118586ab76c3f268fcef45287783d2c021a613c7cfc2cdd2c0a9419e"
+  "streamSha256": "c96328dd2ea29d771d68feffc426a952f110c1040fc47803ca47e27f77fdc34a"
  },
  "input": {
   "chainId": 11155111,

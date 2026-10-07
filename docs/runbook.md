@@ -20,13 +20,16 @@ One run does, in order:
    not changed), selects the entries that are open and not yet published.
 4. Packs them into one batch, simulates the first transaction against the contract, checks the
    current fees and your wallet balance, and refuses with a reason if anything is off.
-5. Sends the transactions one by one, raising the fee and resending if one is not picked up,
-   and waits until each is final (about 13 minutes on mainnet).
+5. Sends the transactions back to back, a few at a time, raising the fee and resending the
+   front one if it is not picked up, then waits once until the last is final (about 13
+   minutes on mainnet) before recording anything.
 6. Writes a report and keeps a copy of the published blobs locally.
 
 ## One-time setup
 
-1. Install: `uv sync` in a checkout of the repository (Python 3.12 or newer, `uv`).
+1. Install: `uv sync` in a checkout of the repository (Python 3.12 or newer, `uv`). The
+   machine needs about 40 GB of free disk for a genesis-sized run (spill files and the
+   snapshot build) and 4 GB of memory; a delta needs far less.
 2. Create a config file. Start from this and change the four marked lines:
 
    ```toml
@@ -112,6 +115,36 @@ record.
 the whole published stream to know what is already published, and none of the configured
 sources had that blob. Add a source that has it (a beacon node with historical blobs, Blobscan,
 or a directory of blobs exported from a recovery) and run again.
+
+## When data was removed from Pathoplexus
+
+Nothing can be deleted from Ethereum or from archives other people run, so the permanent
+record keeps everything ever published. What you can do is **withdraw**: the next batch then
+carries a record naming the entries, and every recovery and every snapshot from then on
+leaves them out, and neither command will write the withdrawn entries to its output. A
+withdrawal cannot be reversed: the same accessionVersion can never be published again. The
+bytes remain where they were published, as with anything on Ethereum; the record says
+plainly that the publisher withdrew them.
+
+The command never withdraws on its own. When entries that were published are no longer in
+the backend's feed, `--check` and every run report them:
+
+```
+zika: 3044 released, 3044 open, 3041 already published, 0 new, 3 published but no longer in the feed
+```
+
+Look at the list in the run report (`upload-data/reports/…json`, under `vanished`). If those
+are the entries that were removed on purpose, confirm the withdrawal:
+
+```
+loculus-eternal upload --config loculus-eternal.toml --withdraw-vanished
+```
+
+That run publishes a batch with the withdrawals (and any new entries), and the recovered
+dataset excludes them from then on. If the list is not what you expect, for example because
+an organism's feed is temporarily empty, do not confirm; fix the backend first.
+
+A Loculus revocation needs nothing special: it is a new version and is published as one.
 
 ## When a run is interrupted
 

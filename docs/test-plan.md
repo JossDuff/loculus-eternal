@@ -52,6 +52,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **F15 — projection.** An entry carries `organism` and the six data keys; its metadata carries `accession`, `version` and `accessionVersion` and none of the four removed fields; an encoder refuses an entry that violates this.
 - **F16 — schema records.** The first batch that publishes an organism carries a schema record for it; a later batch carries one only if the field set, segments or genes changed; the record lists each sorted.
 - **F17 — tooling records.** A tooling record carries a relative path and the file's bytes and round-trips exactly.
+- **F19 — withdrawals.** A withdrawal record names accessionVersions; materialised files and cumulative digests exclude them while the bytes stay decodable; a withdrawal applies whether the entry came before or after it; the encoder refuses to publish a withdrawn accessionVersion and accepts a batch of withdrawals alone; the index lists withdrawn versions; manifests carry withdrawn counts.
 - **F18 — bounded memory.** Encoding and decoding spill entries to sorted runs on disk: the stream bytes, manifests and materialised files are identical whatever the sort buffer size, down to a buffer that forces a spill after every entry; a body whose entries are out of order still materialises sorted; the decoder's entry iterator yields keys with payloads in materialisation order without loading the set. A hostile body (an oversized length prefix, a non-object payload, an organism name that is a path) tears the batch, allocates nothing beyond the declared length, writes nowhere outside the spill directory, and leaves no spilled chunks behind; closing the decoded stream removes the spilled entries.
 
 ### C — contract
@@ -95,6 +96,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **R10 — history expiry.** A manifest file handed over out of band verifies against `head` and the run completes without ever asking the node for logs.
 - **R11 — adapter shapes.** The beacon, Blobscan and blob-archiver adapters each return the verified blob from their respective response shapes; the beacon adapter sends the `versioned_hashes` filter and derives the slot from the block timestamp.
 - **R12 — adaptive log paging.** `eth_getLogs` paging halves after an error and doubles after a success, and still covers the whole range.
+- **R14 — withdrawn entries.** Recovery output excludes withdrawn entries and the report names the withdrawn identifiers; the command offers no option that produces the withdrawn data.
 - **R13 — command line.** `loculus-eternal recover --config file.toml` runs the whole recovery from a TOML file and exits non-zero when blobs are missing or the list cannot be verified.
 
 ### U — upload command
@@ -104,12 +106,14 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **U3 — check and dry run.** `--check` reports the pending count and estimated cost and `--dry-run` additionally encodes, simulates and checks fees and balance; neither sends anything or leaves a journal behind.
 - **U4 — refusals.** The dry run refuses, with a maintainer-readable reason and nothing spent, when the key is not the publisher, when the wallet cannot cover the maximum fee, and when the blob base fee is above the configured limit.
 - **U5 — journal resume.** A run interrupted after a transaction was sent resumes from the journal, sends only the remaining transactions, and the recovered stream has no torn batch and no duplicate entry.
-- **U6 — fee escalation.** A transaction not included within the window is replaced at the same nonce with both fees raised, a bounded number of times, and the attempts are recorded.
+- **U6 — fee escalation.** A transaction not included within the window is replaced at the same nonce with both fees raised, a bounded number of times, and the attempts are recorded; only the head of the line is replaced, since nothing behind it can be included first.
+- **U15 — pipelined sending.** A batch's transactions are sent back to back with consecutive nonces, up to a configured number in flight, and all are included in order; finality is awaited once at the end; nothing is marked published before every transaction's block is final.
 - **U7 — finality before anything counts.** Blobs enter the local store and the report only after the including block is finalized.
 - **U8 — torn batch, lost journal.** When the journal is lost after a partial batch, the next run reports the torn blobs, starts a fresh batch at the next blob boundary, and the recovered stream decodes with the torn range reported and every entry present.
-- **U9 — concurrent upload.** If the contract's blob count moves between planning and sending, the simulation reports the sequence mismatch and nothing is sent.
+- **U9 — concurrent upload.** If the contract's blob count moves between planning and sending, the simulation reports the sequence mismatch and nothing is sent; if another upload with the same key runs while a batch is in flight and takes one of its nonces, the batch is set aside and the next run starts a fresh one after the torn blobs.
 - **U10 — command line.** `loculus-eternal upload --config file.toml` reads the key only from `LOCULUS_ETERNAL_PUBLISHER_KEY`, refuses without it, publishes with it, and is a no-op the second time; `--check` works without the key.
 - **U12 — pointer carried forward.** A batch end rewrites the on-chain pointer with the value it already has, so a pointer set by hand or by a snapshot is never wiped by a data upload.
+- **U14 — vanished entries.** Published entries that no longer appear in the backend feed are reported and never withdrawn on their own; with the maintainer's explicit confirmation the next batch carries withdrawal records for them, after which recoveries and snapshots exclude them.
 - **U13 — chain mismatch.** A configured chain id that differs from the RPC endpoint's is a configuration error before anything is read or sent.
 - **U11 — tooling.** The spec and source files are published with the first batch and again only when the package version in the published set differs from the current one.
 

@@ -46,6 +46,12 @@ def published():
         yield {"anvil": anvil, "stub": stub, "blobs": all_blobs, "expected": expected, "deployment_block": 1}
 
 
+def run_cli(*args: str) -> subprocess.CompletedProcess:
+    """The command line as a user would run it, from the source tree."""
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
+    return subprocess.run([sys.executable, "-m", "loculus_eternal.cli", *args], capture_output=True, text=True, env=env)
+
+
 def config(published, tmp_path, sources, **kw) -> RecoveryConfig:
     anvil = published["anvil"]
     return RecoveryConfig(
@@ -264,8 +270,7 @@ type = "blobscan"
 url = "{stub.url}"
 """
     )
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
-    proc = subprocess.run([sys.executable, "-m", "loculus_eternal.cli", "recover", "--config", str(cfg)], capture_output=True, text=True, env=env)
+    proc = run_cli("recover", "--config", str(cfg))
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "verified against head" in proc.stdout
     assert_recovered_matches(published, tmp_path / "out")
@@ -336,3 +341,30 @@ def test_R4_adapter_exception_is_an_error_attempt(published, tmp_path):
     report = Recovery(config(published, tmp_path, [Broken(), BlobscanSource(published["stub"].url)])).run()
     assert report.missing == []
     assert_recovered_matches(published, tmp_path / "out")
+
+
+def test_R14_withdrawn_entries_are_excluded_and_cannot_be_asked_for(published, tmp_path):
+    """A withdrawal published on top of the fixture stream: the output excludes the entry, its
+    digest matches, the report names the identifier, and no option produces the data."""
+    anvil, stub = published["anvil"], published["stub"]
+    from loculus_eternal.format.encode import StreamEncoder
+    from loculus_eternal.testkit import publish_blobs
+
+    with StreamDecoder(published["blobs"]).decode() as dec:
+        enc = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:]), state=dec.encoder_state())
+        batch = enc.encode_batch([], previous_entries=dec.records, codec=CODEC_ZSTD, withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000002.1"], "note": "test"}])
+    for receipt, hashes in publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True):
+        slot = anvil.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
+        by_hash = {kzg.blob_to_versioned_hash(b): b for b in batch.blobs}
+        stub.add(slot, [(h, by_hash[h]) for h in hashes])
+    anvil.mine(3)
+    cfg = config(published, tmp_path, [BlobscanSource(stub.url)])
+    report = Recovery(cfg).run()
+    assert report.missing == [] and report.decode["allArtifactsMatch"]
+    main = (tmp_path / "out" / "zika.ndjson").read_bytes()
+    assert b"PP_000002.1" not in main
+    assert report.decode["withdrawn"] == {"zika": {"PP_000002": [1]}} and report.decode["files"]["zika"]["withdrawn"] == 1
+    assert not any("withdrawn" in p.name for p in (tmp_path / "out").iterdir())
+    helptext = run_cli("recover", "--help")
+    assert helptext.returncode == 0 and "--skip-decode" in helptext.stdout
+    assert "withdrawn" not in helptext.stdout

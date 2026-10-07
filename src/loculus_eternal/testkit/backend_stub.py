@@ -37,6 +37,7 @@ class BackendStub:
     def __init__(self):
         self._lock = threading.Lock()
         self.lines: dict[str, list[dict]] = {}
+        self.files: dict[str, tuple] = {}   # organism -> (path to zstd NDJSON, record count): served as-is
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -52,10 +53,22 @@ class BackendStub:
                     return self._reply(404, b'{"detail":"not found"}', "application/json")
                 organism = parts[0]
                 with stub._lock:
+                    file_entry = stub.files.get(organism)
                     lines = stub.lines.get(organism)
-                    if lines is None:
-                        return self._reply(404, b'{"detail":"unknown organism"}', "application/json")
-                    body = b"".join(json.dumps(line).encode() + b"\n" for line in lines)
+                if file_entry is not None:
+                    # A pre-compressed feed served byte for byte, for full-scale rehearsals.
+                    path, count = file_entry
+                    etag = '"' + hashlib.sha256(str(path).encode()).hexdigest()[:24] + "|file\""
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.end_headers()
+                        return
+                    data = open(path, "rb").read()
+                    return self._reply(200, data, "application/x-ndjson", {"ETag": etag, "X-Total-Records": str(count), "Content-Encoding": "zstd"})
+                if lines is None:
+                    return self._reply(404, b'{"detail":"unknown organism"}', "application/json")
+                body = b"".join(json.dumps(line).encode() + b"\n" for line in lines)
                 etag = '"' + hashlib.sha256(body).hexdigest()[:24] + "|stub\""
                 if self.headers.get("If-None-Match") == etag:
                     self.send_response(304)
@@ -84,6 +97,11 @@ class BackendStub:
     def url(self) -> str:
         host, port = self._server.server_address[:2]
         return f"http://{host}:{port}"
+
+    def set_file(self, organism: str, path, count: int) -> None:
+        """Serve a zstd-compressed NDJSON file as the organism's feed."""
+        with self._lock:
+            self.files[organism] = (path, count)
 
     def set_lines(self, organism: str, lines: list[dict]) -> None:
         with self._lock:
