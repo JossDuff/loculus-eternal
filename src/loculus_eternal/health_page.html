@@ -68,6 +68,9 @@
   .detail { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1.5em; font-variant-numeric: tabular-nums; }
   pre.quick { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px/1.6 var(--mono); overflow-x: auto; }
   .srcs li { margin: 2px 0; }
+  .group { margin-top: 22px; }
+  .group > h3 { font-size: 15px; font-weight: 650; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .group > h3 .sub { font-weight: 400; }
 </style>
 </head>
 <body>
@@ -80,7 +83,6 @@
     <span class="badge idle" id="badge"><span class="dot"></span><span id="verdict">idle</span></span>
     <span class="links">
       <span class="eth" title="Every blob's hash is anchored in an immutable Ethereum contract"><svg viewBox="0 0 256 417" aria-hidden="true"><path d="M127.9 0 125.2 9.5v275.7l2.7 2.8 127.9-75.6z" opacity=".6"/><path d="M127.9 0 0 212.4l127.9 75.6V0z"/><path d="m127.9 312.2-1.5 1.9v98.2l1.5 4.5L256 236.6z" opacity=".6"/><path d="M127.9 416.8v-104.6L0 236.6z"/></svg>Secured by Ethereum</span>
-      <a id="repo" href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">GitHub</a>
     </span>
     <button id="run" type="button">Run check</button>
   </header>
@@ -98,17 +100,38 @@
 
   <div class="grid">
     <section class="card wide"><h2>Deployment</h2><div id="deployment" class="empty">Loading…</div></section>
-    <section class="card"><h2>Chain</h2><div id="chain" class="empty">No check yet.</div></section>
-    <section class="card"><h2>Blob list</h2><div id="bloblist" class="empty">No check yet.</div></section>
-    <section class="card"><h2>IPFS snapshot</h2><div id="ipfs" class="empty">No check yet.</div></section>
-    <section class="card wide"><h2>Sources</h2><div id="sources" class="empty">No check yet.</div></section>
-    <section class="card wide"><h2>Stream</h2><div id="stream" class="empty">No check yet.</div></section>
-    <section class="card wide"><h2>Organisms</h2><div id="organisms" class="empty">No check yet.</div></section>
+  </div>
+
+  <section class="group">
+    <h3>Contract check <span class="sub">— what the contract on Ethereum says, and that the blob list reproduces it</span></h3>
+    <div class="grid">
+      <section class="card"><h2>Contract state</h2><div id="chain" class="empty">No check yet.</div></section>
+      <section class="card"><h2>Blob list</h2><div id="bloblist" class="empty">No check yet.</div></section>
+    </div>
+  </section>
+
+  <section class="group">
+    <h3>Blob check <span class="sub">— every blob fetched from every source and verified against the contract; the record read back</span></h3>
+    <div class="grid">
+      <section class="card wide"><h2>Blob sources</h2><div id="sources" class="empty">No check yet.</div></section>
+      <section class="card wide"><h2>Record structure</h2><div id="stream" class="empty">No check yet.</div></section>
+      <section class="card wide"><h2>Organisms</h2><div id="organisms" class="empty">No check yet.</div></section>
+    </div>
+  </section>
+
+  <section class="group">
+    <h3>IPFS check <span class="sub">— the snapshot the contract points at</span></h3>
+    <div class="grid">
+      <section class="card wide"><h2>IPFS snapshot</h2><div id="ipfs" class="empty">No check yet.</div></section>
+    </div>
+  </section>
+
+  <div class="grid" style="margin-top:22px">
     <section class="card wide notes" id="notes" hidden><h2>Notes</h2><ul id="note-list"></ul></section>
     <section class="card wide"><h2>Check log</h2><pre class="log" id="log"></pre></section>
     <section class="card wide"><h2>Quickstart</h2>
-      <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish every newly released entry (maintainers; needs the publisher key)
-uv run loculus-eternal recover --config loculus-eternal.toml   # rebuild and verify the whole dataset from the chain (anyone)</pre>
+      <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
+uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
       <p class="sub" style="margin:10px 0 0">The configuration file names the contract and the blob sources; the one this page runs from is shown above. Full instructions are in the repository's <a href="https://github.com/JossDuff/loculus-eternal/blob/main/docs/runbook.md" target="_blank" rel="noopener">runbook</a>.</p>
     </section>
   </div>
@@ -134,7 +157,6 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # rebuild and ver
   function renderDeployment(cfg) {
     if (deploymentShown || !cfg) return;
     deploymentShown = true;
-    if (cfg.repository) { $("repo").href = cfg.repository; }
     const srcs = (cfg.sources || []).map(s => `<li><span class="mono">${esc(s.type)}</span> ${s.endpoints.map(e => esc(e)).join(", ")}${s.snapshotCid ? ` <span class="sub">snapshot ${esc(short(s.snapshotCid))}</span>` : ""}</li>`).join("");
     $("deployment").className = "";
     $("deployment").innerHTML = dl([

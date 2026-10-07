@@ -26,7 +26,7 @@ from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
 RETENTION_SECONDS = 4096 * 32 * 12   # 4096 epochs of 32 slots of 12 seconds, about 18.2 days
-STEPS = ["chain", "blob list", "sources", "stream", "IPFS snapshot", "backend"]
+STEPS = ["contract check", "blob check", "IPFS check"]   # how the page groups the work
 
 
 @dataclass
@@ -70,19 +70,23 @@ class HealthCheck:
             self._log(msg)
 
         try:
-            self._step(report, "chain")
+            # Contract check: the contract's state and the blob list that reproduces its head.
+            self._step(report, "contract check", "reading the contract at the finalized block")
             state, refs = self._chain(report, log)
             if state is None:
                 report.verdict = "failing"
                 return self._finish(report)
-            self._step(report, "sources")
+            # Blob check: every blob from every source, the record's structure, and the
+            # backend's counts beside the published ones.
+            self._step(report, "blob check")
             blobs = self._sources(report, refs, state, log)
-            self._step(report, "stream")
+            self._step(report, "blob check", "walking the record's structure")
             self._stream(report, blobs, state, log)
-            self._step(report, "IPFS snapshot")
-            self._ipfs(report, state, refs, log)
-            self._step(report, "backend")
+            self._step(report, "blob check", "asking the backend for its released counts")
             self._backend(report, log)
+            # IPFS check: the snapshot the contract points at.
+            self._step(report, "IPFS check", "checking the snapshot against the pointer")
+            self._ipfs(report, state, refs, log)
         except Exception as e:  # a check must end with a verdict, never a traceback
             report.problems.append(f"the check itself failed: {type(e).__name__}: {e}")
             log(f"check failed: {e}")
@@ -123,7 +127,7 @@ class HealthCheck:
             report.notes.append(f"a successor contract is set: {state.successor}; this deployment may have been replaced")
         log(f"contract holds {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
 
-        self._step(report, "blob list")
+        self._step(report, "contract check", "rebuilding the blob list from event logs")
 
         log("collecting the blob list from event logs")
         try:
@@ -161,7 +165,7 @@ class HealthCheck:
                 groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
             asked = 0
             for (bn, bt), group in groups.items():
-                self._step(report, "sources", f"{src.name}: {asked:,} of {len(refs):,} blobs asked for")
+                self._step(report, "blob check", f"{src.name}: {asked:,} of {len(refs):,} blobs asked for")
                 asked += len(group)
                 wanted = [r.versioned_hash for r in group]
                 try:
