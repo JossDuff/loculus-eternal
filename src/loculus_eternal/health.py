@@ -26,6 +26,7 @@ from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
 RETENTION_SECONDS = 4096 * 32 * 12   # 4096 epochs of 32 slots of 12 seconds, about 18.2 days
+STEPS = ["chain", "blob list", "sources", "stream", "IPFS snapshot", "backend"]
 
 
 @dataclass
@@ -42,17 +43,24 @@ class Report:
     ipfs: dict = field(default_factory=dict)
     backend: dict = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
+    progress: dict = field(default_factory=dict)   # {"steps", "step", "detail"} while running
 
     def to_json(self) -> dict:
         return dict(self.__dict__)
 
 
 class HealthCheck:
-    def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, w3=None, http: httpx.Client | None = None):
+    def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, progress: Callable[[dict], None] | None = None, w3=None, http: httpx.Client | None = None):
         self.cfg = config
         self.w3 = w3 or connect(config.chain.rpc_url, max_rps=config.chain.max_requests_per_second, timeout=60)
         self.http = http or httpx.Client(timeout=60)
         self._log = log or (lambda s: None)
+        self._progress = progress or (lambda p: None)
+
+    def _step(self, report: Report, step: str, detail: str | None = None) -> None:
+        """Where the check is, for a page that shows progress: the step and a line of detail."""
+        report.progress = {"steps": STEPS, "step": step, "detail": detail}
+        self._progress(report.progress)
 
     def run(self) -> Report:
         report = Report(started_at=time.time())
@@ -62,13 +70,18 @@ class HealthCheck:
             self._log(msg)
 
         try:
+            self._step(report, "chain")
             state, refs = self._chain(report, log)
             if state is None:
                 report.verdict = "failing"
                 return self._finish(report)
+            self._step(report, "sources")
             blobs = self._sources(report, refs, state, log)
+            self._step(report, "stream")
             self._stream(report, blobs, state, log)
+            self._step(report, "IPFS snapshot")
             self._ipfs(report, state, refs, log)
+            self._step(report, "backend")
             self._backend(report, log)
         except Exception as e:  # a check must end with a verdict, never a traceback
             report.problems.append(f"the check itself failed: {type(e).__name__}: {e}")
@@ -77,6 +90,7 @@ class HealthCheck:
 
     def _finish(self, report: Report) -> Report:
         report.finished_at = time.time()
+        report.progress = {}
         if report.verdict == "running":
             hard = [p for p in report.problems if not p.startswith("note:")]
             report.verdict = "healthy" if not hard else ("failing" if any(k in p for p in hard for k in ("cannot", "no verified", "not verifiable", "torn", "does not match", "check itself")) else "degraded")
@@ -108,6 +122,8 @@ class HealthCheck:
         if int(state.successor, 16) != 0:
             report.notes.append(f"a successor contract is set: {state.successor}; this deployment may have been replaced")
         log(f"contract holds {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
+
+        self._step(report, "blob list")
 
         log("collecting the blob list from event logs")
         try:
@@ -143,7 +159,10 @@ class HealthCheck:
             groups: dict[tuple, list[BlobRef]] = {}
             for r in refs:
                 groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
+            asked = 0
             for (bn, bt), group in groups.items():
+                self._step(report, "sources", f"{src.name}: {asked:,} of {len(refs):,} blobs asked for")
+                asked += len(group)
                 wanted = [r.versioned_hash for r in group]
                 try:
                     candidates = src.fetch(BlobContext(bn, bt), wanted)

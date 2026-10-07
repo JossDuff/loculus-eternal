@@ -53,7 +53,21 @@
   .notes h2 { color: var(--warn); }
   pre.log { max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0; font: 12px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; }
   .empty { color: var(--muted); font-style: italic; }
-  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .links { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+  .eth { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+  .eth svg { width: 12px; height: 19px; fill: currentColor; }
+  .progress { margin: 0 0 14px; }
+  .steps { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; }
+  .step { height: 6px; border-radius: 3px; background: var(--line); position: relative; }
+  .step.done { background: var(--ok); }
+  .step.now { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .step-names { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .step-names span.now { color: var(--accent); font-weight: 650; }
+  .detail { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1.5em; font-variant-numeric: tabular-nums; }
+  pre.quick { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px/1.6 var(--mono); overflow-x: auto; }
+  .srcs li { margin: 2px 0; }
 </style>
 </head>
 <body>
@@ -64,8 +78,18 @@
       <div class="sub" id="subtitle">Loading…</div>
     </div>
     <span class="badge idle" id="badge"><span class="dot"></span><span id="verdict">idle</span></span>
+    <span class="links">
+      <span class="eth" title="Every blob's hash is anchored in an immutable Ethereum contract"><svg viewBox="0 0 256 417" aria-hidden="true"><path d="M127.9 0 125.2 9.5v275.7l2.7 2.8 127.9-75.6z" opacity=".6"/><path d="M127.9 0 0 212.4l127.9 75.6V0z"/><path d="m127.9 312.2-1.5 1.9v98.2l1.5 4.5L256 236.6z" opacity=".6"/><path d="M127.9 416.8v-104.6L0 236.6z"/></svg>Secured by Ethereum</span>
+      <a id="repo" href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">GitHub</a>
+    </span>
     <button id="run" type="button">Run check</button>
   </header>
+
+  <section class="progress" id="progress" hidden>
+    <div class="steps" id="steps"></div>
+    <div class="step-names" id="step-names"></div>
+    <div class="detail" id="detail"></div>
+  </section>
 
   <section class="card problems" id="problems" hidden>
     <h2>Problems</h2>
@@ -73,6 +97,7 @@
   </section>
 
   <div class="grid">
+    <section class="card wide"><h2>Deployment</h2><div id="deployment" class="empty">Loading…</div></section>
     <section class="card"><h2>Chain</h2><div id="chain" class="empty">No check yet.</div></section>
     <section class="card"><h2>Blob list</h2><div id="bloblist" class="empty">No check yet.</div></section>
     <section class="card"><h2>IPFS snapshot</h2><div id="ipfs" class="empty">No check yet.</div></section>
@@ -81,11 +106,17 @@
     <section class="card wide"><h2>Organisms</h2><div id="organisms" class="empty">No check yet.</div></section>
     <section class="card wide notes" id="notes" hidden><h2>Notes</h2><ul id="note-list"></ul></section>
     <section class="card wide"><h2>Check log</h2><pre class="log" id="log"></pre></section>
+    <section class="card wide"><h2>Quickstart</h2>
+      <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish every newly released entry (maintainers; needs the publisher key)
+uv run loculus-eternal recover --config loculus-eternal.toml   # rebuild and verify the whole dataset from the chain (anyone)</pre>
+      <p class="sub" style="margin:10px 0 0">The configuration file names the contract and the blob sources; the one this page runs from is shown above. Full instructions are in the repository's <a href="https://github.com/JossDuff/loculus-eternal/blob/main/docs/runbook.md" target="_blank" rel="noopener">runbook</a>.</p>
+    </section>
   </div>
 
   <footer>
-    This page verifies the published record against the chain and the configured sources without trusting any of them.
-    It materialises nothing; to rebuild the dataset, run <code>loculus-eternal recover</code>.
+    <span>This page verifies the published record against the chain and the configured sources without trusting any of them.
+    It materialises nothing; to rebuild the dataset, run <code>loculus-eternal recover</code>.</span>
+    <a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a>
   </footer>
 </main>
 <script>
@@ -98,8 +129,41 @@
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;
   let timer = null;
+  let deploymentShown = false;
+
+  function renderDeployment(cfg) {
+    if (deploymentShown || !cfg) return;
+    deploymentShown = true;
+    if (cfg.repository) { $("repo").href = cfg.repository; }
+    const srcs = (cfg.sources || []).map(s => `<li><span class="mono">${esc(s.type)}</span> ${s.endpoints.map(e => esc(e)).join(", ")}${s.snapshotCid ? ` <span class="sub">snapshot ${esc(short(s.snapshotCid))}</span>` : ""}</li>`).join("");
+    $("deployment").className = "";
+    $("deployment").innerHTML = dl([
+      ["Contract", `${mono(cfg.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">view on explorer</a>` : ""}`],
+      ["Network", `${esc(cfg.network)}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
+      ["Deployed at block", n(cfg.deploymentBlock)],
+      ["RPC endpoint", mono(cfg.rpc)],
+      ["Blob sources", srcs ? `<ul class="srcs" style="padding-left:16px">${srcs}</ul>` : `<span class="empty">none configured</span>`],
+      cfg.backend ? ["Backend", mono(cfg.backend)] : null,
+      cfg.ipfsEndpoints && cfg.ipfsEndpoints.length ? ["IPFS endpoints", mono(cfg.ipfsEndpoints.join(", "))] : null,
+      ["Config file", mono(cfg.configFile)],
+    ]);
+  }
+
+  function renderProgress(r) {
+    const p = r.progress || {};
+    const show = !!r.running && Array.isArray(p.steps);
+    $("progress").hidden = !show;
+    if (!show) return;
+    const at = p.steps.indexOf(p.step);
+    $("steps").innerHTML = p.steps.map((s, i) => `<div class="step ${i < at ? "done" : i === at ? "now" : ""}"></div>`).join("");
+    $("step-names").innerHTML = p.steps.map((s, i) => `<span class="${i === at ? "now" : ""}">${esc(s)}</span>`).join("");
+    const last = (r.log || []).slice(-1)[0] || "";
+    $("detail").textContent = p.detail || last.replace(/^\d\d:\d\d:\d\d /, "") || `${p.step}…`;
+  }
 
   function render(r) {
+    renderDeployment(r.config);
+    renderProgress(r);
     const verdict = r.running ? "running" : (r.verdict || "idle");
     $("badge").className = `badge ${verdict}`;
     $("verdict").textContent = verdict;
@@ -185,7 +249,7 @@
     try {
       const r = await (await fetch("/api/report", {cache: "no-store"})).json();
       render(r);
-      if (r.running) timer = setTimeout(poll, 1500);
+      if (r.running) timer = setTimeout(poll, 700);
     } catch (e) {
       $("subtitle").textContent = `Cannot reach the local server: ${e}`;
     }
