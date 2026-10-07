@@ -242,9 +242,11 @@ class HealthCheck:
         result: dict = {"configured": True, "snapshotCid": cid, "pointerMatches": app_pointer(cid) == state.app_pointer}
         if not result["pointerMatches"]:
             report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
-        client = KuboClient(src.endpoints[0])
+        # The question is whether this endpoint holds the snapshot, so every read is offline
+        # with a short deadline: a node that lacks the content must say so in seconds.
+        client = KuboClient(src.endpoints[0], timeout=60)
         try:
-            manifest = parse_manifest(client.cat(f"{cid}/manifest.json"))
+            manifest = parse_manifest(client.cat(f"{cid}/manifest.json", offline=True))
             listed = [BlobRef(int(b["seq"]), bytes.fromhex(b["versionedHash"][2:])) for b in manifest["blobs"]]
             result["manifestBlobs"] = len(listed)
             try:
@@ -258,7 +260,7 @@ class HealthCheck:
             with_cid = [b for b in manifest["blobs"] if b.get("cid")]
             for b in with_cid:
                 try:
-                    data = client.block_get(b["cid"])
+                    data = client.block_get(b["cid"], offline=True)
                     if kzg.verify_blob(data, bytes.fromhex(b["versionedHash"][2:])):
                         objects_ok += 1
                 except IpfsError:
@@ -270,7 +272,7 @@ class HealthCheck:
             files = []
             for name in ("manifest.json", "container-spec.md"):
                 try:
-                    client.cat(f"{cid}/{name}")
+                    client.cat(f"{cid}/{name}", offline=True)
                     files.append(name)
                 except IpfsError:
                     report.problems.append(f"the snapshot lacks {name}")

@@ -116,11 +116,17 @@ class KuboClient:
         r = self._post("block/put", params={"cid-codec": "raw", "mhtype": "sha2-256", "pin": "true"}, files={"file": ("blob", data)})
         return r.json()["Key"]
 
-    def block_get(self, cid: str) -> bytes:
-        return self._post("block/get", params={"arg": cid}).content
+    def block_get(self, cid: str, *, offline: bool = False) -> bytes:
+        return self._post("block/get", params=self._read_params(cid, offline)).content
 
-    def cat(self, path: str) -> bytes:
-        return self._post("cat", params={"arg": path}).content
+    def cat(self, path: str, *, offline: bool = False) -> bytes:
+        return self._post("cat", params=self._read_params(path, offline)).content
+
+    @staticmethod
+    def _read_params(arg: str, offline: bool) -> dict:
+        """A read that must say whether THIS node holds the content asks offline, with a
+        short deadline; otherwise Kubo searches the public network for minutes."""
+        return {"arg": arg, "offline": "true", "timeout": "20s"} if offline else {"arg": arg}
 
     def pin_add(self, cid: str) -> None:
         self._post("pin/add", params={"arg": cid, "recursive": "true"})

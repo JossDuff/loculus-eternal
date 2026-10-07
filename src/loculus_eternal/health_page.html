@@ -182,10 +182,22 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const cfg = r.config || {}, c = r.chain || {}, s = r.sources || {}, i = r.ipfs || {};
     const has = c.blobCount !== undefined;
     const fact = (k, v, sub, cls) => `<div class="fact"><div class="k">${esc(k)}</div><div class="v ${cls || ""}">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+    // Blobs: verifiable from at least one source is the record's availability; the line
+    // under it says what each source could actually serve, so a dead source is visible.
     const blobs = s.matrix ? (s.verifiedFromAnySource === s.blobs ? `<span class="ok">${n(s.blobs)} of ${n(s.blobs)} verified</span>` : `<span class="bad">${n(s.verifiedFromAnySource)} of ${n(s.blobs)} verified</span>`) : "—";
-    const blobsSub = s.matrix ? `from ${Object.keys(s.matrix).length} source(s)` : "";
-    const ipfs = i.configured === false ? `<span class="sub">no snapshot configured</span>` : i.configured ? (i.pointerMatches && i.manifestMatchesChain !== false ? `<span class="ok">snapshot verified</span>` : `<span class="bad">snapshot does not verify</span>`) : "—";
-    const ipfsSub = i.blobObjectsRetrievable !== undefined ? `${n(i.blobObjectsRetrievable)} of ${n(i.blobObjectsListed ?? i.manifestBlobs)} blob objects retrievable` : "";
+    const kind = name => name.replace(/\(.*$/, "");
+    const blobsSub = s.matrix ? Object.entries(s.matrix).map(([name, m]) => `<span class="${m.verified === s.blobs ? "ok" : m.verified === 0 ? "bad" : "warn"}">${esc(kind(name))} ${n(m.verified)}</span>`).join(" · ") : "";
+    // IPFS: verified only when the snapshot is the publisher's, its manifest was read and
+    // matches the chain, and every listed blob object came back. Anything less says so.
+    const listed = i.blobObjectsListed ?? i.manifestBlobs;
+    let ipfs, ipfsSub = "";
+    if (i.configured === false) ipfs = `<span class="sub">no snapshot configured</span>`;
+    else if (!i.configured) ipfs = "—";
+    else if (i.error) { ipfs = `<span class="bad">snapshot unreachable</span>`; ipfsSub = esc(i.error); }
+    else if (!i.pointerMatches) ipfs = `<span class="bad">not the publisher's snapshot</span>`;
+    else if (i.manifestMatchesChain === false) ipfs = `<span class="bad">manifest does not match the chain</span>`;
+    else if (i.blobObjectsRetrievable !== undefined && i.blobObjectsRetrievable < listed) { ipfs = `<span class="warn">snapshot incomplete</span>`; ipfsSub = `${n(i.blobObjectsRetrievable)} of ${n(listed)} blob objects retrievable`; }
+    else { ipfs = `<span class="ok">snapshot verified</span>`; ipfsSub = listed !== undefined ? `${n(listed)} blob objects retrievable` : ""; }
     const checked = r.finished_at ? new Date(r.finished_at * 1000).toLocaleString() : r.running ? "running now" : "—";
     const checkedSub = r.finished_at ? `took ${Math.round(r.finished_at - r.started_at)} s · verdict ${esc(r.verdict)}` : "";
     $("facts").innerHTML =
