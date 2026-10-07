@@ -88,7 +88,8 @@ loculus-eternal upload --config loculus-eternal.toml             # publish
 The last line of every run begins with `RESULT:` and says SUCCESS, NOTHING TO DO, CHECK
 COMPLETE, DRY RUN PASSED, REFUSED or FAILED, followed by the reason. Exit status 0 means
 published or nothing to do. Status 1 means the command refused before spending anything;
-the message says why. Status 3 means sending started and stopped; the journal is kept and
+the message says why. Status 3 means the run failed: the backend or the RPC endpoint
+could not be used, or sending started and stopped; the journal is kept and
 the next run resumes it, or, if the batch had to be set aside, the next run starts a fresh
 one after the torn blobs once the chain has finalised.
 
