@@ -14,9 +14,13 @@ check over today's stream takes well under a minute. To rebuild the files, run
 
 ## What one check does
 
-The page presents the work as three checks: the **contract check** (the first two rows
-below), the **blob check** (the next three, with the backend's counts shown beside the
-published ones) and the **IPFS check** (the last). The steps in detail:
+The page opens with the facts that matter most: the contract address and network, the
+publisher (the only key that can publish), when the last upload landed, how many blobs
+verify from the sources, whether the IPFS snapshot verifies, and when this check last ran.
+Below them the work is presented as three checks: the **contract check** (the first two rows
+below), the **blob check** (the next two) and the **IPFS check** (the last). The check never
+consults the live Pathoplexus database: the record is judged on its own, against the chain.
+The steps in detail:
 
 | Step | What is checked | What a problem looks like |
 |---|---|---|
@@ -24,7 +28,6 @@ published ones) and the **IPFS check** (the last). The steps in detail:
 | Blob list | The ordered list of versioned hashes from event logs reproduces `head` and `blobCount` | the list does not match the chain, or logs cannot be read |
 | Sources | Every configured source is asked for every blob; each candidate is verified by recomputing its KZG commitment | a blob that no source can supply (failing); a source serving corrupt bytes (noted, rejected) |
 | Stream | The outer records of the verified blobs: header, batch headers, body lengths and digests, indexes, manifests; the header's chain and contract binding; torn ranges | a torn range at the end (an unfinished or lost upload); a header naming another chain or contract |
-| Backend | Per organism, the backend's released count against published and withdrawn entries | the backend unreachable (noted only: it does not affect the record) |
 | IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; its manifest matches the chain; its blob objects are retrievable and verify; the spec is present | a snapshot that is not the publisher's current one |
 
 The **verdict** is healthy when the contract is reachable, the blob list verifies, every
@@ -34,8 +37,7 @@ is off but the record itself is intact. Every problem is listed at the top of th
 
 Blobs older than the 18-day consensus retention are expected to be missing from a beacon
 source; the page says how many of a source's misses fall outside retention so that is not
-read as a failure. Released counts at the backend include restricted entries, which are never
-published, so they are expected to exceed the published counts.
+read as a failure.
 
 ## Running it
 
@@ -45,9 +47,8 @@ loculus-eternal health --config loculus-eternal.toml --once     # one check, JSO
 ```
 
 The configuration needs `[chain]`, the `[[sources]]` to check, and, for the snapshot check,
-an `ipfs` source with the published `snapshot_cid`. `[backend]` is optional; with it the page
-shows released counts per organism. No `[upload]` section and no key are needed, which is the
-point: anyone can run this against anyone's deployment.
+an `ipfs` source with the published `snapshot_cid`. `[backend]` and `[upload]` are ignored
+and no key is needed, which is the point: anyone can run this against anyone's deployment.
 
 The page is one HTML file with inline styles and script and loads nothing from anywhere, so
 it works offline against a local node. A check runs when the page opens; the button runs
@@ -56,9 +57,9 @@ and what it is doing, including how many blobs each source has been asked for so
 
 The page opens with a **Deployment** card: the contract address with a link to a block
 explorer, the network, the deployment block, and the inputs this check runs with: the RPC
-endpoint, every blob source, the backend, the IPFS endpoints and the config file. Every URL
+endpoint, every blob source, the IPFS endpoints and the config file. Every URL
 is reduced to its scheme and host before it reaches the page, because hosted RPC and archive
 URLs carry API keys in their path, and this page is meant to be shown around. A quickstart
-card gives the two commands that matter, and the header links to the repository.
+card gives the two commands that matter, and the footer links to the repository.
 
 Behaviour IDs for the page are `H1`–`H7` in `docs/test-plan.md`.

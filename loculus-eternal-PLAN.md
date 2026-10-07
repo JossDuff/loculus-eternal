@@ -598,8 +598,10 @@ for that guarantee.
 
 **Health page — DECIDED 2026-10-07.** A local one-page check (`loculus-eternal health`) that
 verifies the record against the chain and the sources without materialising anything, reads
-its inputs from the config file, and also shows the backend's released counts per organism.
-A full materialisation stays the recovery command's job.
+its inputs from the config file. A full materialisation stays the recovery command's job.
+Backend counts were shown at first and removed the same day: the page judges the record on
+its own, independent of the live database, and leads with the contract and publisher
+addresses, the last upload, blob and IPFS verification, and the time of the last check.
 
 **Hosting — DEFERRED 2026-09-30 to before mainnet genesis.** The upload command is a plain
 CLI with file and environment configuration so it can run anywhere. Likely answer: a
