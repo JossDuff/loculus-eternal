@@ -70,17 +70,13 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
-    if mode == "check" and not args.with_key:
-        uploader = Uploader(cfg)
-    else:
-        uploader = Uploader.with_key(cfg, configuration.publisher_key())
-    from loculus_eternal.upload.sync import SyncError
-
     try:
+        # Construction already talks to the endpoint (for the chain id), so it is inside the try.
+        if mode == "check" and not args.with_key:
+            uploader = Uploader(cfg)
+        else:
+            uploader = Uploader.with_key(cfg, configuration.publisher_key())
         report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
-    except SyncError as e:
-        print(f"backend problem: {e}", file=sys.stderr)
-        return 1
     except (RequestException, ChainError) as e:
         # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
         # in the journal; the next run resumes from it.

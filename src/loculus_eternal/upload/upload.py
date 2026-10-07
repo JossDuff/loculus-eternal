@@ -32,7 +32,7 @@ from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
-from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
+from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
 from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_vanished, iter_new_entries
 
 
@@ -131,7 +131,9 @@ class Uploader:
             self.log(f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, {st.already_published:,} already published, {st.new:,} new" + (f", {len(gone)} published but no longer in the feed" if gone else ""))
         # An organism that is in the stream but that the backend no longer serves at all: every
         # one of its published entries has vanished, and the maintainer should hear about it.
-        for organism in view.decoded.organisms():
+        # Only when the backend chose the list: an organism left out of a configured list was
+        # left out on purpose, and reporting it vanished could lead to withdrawing it.
+        for organism in view.decoded.organisms() if self.cfg.backend.organisms is None else []:
             if organism in organisms:
                 continue
             st = SyncStats(organism)
@@ -219,13 +221,18 @@ class Uploader:
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._withdraw_vanished = withdraw_vanished
-        # Cheap and fallible things first: the backend's organism list before the chain read.
-        client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
+        self._client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
         try:
-            self._organism_list = self._organisms(client)
+            return self._run(mode, report, started)
         except SyncError as e:
-            raise SystemExit(f"cannot determine the organisms to publish: {e}") from e
-        self._client = client
+            # The backend, not the chain, is the problem: nothing was sent because of it,
+            # and the run still ends with its result line and report.
+            report.outcome = "failed"
+            report.message = f"backend problem: {e}"
+            self.log(report.message)
+            return self._done(report, started)
+
+    def _run(self, mode: str, report: UploadReport, started: float) -> UploadReport:
         with BlobStore(self.data_dir / "stream") as store:
             # An interrupted batch comes first, before the chain is even read: its blobs are in
             # the journal, not yet in the store or necessarily in any archive, so finishing it
@@ -242,7 +249,10 @@ class Uploader:
                     self._finish(journal, store, report)
                 elif not self._resume(journal, store, report):
                     return self._done(report, started)
-
+            # The backend is asked only now: an interrupted batch has transactions racing
+            # their inclusion window, and finishing it must not wait on a backend outage.
+            # It still comes before the chain read, which is the expensive step.
+            self._organism_list = self._organisms(self._client)
             self.log("reading the contract and the published stream")
             view = self._view(store)
             self.log(f"contract holds {view.state.blob_count} blob(s) in {len(view.decoded.batches)} complete batch(es)")
@@ -425,16 +435,24 @@ class Uploader:
             cleaned = unpin_orphans(journal.ipfs_publish, journal.blob_cids, self.log)
             if cleaned:
                 self.log(f"removed the abandoned batch's snapshot and blob objects from {len(cleaned)} IPFS endpoint(s)")
-        # The journal and its blob files are kept under abandoned/: they are the only record of
-        # what was sent, and the exact bytes may be wanted to understand what happened.
+        # The journal is kept under abandoned/ as the record of what was planned. The blob
+        # files are kept only if something was sent: then they are the exact bytes behind a
+        # transaction on chain and may be wanted to understand what happened. A dry run or a
+        # refusal sent nothing, and its blobs would only pile up on disk.
         aside = self.data_dir / "abandoned"
         aside.mkdir(exist_ok=True)
         # Nanoseconds, so two batches set aside within the same second never collide.
         stamp = f"batch-{journal.batch}-from-{journal.first_blob_seq}-{time.time_ns()}"
         self.submitter.journal_path.replace(aside / f"{stamp}.json")
         blobs_dir = Path(journal.blobs_dir)
-        if blobs_dir.exists():
+        if not blobs_dir.exists():
+            return
+        if any(t.attempts or t.reverted_attempts for t in journal.txs):
             blobs_dir.replace(aside / stamp)
+        else:
+            for p in blobs_dir.glob("*.blob"):
+                p.unlink()
+            blobs_dir.rmdir()
 
     def _done(self, report: UploadReport, started: float) -> UploadReport:
         report.duration_seconds = round(time.time() - started, 2)

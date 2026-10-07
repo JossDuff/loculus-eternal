@@ -73,6 +73,7 @@ class SentAttempt:
     at: float
     max_priority_fee_per_gas: int = 0
     sent_block: int | None = None
+    gas_limit: int | None = None
 
 
 @dataclass
@@ -93,6 +94,7 @@ class PlannedTx:
     effective_gas_price: int | None = None
     block_timestamp: int | None = None
     reverts: int = 0
+    reverted_attempts: list[SentAttempt] = field(default_factory=list)   # what was sent and reverted; the only record of that spending
 
 
 @dataclass
@@ -121,7 +123,7 @@ class Journal:
     @classmethod
     def load(cls, path: Path) -> "Journal":
         d = json.loads(path.read_text())
-        d["txs"] = [PlannedTx(**{**t, "attempts": [SentAttempt(**a) for a in t["attempts"]]}) for t in d["txs"]]
+        d["txs"] = [PlannedTx(**{**t, "attempts": [SentAttempt(**a) for a in t["attempts"]], "reverted_attempts": [SentAttempt(**a) for a in t.get("reverted_attempts", [])]}) for t in d["txs"]]
         return cls(**d)
 
 
@@ -331,17 +333,20 @@ class Submitter:
                 continue
             if receipt["status"] != 1:
                 # The blob gas of this attempt is gone either way. Whether the batch can go
-                # on depends on the contract: if its blob count still equals this
-                # transaction's expected sequence, nothing moved (an out-of-gas revert, for
-                # instance) and the same transaction is simply sent again with a fresh
-                # estimate at a new nonce. If the count moved past, the batch is broken.
+                # on depends on the contract: if its blob count still sits where the earliest
+                # unincluded transaction expects it, nothing moved and the transaction is
+                # simply sent again with a fresh estimate at a new nonce. That covers an
+                # out-of-gas revert, and the transactions behind it that reverted on the
+                # sequence guard because of it. If the count moved past, the batch is broken.
                 count_now = self.contract.functions.blobCount().call()
+                expected_now = next(t.seqs[0] for t in journal.txs if t.status not in ("included", "finalized"))
                 tx.reverts += 1
-                if count_now != tx.seqs[0] or tx.reverts > 3:
+                if count_now != expected_now or tx.reverts > 3:
                     raise RevertedOnChain(f"transaction {tx.index + 1} ({receipt['transactionHash'].hex()}) reverted on chain in block {receipt['blockNumber']}; its blob gas is lost")
-                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: reverted in block {receipt['blockNumber']} (used {receipt['gasUsed']} of its gas limit) without moving the contract; sending it again with a fresh gas estimate")
+                self.log(f"transaction {tx.index + 1}/{len(journal.txs)}: {receipt['transactionHash'].hex()} reverted in block {receipt['blockNumber']} (used {receipt['gasUsed']} of its gas limit) without moving the contract; sending it again with a fresh gas estimate")
                 tx.status = "planned"
                 tx.nonce = None
+                tx.reverted_attempts.extend(tx.attempts)
                 tx.attempts = []
                 journal.save(self.journal_path)
                 pending.remove(tx)
@@ -375,7 +380,8 @@ class Submitter:
             if len(head.attempts) > self.policy.escalation_attempts:
                 raise SubmitError(f"transaction {head.index + 1} was not included after {len(head.attempts)} attempts; the journal is kept so a later run can resume")
             self.log(f"transaction {head.index + 1}/{len(journal.txs)}: not included yet, replacing with higher fees")
-            self._send(journal, head, escalation=len(head.attempts), gas=_gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
+            # A replacement carries the same transaction, so it keeps the limit it was sent with.
+            self._send(journal, head, escalation=len(head.attempts), gas=last.gas_limit or _gas_limit(head.gas_used or NOMINAL_GAS_LIMIT // 2))
 
     def _await_finality_all(self, journal: Journal) -> bool:
         """Wait until the block of the last included transaction is final, then confirm every
@@ -468,7 +474,7 @@ class Submitter:
         # Record the attempt before broadcasting. If the broadcast's response is lost, the
         # node may still have the transaction; a resume then waits for this hash at this
         # nonce instead of sending a second copy at a fresh nonce.
-        attempt = SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"])
+        attempt = SentAttempt(tx_hash=tx_hash, max_fee_per_gas=txn["maxFeePerGas"], max_fee_per_blob_gas=txn["maxFeePerBlobGas"], at=time.time(), max_priority_fee_per_gas=txn["maxPriorityFeePerGas"], gas_limit=gas)
         tx.attempts.append(attempt)
         tx.status = "sent"
         journal.save(self.journal_path)

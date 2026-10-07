@@ -16,6 +16,7 @@ from pathlib import Path
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
 from loculus_eternal.sources.blobscan import PUBLIC_API
+from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND
 
 PUBLISHER_KEY_ENV = "LOCULUS_ETERNAL_PUBLISHER_KEY"
 KNOWN_GENESIS = {1: MAINNET_GENESIS_TIME, 11155111: SEPOLIA_GENESIS_TIME}
@@ -148,7 +149,7 @@ def load(path: str | Path) -> Config:
             beacon_genesis_time=genesis,
             seconds_per_slot=chain_raw.get("seconds_per_slot", SECONDS_PER_SLOT),
             deployment_block=chain_raw.get("deployment_block", 0),
-            max_requests_per_second=float(chain_raw.get("max_requests_per_second", 5)),
+            max_requests_per_second=float(chain_raw.get("max_requests_per_second", DEFAULT_MAX_REQUESTS_PER_SECOND)),
         )
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
         backend = None

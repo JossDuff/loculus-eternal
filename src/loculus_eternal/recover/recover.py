@@ -17,7 +17,7 @@ from typing import Callable
 from web3 import Web3
 
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
-from loculus_eternal.rpc import connect
+from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND, connect
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
 from loculus_eternal.format.entrystore import safe_dirname
 from loculus_eternal.sources.base import BlobSource, SourceChain
@@ -52,7 +52,7 @@ class RecoveryConfig:
     manifest_sources: list[ManifestSource] = field(default_factory=lambda: [ManifestSource(logs=True)])
     deployment_block: int = 0
     decode: bool = True
-    max_requests_per_second: float = 5.0
+    max_requests_per_second: float = DEFAULT_MAX_REQUESTS_PER_SECOND
     log: Callable[[str], None] = print
 
 
