@@ -32,7 +32,7 @@ from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, MAX_BLOBS_PER_TX, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
-from loculus_eternal.upload.sync import BackendClient, SyncStats, find_vanished, iter_new_entries
+from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_vanished, iter_new_entries
 
 
 @dataclass
@@ -101,16 +101,18 @@ class Uploader:
                 src.set_snapshot(current or src.snapshot_cid)
         return load_published_view(self.w3, self.cfg.chain.contract, SourceChain(self.cfg.sources), store, deployment_block=self.cfg.chain.deployment_block, spill_dir=self.data_dir / "spill" / "decoded", log=self.log)
 
-    def _sync(self, view: PublishedView, stats: list[SyncStats]):
+    def _organisms(self, client: BackendClient) -> list[str]:
+        """The organisms to sync: the configured list, or every organism the backend serves,
+        so a newly added organism is picked up by the next run without a configuration change."""
+        if self.cfg.backend.organisms is not None:
+            return list(self.cfg.backend.organisms)
+        organisms = client.organisms()
+        self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
+        return organisms
+
+    def _sync(self, view: PublishedView, stats: list[SyncStats], client: BackendClient, organisms: list[str]):
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
-        client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
-        organisms = self.cfg.backend.organisms
-        if organisms is None:
-            # Every organism the backend serves, so a newly added organism is picked up by
-            # the next run without a configuration change.
-            organisms = client.organisms()
-            self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
         for organism in organisms:
             feed = client.fetch(organism)
             st = SyncStats(organism)
@@ -118,6 +120,16 @@ class Uploader:
             yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st)
             gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
             self.log(f"{organism}: {st.total} released, {st.open} open, {st.already_published} already published, {st.new} new" + (f", {len(gone)} published but no longer in the feed" if gone else "") + (" (feed unchanged, from cache)" if feed.from_cache else ""))
+        # An organism that is in the stream but that the backend no longer serves at all: every
+        # one of its published entries has vanished, and the maintainer should hear about it.
+        for organism in view.decoded.organisms():
+            if organism in organisms:
+                continue
+            st = SyncStats(organism)
+            stats.append(st)
+            gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
+            if gone:
+                self.log(f"{organism}: the backend no longer serves this organism; its {len(gone)} published entries are no longer in any feed")
 
     def _tooling(self, view: PublishedView) -> list[tuple[str, bytes]]:
         """The spec and source files, when none are in the stream yet or the version changed."""
@@ -198,6 +210,13 @@ class Uploader:
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._withdraw_vanished = withdraw_vanished
+        # Cheap and fallible things first: the backend's organism list before the chain read.
+        client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
+        try:
+            self._organism_list = self._organisms(client)
+        except SyncError as e:
+            raise SystemExit(f"cannot determine the organisms to publish: {e}") from e
+        self._client = client
         with BlobStore(self.data_dir / "stream") as store:
             # An interrupted batch comes first, before the chain is even read: its blobs are in
             # the journal, not yet in the store or necessarily in any archive, so finishing it
@@ -235,7 +254,7 @@ class Uploader:
             # runs on disk; the whole batch is never in memory. The encoder reads the
             # withdrawals only after the entries, so by then every feed has been seen and
             # the vanished entries are known.
-            batch = encoder.encode_batch(self._sync(view, stats), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD, withdrawals=_WithdrawalsLater(lambda: self._withdrawals(stats, report)))
+            batch = encoder.encode_batch(self._sync(view, stats, self._client, self._organism_list), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD, withdrawals=_WithdrawalsLater(lambda: self._withdrawals(stats, report)))
         except EmptyBatch:
             report.sync = [_stats_json(s) for s in stats]
             report.vanished = {s.organism: s.vanished for s in stats if s.vanished}

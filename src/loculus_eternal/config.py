@@ -150,11 +150,15 @@ def load(path: str | Path) -> Config:
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
         backend = None
         if "backend" in raw:
-            organisms = raw["backend"].get("organisms", "all")
+            if "organisms" not in raw["backend"]:
+                # Publishing into an immutable stream is not something to default into: the
+                # operator writes "all" or a list.
+                raise ConfigError('backend.organisms is required: "all" to publish every organism the backend serves, or a list of organism names')
+            organisms = raw["backend"]["organisms"]
             if organisms == "all":
                 organisms = None
-            elif not isinstance(organisms, list) or not organisms:
-                raise ConfigError('backend.organisms must be "all" (the default) or a non-empty list of organism names')
+            elif not isinstance(organisms, list) or not organisms or not all(isinstance(o, str) and o.strip() for o in organisms):
+                raise ConfigError('backend.organisms must be "all" or a non-empty list of non-empty organism names')
             backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms)
         upload = None
         if "upload" in raw:

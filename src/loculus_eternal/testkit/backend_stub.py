@@ -38,6 +38,7 @@ class BackendStub:
         self._lock = threading.Lock()
         self.lines: dict[str, list[dict]] = {}
         self.files: dict[str, tuple] = {}   # organism -> (path to zstd NDJSON, record count): served as-is
+        self.enumerate_organisms = True     # False: the API description lacks the Organism enum
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -52,7 +53,8 @@ class BackendStub:
                 if url.path == "/api-docs":
                     with stub._lock:
                         names = sorted(set(stub.lines) | set(stub.files))
-                    doc = {"openapi": "3.0.1", "paths": {}, "components": {"schemas": {"Organism": {"description": "valid names of organisms that this Loculus instance supports", "enum": names}}}}
+                    schema = {"description": "valid names of organisms that this Loculus instance supports", "enum": names} if stub.enumerate_organisms else {"type": "string"}
+                    doc = {"openapi": "3.0.1", "paths": {}, "components": {"schemas": {"Organism": schema}}}
                     return self._reply(200, json.dumps(doc).encode(), "application/json")
                 if len(parts) != 2 or parts[1] != "get-released-data":
                     return self._reply(404, b'{"detail":"not found"}', "application/json")

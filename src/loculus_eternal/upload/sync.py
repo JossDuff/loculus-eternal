@@ -59,8 +59,8 @@ class BackendClient:
             names = r.json()["components"]["schemas"]["Organism"]["enum"]
         except (ValueError, KeyError, TypeError) as e:
             raise SyncError(f"{url} does not enumerate organisms the way Loculus does ({e}); list them in the config instead") from e
-        if not names or not all(isinstance(n, str) and n for n in names):
-            raise SyncError(f"{url} lists no organisms")
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+            raise SyncError(f"{url} does not list organisms as a list of names; list them in the config instead")
         return sorted(names)
 
     def fetch(self, organism: str) -> OrganismFeed:

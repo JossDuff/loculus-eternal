@@ -82,7 +82,7 @@ def test_U1_real_released_lines_pass_the_shape_check_and_project(organism):
     assert set(entry["unalignedNucleotideSequences"]) == set(line["unalignedNucleotideSequences"])
 
 
-def test_config_expands_environment_references(tmp_path, monkeypatch):
+def test_U17_config_expands_environment_references(tmp_path, monkeypatch):
     from loculus_eternal import config as configuration
 
     cfg = tmp_path / "c.toml"
@@ -102,10 +102,18 @@ def test_U16_organisms_are_discovered_from_the_backend(backend, tmp_path):
     client = BackendClient(backend.url, tmp_path / "feeds")
     assert client.organisms() == ["marburg", "zika"]
     cfg = tmp_path / "c.toml"
-    cfg.write_text(f'[chain]\nrpc_url = "http://x"\ncontract = "0x0000000000000000000000000000000000000001"\nchain_id = 1\n[backend]\nurl = "{backend.url}"\n')
-    assert configuration.load(cfg).backend.organisms is None
-    cfg.write_text(cfg.read_text() + 'organisms = []\n')
-    with pytest.raises(SystemExit, match="organisms"):
+    base = f'[chain]\nrpc_url = "http://x"\ncontract = "0x0000000000000000000000000000000000000001"\nchain_id = 1\n[backend]\nurl = "{backend.url}"\n'
+    cfg.write_text(base)
+    with pytest.raises(SystemExit, match="organisms is required"):
         configuration.load(cfg)
-    cfg.write_text(cfg.read_text().replace("organisms = []\n", 'organisms = ["zika"]\n'))
+    cfg.write_text(base + 'organisms = "all"\n')
+    assert configuration.load(cfg).backend.organisms is None
+    for bad in ('organisms = []\n', 'organisms = ["zika", ""]\n', 'organisms = ["zika", 1]\n', 'organisms = "some"\n'):
+        cfg.write_text(base + bad)
+        with pytest.raises(SystemExit, match="organisms"):
+            configuration.load(cfg)
+    cfg.write_text(base + 'organisms = ["zika"]\n')
     assert configuration.load(cfg).backend.organisms == ["zika"]
+    backend.enumerate_organisms = False
+    with pytest.raises(SyncError, match="list them in the config"):
+        BackendClient(backend.url, tmp_path / "feeds2").organisms()
