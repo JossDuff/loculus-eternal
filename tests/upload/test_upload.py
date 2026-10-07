@@ -564,3 +564,74 @@ def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, 
     world["backend"].enumerate_organisms = False
     with pytest.raises(SystemExit, match="list them in the config"):
         uploader(world).run()
+
+
+def test_U18_batch_end_transaction_waits_for_its_predecessors_and_gets_its_own_estimate(world, tmp_path):
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_E{i}") for i in range(9)])  # two transactions
+    up = uploader(world)
+    simulated = []
+    original = up.submitter.simulate
+
+    def spy(tx, fees):
+        simulated.append((tx.index, [t["status"] for t in json.loads((up.data_dir / "journal.json").read_text())["txs"][: tx.index]] if (up.data_dir / "journal.json").exists() else []))
+        return original(tx, fees)
+
+    up.submitter.simulate = spy
+    report = up.run()
+    assert report.outcome == "published", report.message
+    indices = [i for i, _ in simulated]
+    assert indices.count(len(report.transactions) - 1) >= 1, "the batch-end transaction was simulated on its own"
+    last_sim = [pred for i, pred in simulated if i == len(report.transactions) - 1][-1]
+    assert all(s in ("included", "finalized") for s in last_sim), "and only after every predecessor was included"
+    assert up.data_dir.joinpath("reports").exists()
+
+
+def test_U19_a_revert_that_moved_nothing_is_resent_not_abandoned(world, tmp_path):
+    """The batch-end transaction is sent with too little gas on purpose: it reverts on chain
+    without touching the contract, and the submitter sends it again with a fresh estimate."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_G{i}") for i in range(9)])
+    up = uploader(world)
+    starved = []
+
+    def starve_once(tx):
+        if tx.is_batch_end and not starved:
+            starved.append(tx.index)
+            return 30_000  # enough to pass intrinsic checks, far too little to run
+        return None
+
+    up.submitter.gas_override = starve_once
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert starved and report.transactions[-1]["attempts"] == 1
+    done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
+    assert done["txs"][-1]["reverts"] == 1
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+    register_in_archive(world, report)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"] and rec.decode["torn"] == []
+
+
+def test_U20_an_abandoned_batch_ends_the_run_and_keeps_its_blobs(world):
+    """Another upload with the same key breaks the batch mid-way: the run reports failure,
+    keeps the journal and blob files under abandoned/, and plans nothing more."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_K{i}") for i in range(9)])
+    up = uploader(world)
+
+    def race(tx):
+        if tx.index == 0:
+            from loculus_eternal.format.chunks import pack_blobs
+            from loculus_eternal.testkit import publish_blobs
+
+            time.sleep(0.5)
+            publish_blobs(anvil, pack_blobs(b"\x09" * 500), last_blob_chunk_count=17, is_batch_end=True)
+
+    up.submitter.after_send = race
+    report = up.run()
+    assert report.outcome == "failed" and "another upload ran" in report.message
+    aside = list((up.data_dir / "abandoned").glob("batch-*"))
+    listing = {p.name: (sorted(q.name for q in p.iterdir()) if p.is_dir() else "file") for p in aside}
+    assert any(p.suffix == ".json" for p in aside) and any(p.is_dir() and list(p.glob("*.blob")) for p in aside), f"journal and blob files kept: {listing}"
+    assert not (up.data_dir / "journal.json").exists()
+    assert report.batch is not None and len(list((up.data_dir / "abandoned").glob("*.json"))) == 1, "no second batch was planned in the same run"
