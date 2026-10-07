@@ -10,8 +10,7 @@ deployment_block = 0                           # CHANGE: the block the contract 
 
 [backend]
 url = "https://backend.pathoplexus.org"
-organisms = ["andv", "cchf", "dengue", "ebola-bdbv", "ebola-sudan", "ebola-zaire", "hmpv",
-             "marburg", "measles", "mpox", "rsv-a", "rsv-b", "west-nile", "yellow-fever", "zika"]
+organisms = "all"                              # every organism the backend serves, asked each run; or a list of names
 
 [upload]
 data_dir = "upload-data"

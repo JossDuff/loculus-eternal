@@ -49,6 +49,11 @@ class BackendStub:
                 url = urlparse(self.path)
                 parts = url.path.strip("/").split("/")
                 stub.requests.append((self.path, dict(self.headers)))
+                if url.path == "/api-docs":
+                    with stub._lock:
+                        names = sorted(set(stub.lines) | set(stub.files))
+                    doc = {"openapi": "3.0.1", "paths": {}, "components": {"schemas": {"Organism": {"description": "valid names of organisms that this Loculus instance supports", "enum": names}}}}
+                    return self._reply(200, json.dumps(doc).encode(), "application/json")
                 if len(parts) != 2 or parts[1] != "get-released-data":
                     return self._reply(404, b'{"detail":"not found"}', "application/json")
                 organism = parts[0]

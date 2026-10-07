@@ -105,7 +105,13 @@ class Uploader:
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
         client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
-        for organism in self.cfg.backend.organisms:
+        organisms = self.cfg.backend.organisms
+        if organisms is None:
+            # Every organism the backend serves, so a newly added organism is picked up by
+            # the next run without a configuration change.
+            organisms = client.organisms()
+            self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
+        for organism in organisms:
             feed = client.fetch(organism)
             st = SyncStats(organism)
             stats.append(st)

@@ -101,6 +101,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### U — upload command
 
+- **U16 — all organisms.** With `organisms = "all"` the upload command asks the backend's API description for its organism list each run, so an organism added to the backend is published by the next run without a configuration change; a backend that does not enumerate organisms is a clear error that points at listing them in the config.
 - **U1 — sync and eligibility.** The release feed is fetched with `compression=zstd`, cached by ETag and reused on 304; only entries whose terms are OPEN are eligible and a restricted entry becomes eligible when it opens; eligible lines are projected to the published form; a line whose top-level shape differs from the pinned schema stops the run before anything is published; the real released lines in `tests/fixtures/released/` pass the check.
 - **U2 — published set from the chain.** A fresh data directory on another machine derives what is published from the contract and the stream, publishes only the delta, and a rerun with nothing new sends no transaction and exits 0; the recovered files afterwards contain exactly the published entries.
 - **U3 — check and dry run.** `--check` reports the pending count and estimated cost and `--dry-run` additionally encodes, simulates and checks fees and balance; neither sends anything or leaves a journal behind.

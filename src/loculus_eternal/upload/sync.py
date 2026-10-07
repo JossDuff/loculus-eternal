@@ -46,6 +46,23 @@ class BackendClient:
         self._etags_path = self.cache_dir / "etags.json"
         self._etags: dict[str, str] = json.loads(self._etags_path.read_text()) if self._etags_path.exists() else {}
 
+    def organisms(self) -> list[str]:
+        """Every organism the backend serves, from the enum in its OpenAPI description."""
+        url = f"{self.base_url}/api-docs"
+        try:
+            r = self.client.get(url, headers={"Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise SyncError(f"cannot reach {url} to list the backend's organisms: {e}") from e
+        if r.status_code != 200:
+            raise SyncError(f"{url} returned HTTP {r.status_code}; list the organisms in the config instead")
+        try:
+            names = r.json()["components"]["schemas"]["Organism"]["enum"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise SyncError(f"{url} does not enumerate organisms the way Loculus does ({e}); list them in the config instead") from e
+        if not names or not all(isinstance(n, str) and n for n in names):
+            raise SyncError(f"{url} lists no organisms")
+        return sorted(names)
+
     def fetch(self, organism: str) -> OrganismFeed:
         """Download the organism's release feed unless the cached copy is still current."""
         cached = self.cache_dir / f"{organism}.ndjson.zst"

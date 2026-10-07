@@ -41,7 +41,7 @@ class ChainConfig:
 @dataclass
 class BackendConfig:
     url: str
-    organisms: list[str]
+    organisms: list[str] | None   # None means every organism the backend serves, asked each run
 
 
 @dataclass
@@ -150,7 +150,12 @@ def load(path: str | Path) -> Config:
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
         backend = None
         if "backend" in raw:
-            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=list(raw["backend"]["organisms"]))
+            organisms = raw["backend"].get("organisms", "all")
+            if organisms == "all":
+                organisms = None
+            elif not isinstance(organisms, list) or not organisms:
+                raise ConfigError('backend.organisms must be "all" (the default) or a non-empty list of organism names')
+            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms)
         upload = None
         if "upload" in raw:
             u = raw["upload"]

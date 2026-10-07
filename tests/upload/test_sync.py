@@ -92,3 +92,20 @@ def test_config_expands_environment_references(tmp_path, monkeypatch):
     monkeypatch.delenv("TEST_RPC_KEY")
     with pytest.raises(SystemExit, match="TEST_RPC_KEY"):
         configuration.load(cfg)
+
+
+def test_U16_organisms_are_discovered_from_the_backend(backend, tmp_path):
+    from loculus_eternal import config as configuration
+
+    backend.set_lines("zika", [released_line("zika", "PP_1", 1)])
+    backend.set_lines("marburg", [released_line("marburg", "PP_2", 1)])
+    client = BackendClient(backend.url, tmp_path / "feeds")
+    assert client.organisms() == ["marburg", "zika"]
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(f'[chain]\nrpc_url = "http://x"\ncontract = "0x0000000000000000000000000000000000000001"\nchain_id = 1\n[backend]\nurl = "{backend.url}"\n')
+    assert configuration.load(cfg).backend.organisms is None
+    cfg.write_text(cfg.read_text() + 'organisms = []\n')
+    with pytest.raises(SystemExit, match="organisms"):
+        configuration.load(cfg)
+    cfg.write_text(cfg.read_text().replace("organisms = []\n", 'organisms = ["zika"]\n'))
+    assert configuration.load(cfg).backend.organisms == ["zika"]
