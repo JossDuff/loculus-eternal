@@ -152,24 +152,32 @@ def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: Syn
     called every PROGRESS_EVERY lines so a long feed shows signs of life."""
     for line in iter_lines(feed):
         stats.total += 1
-        if progress is not None and stats.total % PROGRESS_EVERY == 0:
-            progress(stats.total, feed.total_records)
         check_shape(organism, line)
         stats.seen.add(line["metadata"]["accessionVersion"])
-        if not is_eligible(line):
-            stats.restricted += 1
-            continue
-        stats.open += 1
-        m = line["metadata"]
-        if is_published(m["accession"], int(m["version"])):
-            stats.already_published += 1
-            continue
-        try:
-            entry = Entry.from_released_line(organism, line)
-        except FormatError as e:
-            raise SyncError(f"{organism} {m.get('accessionVersion')}: {e}") from e
-        stats.new += 1
-        yield entry
+        entry = _classify(organism, line, is_published, stats)
+        # Report after the line is classified, so the "new" count includes this line.
+        if progress is not None and stats.total % PROGRESS_EVERY == 0:
+            progress(stats.total, feed.total_records)
+        if entry is not None:
+            yield entry
+
+
+def _classify(organism: str, line: dict, is_published, stats: SyncStats):
+    """Count the line as restricted, already published or new; return the entry if new."""
+    if not is_eligible(line):
+        stats.restricted += 1
+        return None
+    stats.open += 1
+    m = line["metadata"]
+    if is_published(m["accession"], int(m["version"])):
+        stats.already_published += 1
+        return None
+    try:
+        entry = Entry.from_released_line(organism, line)
+    except FormatError as e:
+        raise SyncError(f"{organism} {m.get('accessionVersion')}: {e}") from e
+    stats.new += 1
+    return entry
 
 
 def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple[list[dict], SyncStats]:
