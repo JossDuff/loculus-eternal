@@ -216,8 +216,8 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     seen = []
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
     steps = [st for st, _ in seen]
-    assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["chain", "blob list", "sources", "stream", "IPFS snapshot", "backend"]
-    assert any(d and "blobs asked for" in d for _, d in seen)
+    assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check", "IPFS check"]
+    assert any(d and "blobs asked for" in d for _, d in seen) and any(d and "backend" in d for _, d in seen)
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):
