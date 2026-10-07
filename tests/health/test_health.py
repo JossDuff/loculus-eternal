@@ -119,7 +119,7 @@ def test_H1_a_sound_deployment_is_healthy(world):
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
     assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
     assert r.ipfs["configured"] and r.ipfs["pointerMatches"] and r.ipfs["manifestMatchesChain"] and r.ipfs["blobObjectsRetrievable"] == r.sources["blobs"]
-    assert r.backend["organisms"]["zika"] == {"released": 3, "published": 2, "withdrawn": 0}
+    assert not hasattr(r, "backend"), "the check judges the record on its own, never against the live database"
     assert r.finished_at and r.log
 
 
@@ -211,13 +211,13 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     assert "SECRETKEY" not in dumped and public["contract"] == cfg.chain.contract and public["network"]
     assert any(s["type"] == "blobscan" and s["endpoints"] == ["https://api.example.com"] for s in public["sources"])
     assert any(s["type"] == "ipfs" and s["snapshotCid"] == world["snapshot"] for s in public["sources"])
-    assert public["backend"] and public["repository"].startswith("https://github.com/")
+    assert "backend" not in public and public["repository"].startswith("https://github.com/")
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
     steps = [st for st, _ in seen]
     assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check", "IPFS check"]
-    assert any(d and "blobs asked for" in d for _, d in seen) and any(d and "backend" in d for _, d in seen)
+    assert any(d and "blobs asked for" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):
