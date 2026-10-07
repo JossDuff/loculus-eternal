@@ -174,6 +174,8 @@ def test_U3_check_and_dry_run_send_nothing(world):
     assert anvil.contract.functions.blobCount().call() == 0
     data_dir = Path(configuration.load(world["cfg_path"]).upload.data_dir)
     assert not (data_dir / "journal.json").exists() and list((data_dir / "abandoned").glob("*.json"))
+    # A dry run sent nothing, so its blob files are not kept: only the journal of what it planned.
+    assert not list((data_dir / "abandoned").rglob("*.blob"))
 
 
 def test_U4_dry_run_refuses_wrong_key_low_balance_and_high_blob_fee(world):
@@ -236,6 +238,8 @@ def test_U6_unincluded_transaction_is_replaced_with_higher_fees(world):
     assert fees == sorted(fees) and fees[1] > fees[0] and fees[2] > fees[1]
     gas_fees = [a["max_fee_per_gas"] for a in done["txs"][0]["attempts"]]
     assert gas_fees[2] > gas_fees[1] > gas_fees[0]
+    limits = [a["gas_limit"] for a in done["txs"][0]["attempts"]]
+    assert limits[0] and limits == [limits[0]] * 3
 
 
 def test_U7_blobs_enter_the_local_store_only_after_finality(world):
@@ -562,8 +566,20 @@ def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, 
     assert third.outcome == "nothing-to-publish" and third.vanished == {"mpox": ["PP_4.1"]}
     # A backend that cannot enumerate organisms is a plain error before anything is read.
     world["backend"].enumerate_organisms = False
-    with pytest.raises(SystemExit, match="list them in the config"):
-        uploader(world).run()
+    fourth = uploader(world).run()
+    assert fourth.outcome == "failed" and "list them in the config" in fourth.message
+
+
+def test_U16_an_organism_left_out_of_a_configured_list_is_not_reported_vanished(world, tmp_path):
+    first = uploader(world).run()
+    assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
+    register_in_archive(world, first)
+    cfg = world["cfg_path"]
+    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]'))
+    # mpox is still served and still published; the maintainer simply chose not to sync it.
+    second = uploader(world).run(withdraw_vanished=True)
+    assert second.outcome == "nothing-to-publish" and second.vanished == {} and second.withdrawn == {}
+    assert [s["organism"] for s in second.sync] == ["zika"]
 
 
 def test_U18_batch_end_transaction_waits_for_its_predecessors_and_gets_its_own_estimate(world, tmp_path):
@@ -606,6 +622,36 @@ def test_U19_a_revert_that_moved_nothing_is_resent_not_abandoned(world, tmp_path
     assert starved and report.transactions[-1]["attempts"] == 1
     done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
     assert done["txs"][-1]["reverts"] == 1
+    reverted = done["txs"][-1]["reverted_attempts"]
+    assert len(reverted) == 1 and reverted[0]["gas_limit"] == 30_000 and reverted[0]["tx_hash"] != done["txs"][-1]["included_tx"]
+    assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
+    register_in_archive(world, report)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"] and rec.decode["torn"] == []
+
+
+def test_U19_a_mid_batch_revert_does_not_take_the_transactions_behind_it_down(world, tmp_path):
+    """The second of four pipelined transactions is starved of gas. It reverts, and the third,
+    already in flight, reverts on the sequence guard behind it (the fourth is the batch end
+    and waits). The contract never moved, so both are sent again and the batch completes."""
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_M{i}") for i in range(9)])
+    up = uploader(world)
+    up.submitter.policy.max_blobs_per_transaction = 2  # eight or so blobs: four transactions
+    starved = []
+
+    def starve_second_once(tx):
+        if tx.index == 1 and not starved:
+            starved.append(tx.index)
+            return 30_000
+        return None
+
+    up.submitter.gas_override = starve_second_once
+    report = up.run()
+    assert report.outcome == "published", report.message
+    assert len(report.transactions) >= 4 and starved
+    done = json.loads(next((up.data_dir / "done").glob("*.json")).read_text())
+    assert [t["reverts"] for t in done["txs"][:3]] == [0, 1, 1] and all(t["status"] == "finalized" for t in done["txs"])
     assert anvil.contract.functions.blobCount().call() == report.batch["blobCountAfter"]
     register_in_archive(world, report)
     rec = recover(world, tmp_path)
