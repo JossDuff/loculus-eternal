@@ -95,6 +95,10 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Progress lines must reach a pipe or a log file as they happen, not when a buffer fills.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(prog="loculus-eternal", description="Permanent, verifiable backup of Pathoplexus released data in Ethereum blobs.")
     sub = parser.add_subparsers(dest="command", required=True)
 
