@@ -54,6 +54,20 @@ class StreamStructure:
         m = self.last_manifest
         return dict(sorted(m["organisms"].items())) if m else {}
 
+    def dead_blobs(self) -> set[int]:
+        """Blobs no reader needs: those of a torn batch that a complete batch follows. The
+        later batch header proves the publisher started over. Blob 0 is never dead, since it
+        holds the stream header; a torn range at the end of the stream is not dead either."""
+        if not self.batches:
+            return set()
+        last_complete = self.batches[-1].blob_count_after
+        dead: set[int] = set()
+        for t in self.torn:
+            if t.last_blob < last_complete:
+                dead.update(range(t.first_blob, t.last_blob + 1))
+        dead.discard(0)
+        return dead
+
     def torn_tail(self) -> TornSummary | None:
         """A torn range at the very end of the stream means an upload is unfinished or lost."""
         if self.torn and (not self.batches or self.torn[-1].first_blob >= self.batches[-1].blob_count_after):
