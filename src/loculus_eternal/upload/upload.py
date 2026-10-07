@@ -378,7 +378,7 @@ class Uploader:
             return self._done(report, started)
         self._finish(journal, store, report)
         report.outcome = "published"
-        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
+        report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f", {view.torn_blobs} of them from an abandoned upload that readers skip" if view.torn_blobs else "") + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
         self.log(report.message)
         return self._done(report, started)
 
@@ -432,7 +432,10 @@ class Uploader:
     def _abandon(self, journal: Journal) -> None:
         # Whatever this batch already put on IPFS was never published; take the pins back.
         if journal.ipfs_publish:
-            cleaned = unpin_orphans(journal.ipfs_publish, journal.blob_cids, self.log)
+            # Blob 0 holds the stream header, which every later batch relies on even when this
+            # first attempt is abandoned; its object stays pinned.
+            cids = journal.blob_cids[1:] if journal.first_blob_seq == 0 else journal.blob_cids
+            cleaned = unpin_orphans(journal.ipfs_publish, cids, self.log)
             if cleaned:
                 self.log(f"removed the abandoned batch's snapshot and blob objects from {len(cleaned)} IPFS endpoint(s)")
         # The journal is kept under abandoned/ as the record of what was planned. The blob

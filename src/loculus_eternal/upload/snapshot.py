@@ -49,7 +49,9 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
     existing_blob_count = len(refs)
     if not cfg.spec_path.is_file():
         raise IpfsError(f"the container spec is a fixed member of the snapshot but was not found at {cfg.spec_path}")
-    all_blobs = store.blobs(existing_blob_count) + list(batch.blobs)
+    # An existing blob may be None: dead bytes of an abandoned upload that no source has.
+    existing_blobs = store.blobs(existing_blob_count)
+    all_blobs = existing_blobs + list(batch.blobs)
     work_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, bytes | Path] = {}
     with tempfile.TemporaryDirectory(prefix="snapshot-", dir=work_dir) as tmp:
@@ -68,14 +70,23 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
                     decoded.materialise_to(org, out)
                 files[path.name] = path
             batches = [{"batch": b.batch, "firstBlobSeq": b.first_blob_seq, "lastBlobSeq": b.blob_count_after - 1, "manifestDigest": "0x" + b.manifest_digest.hex()} for b in decoded.batches]
-        # Versioned hashes: the store already holds them for published blobs; only the new
+            dead = decoded.dead_blobs()
+        if any(b is None and i not in dead for i, b in enumerate(existing_blobs)):
+            raise IpfsError("a blob every reader needs is not in the store; the snapshot cannot be built")
+        # Every blob object a reader needs must be on the endpoint: the new batch's, and any
+        # earlier one the endpoint no longer pins (blob 0 after an abandoned first attempt,
+        # or a node that was wiped). Dead blobs are left out.
+        needed_existing = [i for i, b in enumerate(existing_blobs) if b is not None and i not in dead]
+        # Versioned hashes: the chain's list has them for published blobs; only the new
         # batch's blobs need the KZG computation.
-        hashes = [store.have[i] for i in range(existing_blob_count)] + [kzg.blob_to_versioned_hash(b) for b in batch.blobs]
-        cids = [blob_cid(b) for b in all_blobs]
         by_seq = {r.seq: r for r in refs}
+        hashes = [by_seq[i].versioned_hash if i in by_seq else store.have[i] for i in range(existing_blob_count)] + [kzg.blob_to_versioned_hash(b) for b in batch.blobs]
+        cids = [blob_cid(b) if b is not None else None for b in all_blobs]
         manifest_blobs = []
         for seq, (vh, cid) in enumerate(zip(hashes, cids)):
-            entry = {"seq": seq, "versionedHash": "0x" + vh.hex(), "cid": cid}
+            entry = {"seq": seq, "versionedHash": "0x" + vh.hex()}
+            if cid is not None:
+                entry["cid"] = cid
             r = by_seq.get(seq)
             if r is not None and r.block_number is not None:
                 entry["blockNumber"] = r.block_number
@@ -100,6 +111,11 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
                 entry["snapshot"] = f"error: {e}"
                 log(f"IPFS endpoint {url} did not take the snapshot: {e}")
             try:
+                pinned = client.pinned_cids()
+                lost = [i for i in needed_existing if cids[i] not in pinned]
+                if lost:
+                    log(f"snapshot: {url} no longer pins {len(lost)} earlier blob object(s) readers need; adding them again")
+                    publish_blobs(client, (existing_blobs[i] for i in lost))
                 publish_blobs(client, batch.blobs)
                 entry["blobs"] = len(batch.blobs)
             except IpfsError as e:

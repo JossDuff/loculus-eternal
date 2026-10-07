@@ -72,6 +72,13 @@ class RecoveryReport:
     def to_json(self) -> dict:
         return self.__dict__
 
+    @property
+    def missing_needed(self) -> list[dict]:
+        """Missing blobs a reader needs. A missing blob of a torn batch that a complete batch
+        follows is marked unneeded once the decode step has seen the stream; until then every
+        missing blob counts."""
+        return [m for m in self.missing if m.get("needed", True)]
+
 
 class Recovery:
     def __init__(self, config: RecoveryConfig, w3: Web3 | None = None):
@@ -191,10 +198,18 @@ class Recovery:
                     self.cfg.log(decode_report["skipped"])
                 else:
                     try:
-                        _, decode_report = self.decode(store, len(refs))
+                        decoded, decode_report = self.decode(store, len(refs))
                     except FormatError as e:
                         decode_report = {"skipped": f"decoding failed: {e}", "allArtifactsMatch": False}
                         self.cfg.log(decode_report["skipped"])
+                    else:
+                        dead = decoded.dead_blobs()
+                        for m in missing:
+                            m["needed"] = m["seq"] not in dead
+                        unneeded = sum(1 for m in missing if not m["needed"])
+                        if unneeded:
+                            self.cfg.log(f"{unneeded} missing blob(s) belong to an abandoned upload that a later batch skips; no reader needs them")
+                        (self.cfg.data_dir / "missing.json").write_text(json.dumps(missing, indent=1))
             report = RecoveryReport(
                 chain={"contract": self.cfg.contract, "blockNumber": state.block_number, "blobCount": state.blob_count, "head": "0x" + state.head.hex(), "appPointer": "0x" + state.app_pointer.hex(), "publisher": state.publisher},
                 manifest_source=manifest_source,

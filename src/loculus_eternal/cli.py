@@ -55,13 +55,16 @@ def cmd_recover(args: argparse.Namespace) -> int:
     if report.manifest_source is None:
         print("RESULT: FAILED: no source produced a blob list that matches the chain", file=sys.stderr)
         return 2
-    if report.missing:
-        print(f"RESULT: INCOMPLETE: {len(report.missing)} blob(s) missing from every source; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
+    needed = report.missing_needed
+    if needed:
+        print(f"RESULT: INCOMPLETE: {len(needed)} blob(s) missing from every source; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
         return 1
     if report.decode and not report.decode.get("allArtifactsMatch"):
         print("RESULT: DECODED WITH ERRORS: a digest did not match; see recovery-report.json", file=sys.stderr)
         return 1
-    print(f"RESULT: SUCCESS: {report.blobs_present} blobs verified, every digest matches; files are in {rc.out_dir}")
+    unneeded = len(report.missing) - len(needed)
+    note = f" ({unneeded} blob(s) of an abandoned upload unavailable; no reader needs them)" if unneeded else ""
+    print(f"RESULT: SUCCESS: {report.blobs_present} blobs verified, every digest matches{note}; files are in {rc.out_dir}")
     return 0
 
 

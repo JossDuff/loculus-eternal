@@ -61,7 +61,8 @@ class IpfsSource:
                 errors.append(f"{c.api_url}: {e}")
         if self.manifest is None:
             raise SourceError("cannot read the snapshot manifest: " + "; ".join(errors))
-        self._cid_by_hash = {bytes.fromhex(b["versionedHash"][2:]): b["cid"] for b in self.manifest["blobs"]}
+        # A blob the publisher could not obtain (dead bytes of an abandoned upload) has no CID.
+        self._cid_by_hash = {bytes.fromhex(b["versionedHash"][2:]): b["cid"] for b in self.manifest["blobs"] if b.get("cid")}
         return self.manifest
 
     def blob_refs(self) -> list[BlobRef]:
