@@ -75,6 +75,7 @@ class Uploader:
             inclusion_timeout_blocks=config.upload.inclusion_timeout_blocks,
             finality_timeout_seconds=config.upload.finality_timeout_seconds,
             max_in_flight=config.upload.max_in_flight,
+            max_blobs_per_transaction=config.upload.max_blobs_per_transaction,
         )
         if poll_interval is not None:
             policy.poll_interval = poll_interval
@@ -282,7 +283,7 @@ class Uploader:
         if report.vanished and not self._withdraw_vanished:
             n = sum(len(v) for v in report.vanished.values())
             self.log(f"{n} published entries are no longer in the backend feed; they stay in the record until a run with --withdraw-vanished confirms their withdrawal")
-        report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // MAX_BLOBS_PER_TX), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
+        report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // self.policy.max_blobs_per_transaction), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
         report.batch["withdrawn"] = batch.withdrawn_count
         self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
@@ -352,9 +353,11 @@ class Uploader:
 
         try:
             self.submitter.run(journal)
-        except RevertedOnChain as e:
+        except (Refused, RevertedOnChain) as e:
+            # A refusal here (after the dry run) comes from a transaction simulated once its
+            # predecessors were in: the chain moved under the batch. Same remedy as a revert.
             report.outcome = "failed"
-            report.message = f"{e}; the batch has been set aside and the next run will start a fresh one after the torn blobs"
+            report.message = f"{e}; the batch has been set aside; wait for the chain to finalise, then run again to start a fresh batch after the torn blobs"
             self.log(f"publishing stopped: {report.message}")
             self._abandon(journal)
             return self._done(report, started)
@@ -375,13 +378,15 @@ class Uploader:
         try:
             self.submitter.run(journal)
         except (Refused, RevertedOnChain) as e:
-            # The contract has moved past what this batch assumed, either because another
-            # upload ran in between or because one of our transactions reverted. Set the
-            # batch aside; the run goes on with a fresh view and a fresh batch.
+            # The contract has moved past what this batch assumed. Set the batch aside and
+            # stop: transactions of this batch may still be landing, and the finalized view a
+            # fresh plan would be built on lags the chain by minutes. The next run, started
+            # once the chain is quiet, starts a fresh batch after the torn blobs.
             self.log(f"the interrupted batch cannot be finished ({e}); setting it aside")
             self._abandon(journal)
-            report.message = f"abandoned interrupted batch {journal.batch}: {e}"
-            return True
+            report.outcome = "failed"
+            report.message = f"abandoned interrupted batch {journal.batch}: {e}. Wait for the chain to finalise, then run again to start a fresh batch after the torn blobs."
+            return False
         except SubmitError as e:
             report.outcome = "failed"
             report.message = f"could not finish the interrupted batch: {e}"
@@ -420,15 +425,31 @@ class Uploader:
             cleaned = unpin_orphans(journal.ipfs_publish, journal.blob_cids, self.log)
             if cleaned:
                 self.log(f"removed the abandoned batch's snapshot and blob objects from {len(cleaned)} IPFS endpoint(s)")
+        # The journal and its blob files are kept under abandoned/: they are the only record of
+        # what was sent, and the exact bytes may be wanted to understand what happened.
         aside = self.data_dir / "abandoned"
         aside.mkdir(exist_ok=True)
-        self.submitter.journal_path.replace(aside / f"batch-{journal.batch}-from-{journal.first_blob_seq}-{int(time.time())}.json")
-        for p in Path(journal.blobs_dir).glob("*.blob"):
-            p.unlink()
-        Path(journal.blobs_dir).rmdir()
+        # Nanoseconds, so two batches set aside within the same second never collide.
+        stamp = f"batch-{journal.batch}-from-{journal.first_blob_seq}-{time.time_ns()}"
+        self.submitter.journal_path.replace(aside / f"{stamp}.json")
+        blobs_dir = Path(journal.blobs_dir)
+        if blobs_dir.exists():
+            blobs_dir.replace(aside / stamp)
 
     def _done(self, report: UploadReport, started: float) -> UploadReport:
         report.duration_seconds = round(time.time() - started, 2)
+        # The last line of every run says plainly how it ended, in words a maintainer who
+        # only reads the end of a log can act on.
+        verdicts = {
+            "published": "SUCCESS",
+            "resumed": "SUCCESS",
+            "nothing-to-publish": "NOTHING TO DO",
+            "checked": "CHECK COMPLETE (nothing sent)",
+            "dry-run-ok": "DRY RUN PASSED (nothing sent)",
+            "refused": "REFUSED (nothing sent)",
+            "failed": "FAILED",
+        }
+        self.log(f"RESULT: {verdicts.get(report.outcome, report.outcome.upper())}" + (f": {report.message}" if report.message else ""))
         reports = self.data_dir / "reports"
         reports.mkdir(exist_ok=True)
         (reports / f"{time.strftime('%Y%m%dT%H%M%S')}-{report.mode}-{report.outcome}.json").write_text(json.dumps(report.to_json(), indent=1, default=str))

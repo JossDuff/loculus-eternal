@@ -53,14 +53,15 @@ def cmd_recover(args: argparse.Namespace) -> int:
     rc.data_dir.mkdir(parents=True, exist_ok=True)
     (rc.data_dir / "run-report.json").write_text(json.dumps(report.to_json(), indent=1))
     if report.manifest_source is None:
-        print("FAILED: no verified blob list", file=sys.stderr)
+        print("RESULT: FAILED: no source produced a blob list that matches the chain", file=sys.stderr)
         return 2
     if report.missing:
-        print(f"INCOMPLETE: {len(report.missing)} blobs missing; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
+        print(f"RESULT: INCOMPLETE: {len(report.missing)} blob(s) missing from every source; see {rc.data_dir / 'missing.json'}", file=sys.stderr)
         return 1
     if report.decode and not report.decode.get("allArtifactsMatch"):
-        print("DECODED WITH ERRORS: see recovery-report.json", file=sys.stderr)
+        print("RESULT: DECODED WITH ERRORS: a digest did not match; see recovery-report.json", file=sys.stderr)
         return 1
+    print(f"RESULT: SUCCESS: {report.blobs_present} blobs verified, every digest matches; files are in {rc.out_dir}")
     return 0
 
 

@@ -55,6 +55,7 @@ class UploadConfig:
     inclusion_timeout_blocks: int
     escalation_attempts: int
     max_in_flight: int
+    max_blobs_per_transaction: int   # the protocol's per-transaction cap; 6 since Fusaka, re-check at every fork
 
 
 @dataclass
@@ -174,7 +175,10 @@ def load(path: str | Path) -> Config:
                 inclusion_timeout_blocks=int(u.get("inclusion_timeout_blocks", 6)),
                 escalation_attempts=int(u.get("escalation_attempts", 8)),
                 max_in_flight=int(u.get("max_in_flight", 8)),
+                max_blobs_per_transaction=int(u.get("max_blobs_per_transaction", 6)),
             )
+            if not 1 <= upload.max_blobs_per_transaction <= 64:
+                raise ConfigError("upload.max_blobs_per_transaction must be between 1 and 64")
         ipfs = None
         if "ipfs" in raw:
             i = raw["ipfs"]
