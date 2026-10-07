@@ -47,6 +47,14 @@ point: anyone can run this against anyone's deployment.
 
 The page is one HTML file with inline styles and script and loads nothing from anywhere, so
 it works offline against a local node. A check runs when the page opens; the button runs
-another.
+another. While a check runs, a bar across the top shows which of the six steps it is on and,
+during the long one, how many blobs each source has been asked for so far.
 
-Behaviour IDs for the page are `H1`–`H6` in `docs/test-plan.md`.
+The page opens with a **Deployment** card: the contract address with a link to a block
+explorer, the network, the deployment block, and the inputs this check runs with: the RPC
+endpoint, every blob source, the backend, the IPFS endpoints and the config file. Every URL
+is reduced to its scheme and host before it reaches the page, because hosted RPC and archive
+URLs carry API keys in their path, and this page is meant to be shown around. A quickstart
+card gives the two commands that matter, and the header links to the repository.
+
+Behaviour IDs for the page are `H1`–`H7` in `docs/test-plan.md`.

@@ -150,6 +150,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer is a failing problem.
 - **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
 - **H6 — once.** `health --once` prints the report as JSON and exits 0 only when healthy.
+- **H7 — deployment card and progress.** Every report, including the idle one, carries the deployment and the check's inputs with each URL reduced to scheme and host, so an API key in an RPC or archive URL never reaches the page; while a check runs the report names the current step and a line of detail, and the page shows the repository link, the quickstart commands and the Ethereum mark.
 
 ## Process checks (in force from the groundwork phase)
 
