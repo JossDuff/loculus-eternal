@@ -16,6 +16,7 @@ phase that builds them.
 | `R` | Recovery command: manifest acquisition, sources, store, decoder | recovery command |
 | `U` | Upload command: published set, sync, eligibility, planner, submitter, journal | upload command |
 | `I` | IPFS profile, pinning, IPFS source | IPFS |
+| `H` | Health page and check | health page |
 
 ## Layers
 
@@ -132,6 +133,15 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **I9 — per-endpoint bookkeeping.** An endpoint that was unreachable for one batch still ends with exactly the latest snapshot once it takes a new one, because the upload command remembers what each endpoint holds.
 - **I10 — configuration.** `required = true` without endpoints is a configuration error.
 - **I11 — upload-side IPFS source.** An `ipfs` source without a snapshot CID in the upload configuration follows the machine's latest snapshot, is checked against the chain's pointer, and can supply the stream's own blobs back to the upload command.
+
+### H — health page
+
+- **H1 — healthy deployment.** Against a sound deployment the check reads the chain, verifies the blob list, verifies every blob from every source, walks the stream, checks the snapshot against the pointer, shows backend counts, and says healthy.
+- **H2 — unavailable blob.** A blob that no configured source can supply fails the check, names the blob, and the batch holding it is reported torn; while another source still has it, the check stays healthy and the miss is visible per source.
+- **H3 — corrupting source.** Corrupt bytes from a source are rejected and noted; the check stays healthy when another copy verifies.
+- **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer is a failing problem.
+- **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
+- **H6 — once.** `health --once` prints the report as JSON and exits 0 only when healthy.
 
 ## Process checks (in force from the groundwork phase)
 

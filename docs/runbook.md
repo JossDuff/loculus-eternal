@@ -181,6 +181,13 @@ final the previous snapshot is unpinned, so each node keeps every blob plus the 
 snapshot only; the blobs are the permanent part. If no endpoint is reachable the run still
 publishes and says so; set `required = true` if you would rather it refused.
 
+## Checking on the record
+
+`loculus-eternal health --config loculus-eternal.toml` opens a page that verifies the whole
+published record against the chain and the configured sources, without a key. Run it after
+an upload, or any time someone asks whether the backup is intact. `--once` prints the same
+check as JSON for a script.
+
 ## Rotating the publisher key
 
 From the current key, call `setPublisher(newAddress)` on the contract (any wallet tool that
