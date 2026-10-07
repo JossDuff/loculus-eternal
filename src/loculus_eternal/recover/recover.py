@@ -17,6 +17,7 @@ from typing import Callable
 from web3 import Web3
 
 from loculus_eternal.chain import BlobRef, ChainReader, ChainState, ManifestMismatch, verify_manifest
+from loculus_eternal.rpc import connect
 from loculus_eternal.format.decode import DecodedStream, StreamDecoder
 from loculus_eternal.format.entrystore import safe_dirname
 from loculus_eternal.sources.base import BlobSource, SourceChain
@@ -51,6 +52,7 @@ class RecoveryConfig:
     manifest_sources: list[ManifestSource] = field(default_factory=lambda: [ManifestSource(logs=True)])
     deployment_block: int = 0
     decode: bool = True
+    max_requests_per_second: float = 5.0
     log: Callable[[str], None] = print
 
 
@@ -74,7 +76,7 @@ class RecoveryReport:
 class Recovery:
     def __init__(self, config: RecoveryConfig, w3: Web3 | None = None):
         self.cfg = config
-        self.w3 = w3 or Web3(Web3.HTTPProvider(config.rpc_url, request_kwargs={"timeout": 60}))
+        self.w3 = w3 or connect(config.rpc_url, max_rps=config.max_requests_per_second, timeout=60)
         self.reader = ChainReader(self.w3, config.contract)
         self.chain = SourceChain(config.sources)
 

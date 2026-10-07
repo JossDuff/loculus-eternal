@@ -61,6 +61,7 @@ def config(published, tmp_path, sources, **kw) -> RecoveryConfig:
         out_dir=tmp_path / "out",
         sources=sources,
         deployment_block=published["deployment_block"],
+        max_requests_per_second=1000,
         log=lambda s: None,
         **kw,
     )
@@ -253,6 +254,7 @@ def test_R13_command_line_runs_from_a_toml_config(published, tmp_path):
 rpc_url = "{anvil.url}"
 contract = "{anvil.contract.address}"
 chain_id = {anvil.chain_id}
+max_requests_per_second = 1000
 beacon_genesis_time = 0
 seconds_per_slot = 1
 deployment_block = 1

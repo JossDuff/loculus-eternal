@@ -587,6 +587,16 @@ machine for IPFS. The publisher is a fresh development key, `0xE30036308E139D4aC
 funded with 6 Sepolia ETH. The maintainer runs every command; the agent supplies each with
 an explanation and writes `docs/testnet-report.md` from the outputs.
 
+**Donations, standing position 2026-10-07.** Anyone can send ETH to the publisher wallet;
+a contract would only add a guarantee that the publisher cannot spend it elsewhere, which is
+a question about trust in the operator rather than a mechanism gap. Revisit if a funder asks
+for that guarantee.
+
+**Health page — DECIDED 2026-10-07.** A local one-page check (`loculus-eternal health`) that
+verifies the record against the chain and the sources without materialising anything, reads
+its inputs from the config file, and also shows the backend's released counts per organism.
+A full materialisation stays the recovery command's job.
+
 **Hosting — DEFERRED 2026-09-30 to before mainnet genesis.** The upload command is a plain
 CLI with file and environment configuration so it can run anywhere. Likely answer: a
 maintainer's machine or Pathoplexus's existing infrastructure with the key in their secret

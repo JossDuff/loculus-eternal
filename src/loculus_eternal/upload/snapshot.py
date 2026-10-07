@@ -54,10 +54,13 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
     files: dict[str, bytes | Path] = {}
     with tempfile.TemporaryDirectory(prefix="snapshot-", dir=work_dir) as tmp:
         tmp_path = Path(tmp)
+        log(f"snapshot: decoding the stream as it will stand after the batch ({len(all_blobs)} blobs)")
         with StreamDecoder(all_blobs, spill_dir=tmp_path / "spill").decode() as decoded:
             if decoded.torn and decoded.torn[-1].last_blob >= existing_blob_count:
                 raise IpfsError("the planned batch does not decode cleanly on top of the published stream; refusing to build a snapshot for it")
-            for org in decoded.organisms():
+            organisms = decoded.organisms()
+            for k, org in enumerate(organisms, 1):
+                log(f"snapshot: compressing {org} ({k}/{len(organisms)})")
                 path = tmp_path / f"{safe_dirname(org)}.ndjson.zst"
                 # The level is not normative (the bytes are kept by CID, not regenerated), so
                 # a fast level with every core beats level 19 on gigabytes of NDJSON.
@@ -83,6 +86,7 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
 
         result = SnapshotResult(snapshot_cid=None, pointer=None, blob_cids=cids[existing_blob_count:], files=sorted(files))
         for url in cfg.endpoints:
+            log(f"snapshot: adding {len(files)} file(s) and {len(batch.blobs)} blob object(s) to {url}")
             client = KuboClient(url)
             entry: dict = {"url": url}
             try:

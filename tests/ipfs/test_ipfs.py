@@ -86,6 +86,7 @@ def world(tmp_path, kubo_pair):
 rpc_url = "{anvil.url}"
 contract = "{anvil.contract.address}"
 chain_id = {anvil.chain_id}
+max_requests_per_second = 1000
 beacon_genesis_time = 0
 seconds_per_slot = 1
 deployment_block = 1
@@ -156,7 +157,7 @@ def test_I4_recovery_from_ipfs_alone_with_logs_unavailable(world, tmp_path):
 
     source = IpfsSource([a.api_url], cid)
     flaky = FlakyProvider(Web3.HTTPProvider(anvil.url), fail_methods={"eth_getLogs"}, fail_count=10**6)
-    cfg = RecoveryConfig(rpc_url=anvil.url, contract=anvil.contract.address, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=[source], manifest_sources=[ManifestSource(ipfs=source)], deployment_block=1, log=lambda s: None)
+    cfg = RecoveryConfig(rpc_url=anvil.url, contract=anvil.contract.address, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=[source], manifest_sources=[ManifestSource(ipfs=source)], deployment_block=1, max_requests_per_second=1000, log=lambda s: None)
     report = Recovery(cfg, w3=Web3(flaky)).run()
     assert report.manifest_source == f"IPFS snapshot {cid}" and report.missing == []
     assert report.decode["allArtifactsMatch"]

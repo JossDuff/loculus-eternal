@@ -34,7 +34,8 @@ One run does, in order:
 
    ```toml
    [chain]
-   rpc_url = "https://your-ethereum-rpc"         # CHANGE: an Ethereum JSON-RPC endpoint
+   rpc_url = "${RPC_URL}"                        # CHANGE: the JSON-RPC URL, read from the environment so its key stays out of this file
+   max_requests_per_second = 5                   # hosted endpoints are metered; the command spaces and retries its requests
    contract = "0x…"                              # CHANGE: the LoculusEternal address
    chain_id = 1                                  # 1 mainnet, 11155111 Sepolia
    deployment_block = 0                          # CHANGE: block the contract was deployed in
@@ -110,6 +111,11 @@ publish until someone has reviewed the pinned schema in `docs/container-spec.md`
 the code. This check exists so that a format change is caught here and not in the permanent
 record.
 
+**"the RPC endpoint failed"** (or a line mentioning HTTP 429): the hosted endpoint is
+rate-limiting or down. Requests are already spaced to `max_requests_per_second` and retried
+with growing pauses for about two minutes; if that was not enough, lower the number or wait,
+then run again. Nothing is lost: the journal resumes exactly where the run stopped.
+
 **"blob N of the published stream could not be obtained from any source"**: the command needs
 the whole published stream to know what is already published, and none of the configured
 sources had that blob. Add a source that has it (a beacon node with historical blobs, Blobscan,
@@ -174,6 +180,13 @@ publish it on the public page so anyone can recover from IPFS alone. Once the ne
 final the previous snapshot is unpinned, so each node keeps every blob plus the latest
 snapshot only; the blobs are the permanent part. If no endpoint is reachable the run still
 publishes and says so; set `required = true` if you would rather it refused.
+
+## Checking on the record
+
+`loculus-eternal health --config loculus-eternal.toml` opens a page that verifies the whole
+published record against the chain and the configured sources, without a key. Run it after
+an upload, or any time someone asks whether the backup is intact. `--once` prints the same
+check as JSON for a script.
 
 ## Rotating the publisher key
 

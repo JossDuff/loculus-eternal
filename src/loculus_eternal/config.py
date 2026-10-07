@@ -36,6 +36,7 @@ class ChainConfig:
     beacon_genesis_time: int
     seconds_per_slot: int
     deployment_block: int
+    max_requests_per_second: float
 
 
 @dataclass
@@ -146,6 +147,7 @@ def load(path: str | Path) -> Config:
             beacon_genesis_time=genesis,
             seconds_per_slot=chain_raw.get("seconds_per_slot", SECONDS_PER_SLOT),
             deployment_block=chain_raw.get("deployment_block", 0),
+            max_requests_per_second=float(chain_raw.get("max_requests_per_second", 5)),
         )
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
         backend = None

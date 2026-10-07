@@ -16,6 +16,7 @@ phase that builds them.
 | `R` | Recovery command: manifest acquisition, sources, store, decoder | recovery command |
 | `U` | Upload command: published set, sync, eligibility, planner, submitter, journal | upload command |
 | `I` | IPFS profile, pinning, IPFS source | IPFS |
+| `H` | Health page and check | health page |
 
 ## Layers
 
@@ -133,7 +134,17 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **I10 — configuration.** `required = true` without endpoints is a configuration error.
 - **I11 — upload-side IPFS source.** An `ipfs` source without a snapshot CID in the upload configuration follows the machine's latest snapshot, is checked against the chain's pointer, and can supply the stream's own blobs back to the upload command.
 
+### H — health page
+
+- **H1 — healthy deployment.** Against a sound deployment the check reads the chain, verifies the blob list, verifies every blob from every source, walks the stream, checks the snapshot against the pointer, shows backend counts, and says healthy.
+- **H2 — unavailable blob.** A blob that no configured source can supply fails the check, names the blob, and the batch holding it is reported torn; while another source still has it, the check stays healthy and the miss is visible per source. A blob of an abandoned upload that a later batch skips (never blob 0) is a note, not a problem, and the structure walker names those dead blobs.
+- **H3 — corrupting source.** Corrupt bytes from a source are rejected and noted; the check stays healthy when another copy verifies.
+- **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer is a failing problem.
+- **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
+- **H6 — once.** `health --once` prints the report as JSON and exits 0 only when healthy.
+
 ## Process checks (in force from the groundwork phase)
 
 - **P1 — no numbered references.** No human-facing file (README, CLAUDE.md, docs, the plan file, source, tests, contract sources) contains a milestone reference (the letter M followed by a digit) or a section sign. The check is a grep for those two patterns and must return nothing.
+- **P3 — metered endpoints.** Every JSON-RPC connection spaces its requests to a configured maximum per second and retries a failed request with growing pauses, for every method the project uses including sending a signed transaction, which is idempotent; a run that still fails on the endpoint ends with a plain message and a journal that resumes.
 - **P2 — no secrets.** No private key, token, or password appears anywhere in the tree; the publisher key is read only from `LOCULUS_ETERNAL_PUBLISHER_KEY`.

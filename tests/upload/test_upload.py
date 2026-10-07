@@ -77,6 +77,7 @@ def world(tmp_path):
 rpc_url = "{anvil.url}"
 contract = "{anvil.contract.address}"
 chain_id = {anvil.chain_id}
+max_requests_per_second = 1000
 beacon_genesis_time = 0
 seconds_per_slot = 1
 deployment_block = 1
@@ -125,7 +126,7 @@ def register_in_archive(world, report):
 
 def recover(world, tmp_path):
     cfg = configuration.load(world["cfg_path"])
-    rc = RecoveryConfig(rpc_url=cfg.chain.rpc_url, contract=cfg.chain.contract, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=cfg.sources, deployment_block=1, log=lambda s: None)
+    rc = RecoveryConfig(rpc_url=cfg.chain.rpc_url, contract=cfg.chain.contract, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=cfg.sources, deployment_block=1, max_requests_per_second=1000, log=lambda s: None)
     return Recovery(rc).run()
 
 
