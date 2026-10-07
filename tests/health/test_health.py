@@ -178,19 +178,46 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
     try:
         page = httpx.get(f"{server.url}/")
         assert page.status_code == 200 and "Loculus Eternal health" in page.text and "<script>" in page.text
-        assert httpx.get(f"{server.url}/api/report").json()["verdict"] == "idle"
+        assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "loculus-eternal recover --config" in page.text
+        idle = httpx.get(f"{server.url}/api/report").json()
+        assert idle["verdict"] == "idle" and idle["config"]["contract"] == world["anvil"].contract.address
         assert httpx.post(f"{server.url}/api/check").status_code == 202
         deadline = time.time() + 120
         while time.time() < deadline:
             r = httpx.get(f"{server.url}/api/report").json()
             if not r["running"] and r["verdict"] != "idle":
                 break
-            time.sleep(0.5)
+            time.sleep(0.2)
         assert r["verdict"] == "healthy", r.get("problems")
         assert r["log"] and r["stream"]["entriesTotal"] == 3
+        assert r["progress"] == {}, "a finished report carries no progress"
         assert httpx.get(f"{server.url}/nothing").status_code == 404
     finally:
         server.shutdown()
+
+
+def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
+    from loculus_eternal.health_server import public_config, public_url
+
+    assert public_url("https://sepolia.infura.io/v3/0123456789abcdef") == "https://sepolia.infura.io"
+    assert public_url("https://archive.example.com:8443/path?key=secret") == "https://archive.example.com:8443"
+    assert public_url("http://127.0.0.1:5001") == "http://127.0.0.1:5001"
+    text = world["cfg"].read_text().replace("[[sources]]", "[[sources]]\ntype = \"blobscan\"\nurl = \"https://api.example.com/v1/SECRETKEY\"\n\n[[sources]]", 1)
+    cfg_path = tmp_path / "keyed.toml"
+    cfg_path.write_text(text)
+    cfg = configuration.load(cfg_path)
+    public = public_config(cfg)
+    dumped = json.dumps(public)
+    assert "SECRETKEY" not in dumped and public["contract"] == cfg.chain.contract and public["network"]
+    assert any(s["type"] == "blobscan" and s["endpoints"] == ["https://api.example.com"] for s in public["sources"])
+    assert any(s["type"] == "ipfs" and s["snapshotCid"] == world["snapshot"] for s in public["sources"])
+    assert public["backend"] and public["repository"].startswith("https://github.com/")
+    # The check reports its steps in order while it runs, with detail during the long fetch.
+    seen = []
+    HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
+    steps = [st for st, _ in seen]
+    assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["chain", "blob list", "sources", "stream", "IPFS snapshot", "backend"]
+    assert any(d and "blobs asked for" in d for _, d in seen)
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):
