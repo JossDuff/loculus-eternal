@@ -80,3 +80,15 @@ def test_U1_real_released_lines_pass_the_shape_check_and_project(organism):
     assert entry["metadata"]["pipelineVersion"] == line["metadata"]["pipelineVersion"]
     assert entry["metadata"]["dataBecameOpenAt"] == line["metadata"]["dataBecameOpenAt"]
     assert set(entry["unalignedNucleotideSequences"]) == set(line["unalignedNucleotideSequences"])
+
+
+def test_config_expands_environment_references(tmp_path, monkeypatch):
+    from loculus_eternal import config as configuration
+
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[chain]\nrpc_url = "https://rpc.example/v3/${TEST_RPC_KEY}"\ncontract = "0x0000000000000000000000000000000000000001"\nchain_id = 11155111\n')
+    monkeypatch.setenv("TEST_RPC_KEY", "sekrit")
+    assert configuration.load(cfg).chain.rpc_url == "https://rpc.example/v3/sekrit"
+    monkeypatch.delenv("TEST_RPC_KEY")
+    with pytest.raises(SystemExit, match="TEST_RPC_KEY"):
+        configuration.load(cfg)

@@ -580,11 +580,21 @@ Python package `loculus_eternal`, one console script `loculus-eternal` with subc
 contract `LoculusEternal`, environment variable `LOCULUS_ETERNAL_PUBLISHER_KEY`. Pathoplexus
 is documented as the first and only instance. Licence: AGPL-3.0 (the repository's LICENSE).
 
+**Sepolia campaign operations — DECIDED 2026-10-07.** Infura (free tier, key in the
+environment as `RPC_API`) for the chain; PublicNode's public Sepolia beacon API for recent
+blobs; Blobscan's Sepolia archive for history; one Kubo node in Docker on the maintainer's
+machine for IPFS. The publisher is a fresh development key, `0xE30036308E139D4aC1e07D0f3F3D3cd6597fBBD0`,
+funded with 6 Sepolia ETH. The maintainer runs every command; the agent supplies each with
+an explanation and writes `docs/testnet-report.md` from the outputs.
+
 **Hosting — DEFERRED 2026-09-30 to before mainnet genesis.** The upload command is a plain
 CLI with file and environment configuration so it can run anywhere. Likely answer: a
 maintainer's machine or Pathoplexus's existing infrastructure with the key in their secret
 store.
 
+**Donation pot — DECIDED 2026-10-07: no pot. The contract is deployed as it is for the
+Sepolia campaign and frozen after it.** A pot, if ever wanted, would be a separate contract.
+Earlier record kept below for the reasoning:
 **Donation pot — DEFERRED 2026-10-01: a TODO for a later point; the contract is built
 without it.** Consequence, stated so nobody is surprised later: since `LoculusEternal` is
 immutable, a pot added afterwards must be a separate contract. A separate contract can hold

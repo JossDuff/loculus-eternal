@@ -8,6 +8,7 @@ in this file; it comes from the environment variable named below.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,10 +105,32 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
     return out
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand(value):
+    """Replace ${NAME} in string values with the environment variable NAME, so that an RPC
+    URL carrying an API key can be written as https://…/v3/${RPC_API} and the file stays
+    free of secrets. A missing variable is a configuration error, not an empty string."""
+    if isinstance(value, str):
+        def sub(m):
+            name = m.group(1)
+            if name not in os.environ:
+                raise ConfigError(f"the config refers to ${{{name}}} but that environment variable is not set")
+            return os.environ[name]
+
+        return _ENV_REF.sub(sub, value)
+    if isinstance(value, list):
+        return [_expand(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _expand(v) for k, v in value.items()}
+    return value
+
+
 def load(path: str | Path) -> Config:
     path = Path(path)
     try:
-        raw = tomllib.loads(path.read_text())
+        raw = _expand(tomllib.loads(path.read_text()))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
     try:
