@@ -144,12 +144,12 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### H — health page
 
-- **H1 — healthy deployment.** Against a sound deployment the check reads the chain, verifies the blob list, verifies every blob from every source, walks the stream, checks the snapshot on every IPFS node against the pointer, judges every source complete when it served every needed blob, and says healthy; it never consults the backend.
-- **H2 — unavailable blob.** A blob that no configured source can supply fails the check, names the blob, and the batch holding it is reported torn; while another source still has it, the check stays healthy and the miss is visible per source. A blob of an abandoned upload that a later batch skips (never blob 0) is a note, not a problem, and the structure walker names those dead blobs.
-- **H3 — corrupting source.** Corrupt bytes from a source are rejected and noted; the check stays healthy when another copy verifies.
-- **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer is a failing problem; IPFS reads are offline with a short deadline, so an endpoint that lacks the content answers in seconds instead of searching the network for minutes.
+- **H1 — recoverable deployment.** Against a sound deployment the check reads the chain, verifies the blob list, verifies every blob from every source, walks the stream, checks the snapshot on every IPFS node against the pointer, judges every source complete when it served every needed blob, and says recoverable; it never consults the backend.
+- **H2 — unavailable blob.** A needed blob that no configured source can supply makes the verdict not recoverable and names the blob, and the batch holding it is reported torn; while another source still has it, the check stays healthy and the miss is visible per source. A blob of an abandoned upload that a later batch skips (never blob 0) is a note, not a problem, and the structure walker names those dead blobs.
+- **H3 — corrupting source.** Corrupt bytes from a source are rejected and noted, and do not count as confirmed; the dataset stays recoverable when another copy verifies.
+- **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer is listed as a problem but leaves the dataset recoverable while the blob sources cover it; IPFS reads are offline with a short deadline, so an endpoint that lacks the content answers in seconds instead of searching the network for minutes.
 - **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
-- **H6 — once.** `health --once` prints the report as JSON and exits 0 only when healthy.
+- **H6 — once.** `health --once` prints the report as JSON and exits 0 only when the dataset is recoverable.
 - **H7 — public configuration and progress.** Every report, including the idle one, carries the contract, network, explorer link and the check's inputs with each URL reduced to scheme and host, so an API key in an RPC or archive URL never reaches the page; while a check runs the report names the current step and a line of detail, and the page shows the repository link, the quickstart commands and the Ethereum mark.
 
 ## Process checks (in force from the groundwork phase)

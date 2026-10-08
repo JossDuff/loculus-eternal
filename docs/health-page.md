@@ -4,7 +4,7 @@
 one page that answers a single question for anyone who asks it: **is the published record
 still available, and still correct?** It needs the same configuration file as the recovery
 command and no key. `--once` runs one check, prints the report as JSON and exits with status
-0 only when the verdict is healthy, so a script or a cron job can use it too.
+0 only when the verdict is recoverable, so a script or a cron job can use it too.
 
 The page trusts nothing. It reads the chain, fetches every blob from every configured
 source, verifies each against the chain, and compares what the sources and IPFS claim with
@@ -34,10 +34,13 @@ against the chain. The steps in detail:
 | Stream | The outer records of the verified blobs: header, batch headers, body lengths and digests, indexes, manifests; the header's chain and contract binding; torn ranges | a torn range at the end (an unfinished or lost upload); a header naming another chain or contract |
 | IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; on every configured IPFS node, its manifest matches the chain, its blob objects are retrievable and verify, and the spec is present. Every read asks the node offline with a short deadline, so the question is whether this node holds the content, answered in seconds | a snapshot that is not the publisher's current one; a node that no longer holds it |
 
-The **verdict** is healthy when the contract is reachable, the blob list verifies, every
-blob verifies from at least one source, the stream has no torn tail, and the snapshot matches
-the pointer. It is failing when something is unverifiable or wrong, degraded when something
-is off but the record itself is intact. Every problem is listed at the top of the page.
+The **verdict** answers one question: can the dataset be rebuilt from what is out there?
+It is **recoverable** when the contract can be read, the blob list reproduces the chain's
+head, and every blob a reader needs is verifiable from at least one source, in any mix; the
+recovery command takes each blob from whichever source serves a verified copy. It is **not
+recoverable** when any of that fails. A dead archive, a stopped IPFS node or a stale snapshot
+CID are listed as problems, because they reduce the number of places the data can come from,
+but they do not change the verdict while the other sources still cover every needed blob.
 
 Blobs older than the 18-day consensus retention are expected to be missing from a beacon
 source; the page says how many of a source's misses fall outside retention so that is not
