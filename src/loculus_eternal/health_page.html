@@ -27,9 +27,8 @@
   h1 { font-size: 20px; margin: 0; font-weight: 650; }
   .sub { color: var(--muted); font-size: 13px; }
   .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-weight: 650; font-size: 14px; }
-  .badge.healthy { background: var(--ok-bg); color: var(--ok); }
-  .badge.degraded { background: var(--warn-bg); color: var(--warn); }
-  .badge.failing { background: var(--bad-bg); color: var(--bad); }
+  .badge.recoverable { background: var(--ok-bg); color: var(--ok); }
+  .badge.not-recoverable { background: var(--bad-bg); color: var(--bad); }
   .badge.running, .badge.idle { background: var(--line); color: var(--muted); }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
   .running .dot { animation: pulse 1.2s ease-in-out infinite; }
@@ -139,8 +138,8 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   function renderOverview(r) {
     const cfg = r.config || {}, c = r.chain || {};
     const has = c.blobCount !== undefined;
-    const lastUpload = has ? (c.lastPublishBlock ? `${ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : 0))} <span class="sub">(block ${n(c.lastPublishBlock)}, ${n(c.blobCount)} blobs on chain)</span>` : "none yet") : "—";
-    const lastCheck = r.finished_at ? `${ago(now() - r.finished_at)} <span class="sub">(verdict ${esc(r.verdict)}, took ${Math.round(r.finished_at - r.started_at)} s)</span>` : r.running ? "running now" : "never";
+    const lastUpload = has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : 0)) : "none yet") : "—";
+    const lastCheck = r.finished_at ? ago(now() - r.finished_at) : r.running ? "running now" : "never";
     $("overview").className = "";
     $("overview").innerHTML = dl([
       ["Contract", `${mono(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
@@ -157,12 +156,12 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const total = s.needed ?? s.blobs;
     const rows = Object.entries(s.matrix).map(([name, m]) => {
       const confirmed = m.neededVerified ?? m.verified;
-      return `<tr><td>${mark(m.reachable !== false && m.complete)}</td><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${m.reachable === false ? `<span class="bad">unreachable</span>` : `<span class="ok">reachable</span>`}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td><td class="num ${m.corrupt ? "bad" : "sub"}">${n(m.corrupt)}</td></tr>`;
+      return `<tr><td>${mark(m.reachable !== false && m.complete)}</td><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${m.reachable === false ? `<span class="bad">unreachable</span>` : `<span class="ok">reachable</span>`}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
     }).join("");
-    const needOk = s.needed !== undefined && (s.blobs - s.verifiedFromAnySource) <= (s.blobs - s.needed);
+    const missing = (s.neededUnavailable || []).length;
     $("sources").className = "";
-    $("sources").innerHTML = `<p style="margin:0 0 10px">${needOk ? `<span class="ok">Every blob a reader needs is verified from at least one source.</span>` : `<span class="bad">Some blobs a reader needs could not be verified from any source.</span>`} <span class="sub">${n(total)} blobs needed${s.blobs !== total ? ` of ${n(s.blobs)} on chain; the rest belong to an abandoned upload that every reader skips` : ""}. Each blob is verified by recomputing its KZG commitment against the hash the contract recorded.</span></p>
-      <table><thead><tr><th></th><th>Source</th><th>Reachable</th><th class="num">Confirmed blobs</th><th class="num">Corrupt</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">no sources configured</td></tr>`}</tbody></table>`;
+    $("sources").innerHTML = `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
+      <table><thead><tr><th></th><th>Source</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`;
   }
 
   function renderIpfs(r) {
@@ -190,7 +189,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 
   function render(r) {
     const verdict = r.running ? "running" : (r.verdict || "idle");
-    $("badge").className = `badge ${verdict}`;
+    $("badge").className = `badge ${verdict.replace(" ", "-")}`;
     $("verdict").textContent = verdict;
     $("run").disabled = !!r.running;
     const problems = r.problems || [];

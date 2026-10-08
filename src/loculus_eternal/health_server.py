@@ -142,7 +142,7 @@ class HealthServer:
         try:
             report = HealthCheck(self.config, log=log, progress=progress).run()
         except Exception as e:  # the page must always get a result
-            report = Report(started_at=live.started_at, finished_at=time.time(), verdict="failing", problems=[f"the check itself failed: {e}"], log=list(live.log))
+            report = Report(started_at=live.started_at, finished_at=time.time(), verdict="not recoverable", problems=[f"the check itself failed: {e}"], log=list(live.log))
         with self._lock:
             # Keep the live log lines the page already showed, then the finished report's own.
             report.log = live.log + [l for l in report.log if l not in live.log]

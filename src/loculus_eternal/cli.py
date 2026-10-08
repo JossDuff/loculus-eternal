@@ -102,7 +102,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     if args.once:
         report = HealthCheck(cfg, log=lambda m: print(m, file=sys.stderr)).run()
         print(json.dumps(report.to_json(), indent=1, default=str))
-        return 0 if report.verdict == "healthy" else 1
+        return 0 if report.verdict == "recoverable" else 1
     server = HealthServer(cfg, host=args.host, port=args.port)
     print(f"health page for {cfg.chain.contract} at {server.url} (Ctrl-C to stop)")
     if not args.no_open:
@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--config", type=Path, required=True, help="TOML config file naming the contract, the chain RPC and the sources")
     health.add_argument("--port", type=int, default=8765)
     health.add_argument("--host", default="127.0.0.1")
-    health.add_argument("--once", action="store_true", help="run one check, print the report as JSON, exit 0 only if healthy")
+    health.add_argument("--once", action="store_true", help="run one check, print the report as JSON, exit 0 only if the dataset is recoverable")
     health.add_argument("--no-open", action="store_true", help="do not open a browser")
     health.set_defaults(func=cmd_health)
 

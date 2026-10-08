@@ -32,7 +32,7 @@ STEPS = ["contract check", "blob check", "IPFS check"]   # how the page groups t
 class Report:
     started_at: float
     finished_at: float | None = None
-    verdict: str = "running"            # running, healthy, degraded, failing
+    verdict: str = "running"            # running, recoverable, not recoverable
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     chain: dict = field(default_factory=dict)
@@ -71,7 +71,6 @@ class HealthCheck:
             self._step(report, "contract check", "reading the contract at the finalized block")
             state, refs = self._chain(report, log)
             if state is None:
-                report.verdict = "failing"
                 return self._finish(report)
             # Blob check: every blob from every source, then the record's structure.
             self._step(report, "blob check")
@@ -90,9 +89,26 @@ class HealthCheck:
         report.finished_at = time.time()
         report.progress = {}
         if report.verdict == "running":
-            hard = [p for p in report.problems if not p.startswith("note:")]
-            report.verdict = "healthy" if not hard else ("failing" if any(k in p for p in hard for k in ("cannot", "no verified", "not verifiable", "torn", "does not match", "check itself")) else "degraded")
+            report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
         return report
+
+    @staticmethod
+    def _unrecoverable(report: Report) -> bool:
+        """The one question the page answers: can the dataset be rebuilt from what is out
+        there? It cannot when the contract cannot be read, when the blob list does not
+        reproduce the chain's head, when a blob a reader needs is unavailable from every
+        source, when the blobs do not parse as a stream, or when the check itself broke.
+        A dead archive, a stopped IPFS node or a stale snapshot CID are listed as problems
+        but do not change the answer: the other sources still recover the dataset."""
+        if "error" in report.chain:
+            return True
+        if report.blob_list and not report.blob_list.get("verified"):
+            return True
+        if report.sources.get("neededUnavailable"):
+            return True
+        if report.chain.get("blobCount") and report.stream and report.stream.get("header") is None:
+            return True
+        return any(p.startswith("the check itself failed") for p in report.problems)
 
     # --- steps -------------------------------------------------------------------------------
 
@@ -207,6 +223,7 @@ class HealthCheck:
         # upload do not count against it. A source that holds every needed blob is complete.
         needed_total = len(blobs) - len(dead)
         report.sources["needed"] = needed_total
+        report.sources["neededUnavailable"] = needed
         for m in report.sources.get("matrix", {}).values():
             m["neededVerified"] = sum(1 for i in m.pop("verifiedSeqs", []) if i not in dead)
             m["complete"] = m["neededVerified"] == needed_total
