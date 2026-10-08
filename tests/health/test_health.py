@@ -111,9 +111,9 @@ def check(world, cfg_path=None):
     return HealthCheck(configuration.load(cfg_path or world["cfg"]), log=lambda s: None).run()
 
 
-def test_H1_a_sound_deployment_is_healthy(world):
+def test_H1_a_sound_deployment_is_recoverable(world):
     r = check(world)
-    assert r.verdict == "healthy", r.problems
+    assert r.verdict == "recoverable", r.problems
     assert r.chain["blobCount"] == world["report"].batch["blobCountAfter"] and r.blob_list["verified"]
     assert r.sources["verifiedFromAnySource"] == r.sources["blobs"] and r.sources["unavailable"] == []
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
@@ -125,14 +125,14 @@ def test_H1_a_sound_deployment_is_healthy(world):
     assert r.finished_at and r.log
 
 
-def test_H2_a_blob_nobody_serves_fails_the_check_and_names_it(world):
+def test_H2_a_needed_blob_nobody_serves_makes_it_not_recoverable_and_names_it(world):
     archive = world["archive"]
     victim_seq = world["report"].batch["blobCountAfter"] - 1
     vh = bytes.fromhex(world["report"].transactions[-1]["versionedHashes"][-1][2:])
     archive.withhold.add(vh)
     # The IPFS copy still has it, so first prove it still passes thanks to IPFS...
     r = check(world)
-    assert r.verdict == "healthy" and r.sources["matrix"][[k for k in r.sources["matrix"] if k.startswith("beacon")][0]]["missing"] == 1
+    assert r.verdict == "recoverable" and r.sources["matrix"][[k for k in r.sources["matrix"] if k.startswith("beacon")][0]]["missing"] == 1
     # ...then take IPFS out of the picture: now no source serves it.
     cfg = world["tmp"] / "no-ipfs.toml"
     text = world["cfg"].read_text()
@@ -142,7 +142,7 @@ def test_H2_a_blob_nobody_serves_fails_the_check_and_names_it(world):
         r = check(world, cfg)
     finally:
         archive.withhold.discard(vh)
-    assert r.verdict == "failing"
+    assert r.verdict == "not recoverable"
     assert any(f"[{victim_seq}]" in p for p in r.problems)
     assert r.sources["unavailable"] == [victim_seq]
     assert r.stream["torn"], "the batch holding the missing blob is reported torn"
@@ -156,7 +156,7 @@ def test_H3_a_corrupting_source_is_noted_but_does_not_fail_the_check(world):
         r = check(world)
     finally:
         archive.corrupt.discard(vh)
-    assert r.verdict == "healthy"
+    assert r.verdict == "recoverable"
     assert any("corrupt" in n for n in r.notes)
     assert sum(m["corrupt"] for m in r.sources["matrix"].values()) >= 1
 
@@ -169,7 +169,7 @@ def test_H4_a_snapshot_that_is_not_the_publishers_is_a_problem(world):
     cfg = world["tmp"] / "impostor.toml"
     cfg.write_text(world["cfg"].read_text().replace(world["snapshot"], impostor))
     r = check(world, cfg)
-    assert r.verdict == "failing" and any("appPointer" in p for p in r.problems)
+    assert r.verdict == "recoverable" and any("appPointer" in p for p in r.problems), "a stale CID is a problem, not a loss of the data"
     assert r.ipfs["pointerMatches"] is False
 
 
@@ -190,7 +190,7 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
             if not r["running"] and r["verdict"] != "idle":
                 break
             time.sleep(0.2)
-        assert r["verdict"] == "healthy", r.get("problems")
+        assert r["verdict"] == "recoverable", r.get("problems")
         assert r["log"] and r["stream"]["entriesTotal"] == 3
         assert r["progress"] == {}, "a finished report carries no progress"
         assert httpx.get(f"{server.url}/nothing").status_code == 404
@@ -227,5 +227,5 @@ def test_H6_once_prints_json_and_exits_by_verdict(world):
     proc = subprocess.run([sys.executable, "-m", "loculus_eternal.cli", "health", "--config", str(world["cfg"]), "--once"], capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout)
-    assert report["verdict"] == "healthy" and report["chain"]["blobCount"] > 0
+    assert report["verdict"] == "recoverable" and report["chain"]["blobCount"] > 0
     assert "reading the contract" in proc.stderr
