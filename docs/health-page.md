@@ -14,21 +14,25 @@ check over today's stream takes well under a minute. To rebuild the files, run
 
 ## What one check does
 
-The page opens with the facts that matter most: the contract address and network, the
-publisher (the only key that can publish), when the last upload landed, how many blobs
-verify from the sources, whether the IPFS snapshot verifies, and when this check last ran.
-Below them the work is presented as three checks: the **contract check** (the first two rows
-below), the **blob check** (the next two) and the **IPFS check** (the last). The check never
-consults the live Pathoplexus database: the record is judged on its own, against the chain.
-The steps in detail:
+The page has three boxes. **Overview**: the contract (linked to a block explorer), the
+owner (the publisher, the only key that can publish), the network, how long ago the last
+upload landed and how long ago this check ran. **Blob check**: one row per configured blob
+source with a check or a cross, whether it was reachable, and how many of the blobs a reader
+needs it served and verified; the dead blobs of an abandoned upload are not counted against
+a source. **IPFS check**: the CID of the current dataset snapshot with a check or a cross for
+whether it hashes to the pointer the contract stores, then one row per IPFS node with a check
+or a cross for whether that node holds the whole snapshot: the manifest, the spec, and every
+blob object the manifest lists. Problems, when there are any, are listed above the overview.
+The check never consults the live Pathoplexus database: the record is judged on its own,
+against the chain. The steps in detail:
 
 | Step | What is checked | What a problem looks like |
 |---|---|---|
 | Chain | The contract has code at the finalized block; its publisher, blob count, head, pointer and successor; the block and age of the most recent publish | the contract cannot be read; a successor is set (noted) |
 | Blob list | The ordered list of versioned hashes from event logs reproduces `head` and `blobCount` | the list does not match the chain, or logs cannot be read |
-| Sources | Every configured source is asked for every blob; each candidate is verified by recomputing its KZG commitment | a blob that no source can supply (failing); a source serving corrupt bytes (noted, rejected) |
+| Sources | Every configured source is asked for every blob; each candidate is verified by recomputing its KZG commitment; a source is complete when it served every blob a reader needs | a needed blob that no source can supply (failing); a source serving corrupt bytes (noted, rejected) |
 | Stream | The outer records of the verified blobs: header, batch headers, body lengths and digests, indexes, manifests; the header's chain and contract binding; torn ranges | a torn range at the end (an unfinished or lost upload); a header naming another chain or contract |
-| IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; its manifest matches the chain; its blob objects are retrievable and verify; the spec is present. Every read asks the endpoint offline with a short deadline, so the question is whether this node holds the content, answered in seconds | a snapshot that is not the publisher's current one; an endpoint that no longer holds it |
+| IPFS snapshot | The configured snapshot CID hashes to the chain's pointer; on every configured IPFS node, its manifest matches the chain, its blob objects are retrievable and verify, and the spec is present. Every read asks the node offline with a short deadline, so the question is whether this node holds the content, answered in seconds | a snapshot that is not the publisher's current one; a node that no longer holds it |
 
 The **verdict** is healthy when the contract is reachable, the blob list verifies, every
 blob verifies from at least one source, the stream has no torn tail, and the snapshot matches
@@ -55,11 +59,9 @@ it works offline against a local node. A check runs when the page opens; the but
 another. While a check runs, a bar across the top shows which of the three checks it is on
 and what it is doing, including how many blobs each source has been asked for so far.
 
-The page opens with a **Deployment** card: the contract address with a link to a block
-explorer, the network, the deployment block, and the inputs this check runs with: the RPC
-endpoint, every blob source, the IPFS endpoints and the config file. Every URL
-is reduced to its scheme and host before it reaches the page, because hosted RPC and archive
-URLs carry API keys in their path, and this page is meant to be shown around. A quickstart
-card gives the two commands that matter, and the footer links to the repository.
+Every URL on the page is reduced to its scheme and host before it leaves the server,
+because hosted RPC and archive URLs carry API keys in their path, and this page is meant to
+be shown around. A quickstart card gives the two commands that matter, and the footer links
+to the repository.
 
 Behaviour IDs for the page are `H1`–`H7` in `docs/test-plan.md`.
