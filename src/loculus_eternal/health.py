@@ -160,7 +160,14 @@ class HealthCheck:
         return state, refs
 
     def _sources(self, report: Report, refs: list[BlobRef], state, log) -> list[bytes | None]:
-        """Ask every source for every blob; keep the first verified copy of each."""
+        """Ask every source for every blob a reader needs; keep the first verified copy of each.
+
+        Which blobs are dead (an abandoned upload a later batch skips) is learned from the
+        record's own structure, which lives in the blobs. So the first source is asked for
+        everything; from then on the structure of what is in hand is read before each source,
+        and blobs already known to be dead are not asked for again. When too little is in
+        hand to read the structure, nothing is known to be dead and everything is asked for,
+        which is the safe direction."""
         blobs: list[bytes | None] = [None] * len(refs)
         now = time.time()
         in_retention = {r.seq for r in refs if r.block_timestamp and now - r.block_timestamp < RETENTION_SECONDS}
@@ -168,14 +175,16 @@ class HealthCheck:
         for src in self.cfg.sources:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
-            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": []}
-            log(f"fetching every blob from {src.name}")
+            dead = read_structure(blobs).dead_blobs() if any(b is not None for b in blobs) else set()
+            to_ask = [r for r in refs if r.seq not in dead]
+            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": len(to_ask)}
+            log(f"fetching {len(to_ask)} blob(s) from {src.name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
             groups: dict[tuple, list[BlobRef]] = {}
-            for r in refs:
+            for r in to_ask:
                 groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
             asked = 0
             for (bn, bt), group in groups.items():
-                self._step(report, "blob check", f"{src.name}: {asked:,} of {len(refs):,} blobs asked for")
+                self._step(report, "blob check", f"{src.name}: {asked:,} of {len(to_ask):,} blobs asked for")
                 asked += len(group)
                 wanted = [r.versioned_hash for r in group]
                 try:
@@ -196,7 +205,7 @@ class HealthCheck:
                         counts["missing"] += 1
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
-            counts["reachable"] = counts["error"] < len(refs)   # some request got an answer
+            counts["reachable"] = counts["error"] < len(to_ask)   # some request got an answer
             matrix[src.name] = counts
             log(f"{src.name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
         unavailable = [i for i, b in enumerate(blobs) if b is None]
