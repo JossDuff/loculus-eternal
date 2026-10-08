@@ -2,8 +2,8 @@
 
 One check reads the contract, verifies the blob list against the chain, fetches every blob
 from every configured source and verifies each against its versioned hash, walks the
-stream's structure, and checks the IPFS snapshot against the on-chain pointer. It
-materialises nothing, and it never consults the live database: the record is judged on
+stream's structure. IPFS is one of the sources, through the snapshot the contract points
+at. It materialises nothing, and it never consults the live database: the record is judged on
 its own. The result is a
 plain report with a verdict and the reasons for it, meant for a third party who wants to
 confirm, without trusting anyone, that the data is still there and still right.
@@ -15,17 +15,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from loculus_eternal import kzg
-from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, chain_head, verify_manifest
+from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, verify_manifest
 from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
-from loculus_eternal.ipfs import IpfsError, KuboClient, app_pointer, parse_manifest
+from loculus_eternal.ipfs import app_pointer
 from loculus_eternal.rpc import connect
-from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
 RETENTION_SECONDS = 4096 * 32 * 12   # 4096 epochs of 32 slots of 12 seconds, about 18.2 days
-STEPS = ["contract check", "blob check", "IPFS check"]   # how the page groups the work
+STEPS = ["contract check", "blob check"]   # how the page groups the work
 
 
 @dataclass
@@ -39,7 +37,6 @@ class Report:
     blob_list: dict = field(default_factory=dict)
     sources: dict = field(default_factory=dict)
     stream: dict = field(default_factory=dict)
-    ipfs: dict = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
     progress: dict = field(default_factory=dict)   # {"steps", "step", "detail"} while running
 
@@ -77,9 +74,6 @@ class HealthCheck:
             blobs = self._sources(report, refs, state, log)
             self._step(report, "blob check", "walking the record's structure")
             self._stream(report, blobs, state, log)
-            # IPFS check: the snapshot the contract points at.
-            self._step(report, "IPFS check", "checking the snapshot against the pointer")
-            self._ipfs(report, state, refs, log)
         except Exception as e:  # a check must end with a verdict, never a traceback
             report.problems.append(f"the check itself failed: {type(e).__name__}: {e}")
             log(f"check failed: {e}")
@@ -264,70 +258,3 @@ class HealthCheck:
             if t is not tail:
                 report.notes.append(f"a torn batch inside the stream (blobs {t.first_blob} to {t.last_blob}) was skipped, as the format requires")
         log(f"{len(structure.batches)} complete batch(es), {report.stream['entriesTotal']:,} entries across {len(structure.organisms())} organisms")
-
-    def _ipfs(self, report: Report, state, refs: list[BlobRef], log) -> None:
-        ipfs_sources = [s for s in self.cfg.sources if isinstance(s, IpfsSource)]
-        if not ipfs_sources or not ipfs_sources[0].snapshot_cid:
-            report.ipfs = {"configured": False}
-            report.notes.append("no IPFS snapshot CID is configured; the snapshot cannot be checked")
-            return
-        cid = ipfs_sources[0].snapshot_cid
-        log(f"checking the IPFS snapshot {cid[:16]}…")
-        result: dict = {"configured": True, "snapshotCid": cid, "pointerMatches": app_pointer(cid) == state.app_pointer, "nodes": []}
-        if not result["pointerMatches"]:
-            report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
-        # Every node of every ipfs source is asked whether it holds the snapshot: the
-        # manifest, the spec, and each blob object the manifest lists. Reads are offline
-        # with a short deadline, so a node that lacks the content says so in seconds.
-        for url in [e for src in ipfs_sources for e in src.endpoints]:
-            node: dict = {"url": url, "ok": False, "reachable": False}
-            client = KuboClient(url, timeout=60)
-            try:
-                client.version()
-                node["reachable"] = True
-                manifest = parse_manifest(client.cat(f"{cid}/manifest.json", offline=True))
-                listed = [BlobRef(int(b["seq"]), bytes.fromhex(b["versionedHash"][2:])) for b in manifest["blobs"]]
-                node["manifestBlobs"] = len(listed)
-                try:
-                    verify_manifest(listed, state)
-                    node["manifestMatchesChain"] = True
-                except ManifestMismatch as e:
-                    node["manifestMatchesChain"] = False
-                    report.problems.append(f"the snapshot's blob list on {url} does not match the chain: {e}")
-                # A dead blob of an abandoned upload is listed without a CID; nobody needs it.
-                with_cid = [b for b in manifest["blobs"] if b.get("cid")]
-                objects_ok = 0
-                for b in with_cid:
-                    try:
-                        data = client.block_get(b["cid"], offline=True)
-                        if kzg.verify_blob(data, bytes.fromhex(b["versionedHash"][2:])):
-                            objects_ok += 1
-                    except IpfsError:
-                        pass
-                node["blobObjectsRetrievable"] = objects_ok
-                node["blobObjectsListed"] = len(with_cid)
-                files = []
-                for name in ("manifest.json", "container-spec.md"):
-                    try:
-                        client.cat(f"{cid}/{name}", offline=True)
-                        files.append(name)
-                    except IpfsError:
-                        report.problems.append(f"the snapshot on {url} lacks {name}")
-                node["files"] = files
-                node["ok"] = result["pointerMatches"] and node["manifestMatchesChain"] and objects_ok == len(with_cid) and len(files) == 2
-                if objects_ok < len(with_cid):
-                    report.notes.append(f"{len(with_cid) - objects_ok} blob object(s) not retrievable from {url}")
-            except (IpfsError, ValueError, KeyError) as e:
-                node["error"] = str(e)
-                report.problems.append(f"cannot read the snapshot's manifest from {url}: {e}")
-            result["nodes"].append(node)
-            log(f"{url}: {'holds the snapshot' if node['ok'] else 'does not hold the whole snapshot'}")
-        # Summary fields: the best node's view, for the verdict and for scripts.
-        best = max(result["nodes"], key=lambda n: (n["ok"], n.get("blobObjectsRetrievable", -1)), default=None)
-        if best is not None and "error" not in best:
-            result["manifestBlobs"] = best["manifestBlobs"]
-            result["manifestMatchesChain"] = best["manifestMatchesChain"]
-            result["blobObjectsRetrievable"] = best["blobObjectsRetrievable"]
-            result["blobObjectsListed"] = best["blobObjectsListed"]
-        result["nodesOk"] = sum(1 for n in result["nodes"] if n["ok"])
-        report.ipfs = result

@@ -105,12 +105,10 @@
 
   <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
-  <section class="card" style="margin-top:14px"><h2>IPFS check</h2><div id="ipfs" class="empty">No check yet.</div></section>
-
-  <section class="card" style="margin-top:14px"><h2>Quickstart</h2>
+  <section class="card" style="margin-top:14px"><h2>Backup and recover your Loculus database to Ethereum!</h2>
     <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
 uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
-    <p class="sub" style="margin:10px 0 0">The configuration file names the contract and the blob sources. Full instructions are in the repository's <a href="https://github.com/JossDuff/loculus-eternal/blob/main/docs/runbook.md" target="_blank" rel="noopener">runbook</a>.</p>
+    <p class="sub" style="margin:10px 0 0"><a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a></p>
   </section>
 
   <footer>
@@ -162,17 +160,6 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       <table><thead><tr><th>Source</th><th>Recoverable from</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`;
   }
 
-  function renderIpfs(r) {
-    const i = r.ipfs || {};
-    if (i.configured === false) { $("ipfs").className = "empty"; $("ipfs").textContent = "No snapshot CID is configured, so IPFS cannot be checked."; return; }
-    if (!i.configured) return;
-    const rows = (i.nodes || []).map(nd => `<tr><td class="mono">${esc(nd.url)}${nd.reachable && !nd.ok ? `<div class="sub">${nd.error ? esc(nd.error) : `${n(nd.blobObjectsRetrievable)}/${n(nd.blobObjectsListed)} blob objects${nd.manifestMatchesChain === false ? "; manifest does not match the chain" : ""}`}</div>` : ""}</td><td>${mark(nd.ok)}</td><td>${mark(nd.reachable)}</td></tr>`).join("");
-    $("ipfs").className = "";
-    $("ipfs").innerHTML = dl([
-      ["Dataset CID", i.pointerMatches ? mono(i.snapshotCid) : `${mono(i.snapshotCid)} ${mark(false)} <span class="bad">not the snapshot the contract points at</span>`],
-    ]) + `<table style="margin-top:12px"><thead><tr><th>Node</th><th>Recoverable from</th><th>Reachable</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">no IPFS nodes configured</td></tr>`}</tbody></table>`;
-  }
-
   function renderProgress(r) {
     const p = r.progress || {};
     const show = !!r.running && Array.isArray(p.steps);
@@ -196,7 +183,6 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     renderOverview(r);
     renderProgress(r);
     renderSources(r);
-    renderIpfs(r);
   }
 
   let last = null;
