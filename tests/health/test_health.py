@@ -118,9 +118,9 @@ def test_H1_a_sound_deployment_is_recoverable(world):
     assert r.sources["verifiedFromAnySource"] == r.sources["blobs"] and r.sources["unavailable"] == []
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
     assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
-    assert r.ipfs["configured"] and r.ipfs["pointerMatches"] and r.ipfs["manifestMatchesChain"] and r.ipfs["blobObjectsRetrievable"] == r.sources["blobs"]
-    assert r.ipfs["nodesOk"] == len(r.ipfs["nodes"]) == 1 and r.ipfs["nodes"][0]["ok"]
+    assert not hasattr(r, "ipfs"), "IPFS is checked as a blob source, not separately"
     assert r.sources["needed"] == r.sources["blobs"] and all(m["complete"] and m["reachable"] for m in r.sources["matrix"].values())
+    assert any(k.startswith("ipfs") and m["verified"] == r.sources["blobs"] for k, m in r.sources["matrix"].items())
     assert not hasattr(r, "backend"), "the check judges the record on its own, never against the live database"
     assert r.finished_at and r.log
 
@@ -169,8 +169,9 @@ def test_H4_a_snapshot_that_is_not_the_publishers_is_a_problem(world):
     cfg = world["tmp"] / "impostor.toml"
     cfg.write_text(world["cfg"].read_text().replace(world["snapshot"], impostor))
     r = check(world, cfg)
-    assert r.verdict == "recoverable" and any("appPointer" in p for p in r.problems), "a stale CID is a problem, not a loss of the data"
-    assert r.ipfs["pointerMatches"] is False
+    assert r.verdict == "recoverable", "a stale CID is not a loss of the data"
+    ipfs_row = next(m for k, m in r.sources["matrix"].items() if k.startswith("ipfs"))
+    assert not ipfs_row["complete"] and ipfs_row["verified"] == 0 and "appPointer" in ipfs_row.get("lastError", "")
 
 
 def test_H5_the_server_serves_the_page_and_runs_checks(world):
@@ -218,7 +219,7 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     seen = []
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
     steps = [st for st, _ in seen]
-    assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check", "IPFS check"]
+    assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check"]
     assert any(d and "blobs asked for" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
 
 
