@@ -52,7 +52,9 @@
   .notes h2 { color: var(--warn); }
   pre.log { max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0; font: 12px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; }
   .empty { color: var(--muted); font-style: italic; }
-  footer { margin-top: 28px; color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
+  footer { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  footer h2 { font-size: 15px; font-weight: 650; color: var(--text); margin: 0 0 10px; }
+  footer p { margin: 10px 0 0; }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
   .links { display: flex; align-items: center; gap: 14px; font-size: 13px; }
   .eth { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
@@ -82,7 +84,7 @@
 <body>
 <main>
   <header>
-    <div><h1>Loculus Eternal health</h1></div>
+    <div><h1>Loculus Eternal health</h1><div class="sub">This page verifies that the published Loculus database is still fully recoverable.</div></div>
     <span class="badge idle" id="badge"><span class="dot"></span><span id="verdict">idle</span></span>
     <span class="links">
       <span class="eth" title="Every blob's hash is anchored in an immutable Ethereum contract"><svg viewBox="0 0 256 417" aria-hidden="true"><path d="M127.9 0 125.2 9.5v275.7l2.7 2.8 127.9-75.6z" opacity=".6"/><path d="M127.9 0 0 212.4l127.9 75.6V0z"/><path d="m127.9 312.2-1.5 1.9v98.2l1.5 4.5L256 236.6z" opacity=".6"/><path d="M127.9 416.8v-104.6L0 236.6z"/></svg>Secured by Ethereum</span>
@@ -105,16 +107,11 @@
 
   <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
-  <section class="card" style="margin-top:14px"><h2>Backup and recover your Loculus database to Ethereum!</h2>
+  <footer>
+    <h2>Backup and recover your Loculus database to Ethereum!</h2>
     <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
 uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
-    <p class="sub" style="margin:10px 0 0"><a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a></p>
-  </section>
-
-  <footer>
-    <span>This page verifies the published record against the chain and the configured sources without trusting any of them.
-    It materialises nothing; to rebuild the dataset, run <code>loculus-eternal recover</code>.</span>
-    <a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a>
+    <p><a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a></p>
   </footer>
 </main>
 <script>
@@ -136,6 +133,10 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const has = c.blobCount !== undefined;
     const lastUpload = has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : 0)) : "none yet") : "—";
     const lastCheck = r.finished_at ? ago(now() - r.finished_at) : r.running ? "running now" : "never";
+    // The CID is known from the config before any check; whether it is the snapshot the
+    // contract points at is known once the contract has been read.
+    const cid = c.snapshotCid || ((cfg.sources || []).find(s => s.snapshotCid) || {}).snapshotCid;
+    const snapshot = !cid ? null : `${mono(cid)} <a href="https://ipfs.io/ipfs/${esc(cid)}" target="_blank" rel="noopener">gateway</a>${c.snapshotMatchesPointer === false ? ` ${mark(false)} <span class="bad">not the snapshot the contract points at</span>` : ""}`;
     $("overview").className = "";
     $("overview").innerHTML = dl([
       ["Contract", `${mono(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
@@ -143,6 +144,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
       ["Last update", lastUpload],
       ["Last health check", lastCheck],
+      snapshot ? ["IPFS snapshot", snapshot] : null,
     ]);
   }
 

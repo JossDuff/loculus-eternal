@@ -20,6 +20,7 @@ from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
 from loculus_eternal.ipfs import app_pointer
 from loculus_eternal.rpc import connect
+from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
 RETENTION_SECONDS = 4096 * 32 * 12   # 4096 epochs of 32 slots of 12 seconds, about 18.2 days
@@ -129,6 +130,14 @@ class HealthCheck:
         }
         if int(state.successor, 16) != 0:
             report.notes.append(f"a successor contract is set: {state.successor}; this deployment may have been replaced")
+        # The configured snapshot CID is the publisher's only if its hash is the contract's
+        # pointer; that costs no request. The blob check then uses the snapshot as a source.
+        cid = next((s.snapshot_cid for s in self.cfg.sources if isinstance(s, IpfsSource) and s.snapshot_cid), None)
+        if cid:
+            report.chain["snapshotCid"] = cid
+            report.chain["snapshotMatchesPointer"] = app_pointer(cid) == state.app_pointer
+            if not report.chain["snapshotMatchesPointer"]:
+                report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
         log(f"contract holds {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
 
         self._step(report, "contract check", "rebuilding the blob list from event logs")
