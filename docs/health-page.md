@@ -16,7 +16,8 @@ check over today's stream takes well under a minute. To rebuild the files, run
 
 The page has two boxes. **Overview**: the contract (linked to a block explorer), the
 owner (the publisher, the only key that can publish), the network, how long ago the last
-upload landed and how long ago this check ran. **Blob check**: one row per configured blob
+upload landed, how long ago this check ran, and the IPFS snapshot CID linked to a public
+gateway, marked only when it is not the snapshot the contract's pointer commits to. **Blob check**: one row per configured blob
 source with a check or a cross for whether the dataset is recoverable from it, a check or a
 cross for whether it was reachable, and how many of the blobs a reader needs it served and
 verified; the dead blobs of an abandoned upload are not counted against a source. IPFS is
