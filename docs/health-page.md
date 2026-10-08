@@ -60,7 +60,7 @@ and no key is needed, which is the point: anyone can run this against anyone's d
 
 The page is one HTML file with inline styles and script and loads nothing from anywhere, so
 it works offline against a local node. A check runs when the page opens; the button runs
-another. While a check runs, a bar across the top shows which of the three checks it is on
+another. While a check runs, a bar across the top shows which of the two checks it is on
 and what it is doing, including how many blobs each source has been asked for so far.
 
 Every URL on the page is reduced to its scheme and host before it leaves the server,

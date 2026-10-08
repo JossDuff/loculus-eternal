@@ -33,8 +33,8 @@ loculus-eternal health --config loculus-eternal.toml
 
 opens a one-page health check: the contract's state, the blob list verified against the
 chain, every blob verified from every configured source, the stream's structure, the IPFS
-snapshot against the on-chain pointer, and the backend's counts per organism. It needs no
-key and trusts nothing; see [`docs/health-page.md`](docs/health-page.md).
+snapshot as one of the sources, and one verdict: recoverable or not. It needs no key, never
+consults the backend, and trusts nothing; see [`docs/health-page.md`](docs/health-page.md).
 
 ## How to recover
 
