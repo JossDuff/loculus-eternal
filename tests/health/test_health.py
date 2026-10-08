@@ -217,6 +217,11 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     assert any(s["type"] == "blobscan" and s["endpoints"] == ["https://api.example.com"] for s in public["sources"])
     assert any(s["type"] == "ipfs" and s["snapshotCid"] == world["snapshot"] for s in public["sources"])
     assert "backend" not in public and public["repository"].startswith("https://github.com/")
+    # A full check against that config must not leak the key either: not in source names,
+    # not in error text, nowhere in the report.
+    keyed = HealthCheck(cfg, log=lambda s: None).run()
+    dumped = json.dumps(keyed.to_json(), default=str)
+    assert "SECRETKEY" not in dumped and any(k.startswith("blobscan(https://api.example.com)") for k in keyed.sources["matrix"])
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
