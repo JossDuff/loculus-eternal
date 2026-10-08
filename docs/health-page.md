@@ -19,10 +19,12 @@ owner (the publisher, the only key that can publish), the network, how long ago 
 upload landed and how long ago this check ran. **Blob check**: one row per configured blob
 source with a check or a cross, whether it was reachable, and how many of the blobs a reader
 needs it served and verified; the dead blobs of an abandoned upload are not counted against
-a source. **IPFS check**: the CID of the current dataset snapshot with a check or a cross for
-whether it hashes to the pointer the contract stores, then one row per IPFS node with a check
-or a cross for whether that node holds the whole snapshot: the manifest, the spec, and every
-blob object the manifest lists. Problems, when there are any, are listed above the overview.
+a source. **IPFS check**: the CID of the current dataset snapshot (marked only when it does
+not hash to the pointer the contract stores), then one row per IPFS node with a check or a
+cross for whether the dataset is recoverable from it, meaning it holds the whole snapshot:
+the manifest, the spec, and every blob object the manifest lists; and whether it was
+reachable at all. Problems, when there are any, are listed above the overview. The check's
+log goes to the console the server runs in, not to the page.
 The check never consults the live Pathoplexus database: the record is judged on its own,
 against the chain. The steps in detail:
 
