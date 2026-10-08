@@ -271,9 +271,11 @@ class HealthCheck:
         # manifest, the spec, and each blob object the manifest lists. Reads are offline
         # with a short deadline, so a node that lacks the content says so in seconds.
         for url in [e for src in ipfs_sources for e in src.endpoints]:
-            node: dict = {"url": url, "ok": False}
+            node: dict = {"url": url, "ok": False, "reachable": False}
             client = KuboClient(url, timeout=60)
             try:
+                client.version()
+                node["reachable"] = True
                 manifest = parse_manifest(client.cat(f"{cid}/manifest.json", offline=True))
                 listed = [BlobRef(int(b["seq"]), bytes.fromhex(b["versionedHash"][2:])) for b in manifest["blobs"]]
                 node["manifestBlobs"] = len(listed)

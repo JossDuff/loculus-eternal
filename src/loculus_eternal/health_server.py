@@ -8,6 +8,7 @@ background thread so the page can show progress. Standard library only.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -132,8 +133,11 @@ class HealthServer:
         live = self._report
 
         def log(msg: str) -> None:
+            # The log is for whoever runs the server: it goes to the console, not the page.
+            line = f"{time.strftime('%H:%M:%S')} {msg}"
+            print(line, file=sys.stderr, flush=True)
             with self._lock:
-                live.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
+                live.log.append(line)
 
         def progress(p: dict) -> None:
             with self._lock:

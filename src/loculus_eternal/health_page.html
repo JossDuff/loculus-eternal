@@ -107,8 +107,6 @@
 
   <section class="card" style="margin-top:14px"><h2>IPFS check</h2><div id="ipfs" class="empty">No check yet.</div></section>
 
-  <section class="card" style="margin-top:14px"><h2>Check log</h2><pre class="log" id="log"></pre></section>
-
   <section class="card" style="margin-top:14px"><h2>Quickstart</h2>
     <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
 uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
@@ -156,23 +154,23 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const total = s.needed ?? s.blobs;
     const rows = Object.entries(s.matrix).map(([name, m]) => {
       const confirmed = m.neededVerified ?? m.verified;
-      return `<tr><td>${mark(m.reachable !== false && m.complete)}</td><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${m.reachable === false ? `<span class="bad">unreachable</span>` : `<span class="ok">reachable</span>`}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
+      return `<tr><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
     }).join("");
     const missing = (s.neededUnavailable || []).length;
     $("sources").className = "";
     $("sources").innerHTML = `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
-      <table><thead><tr><th></th><th>Source</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`;
+      <table><thead><tr><th>Source</th><th>Recoverable from</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`;
   }
 
   function renderIpfs(r) {
     const i = r.ipfs || {};
     if (i.configured === false) { $("ipfs").className = "empty"; $("ipfs").textContent = "No snapshot CID is configured, so IPFS cannot be checked."; return; }
     if (!i.configured) return;
-    const rows = (i.nodes || []).map(nd => `<tr><td>${mark(nd.ok)}</td><td class="mono">${esc(nd.url)}</td><td>${nd.error ? `<span class="bad">${esc(nd.error)}</span>` : `${nd.manifestMatchesChain ? `<span class="ok">manifest matches the chain</span>` : `<span class="bad">manifest does not match the chain</span>`}; ${n(nd.blobObjectsRetrievable)}/${n(nd.blobObjectsListed)} blob objects${(nd.files || []).length === 2 ? "" : `; <span class="bad">files missing</span>`}`}</td></tr>`).join("");
+    const rows = (i.nodes || []).map(nd => `<tr><td class="mono">${esc(nd.url)}${nd.reachable && !nd.ok ? `<div class="sub">${nd.error ? esc(nd.error) : `${n(nd.blobObjectsRetrievable)}/${n(nd.blobObjectsListed)} blob objects${nd.manifestMatchesChain === false ? "; manifest does not match the chain" : ""}`}</div>` : ""}</td><td>${mark(nd.ok)}</td><td>${mark(nd.reachable)}</td></tr>`).join("");
     $("ipfs").className = "";
     $("ipfs").innerHTML = dl([
-      ["Dataset CID", `${mono(i.snapshotCid)} ${mark(i.pointerMatches)} <span class="sub">${i.pointerMatches ? "hashes to the pointer the contract stores" : "does NOT hash to the pointer the contract stores"}</span>`],
-    ]) + `<table style="margin-top:12px"><thead><tr><th></th><th>Node</th><th>Holds the snapshot</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">no IPFS nodes configured</td></tr>`}</tbody></table>`;
+      ["Dataset CID", i.pointerMatches ? mono(i.snapshotCid) : `${mono(i.snapshotCid)} ${mark(false)} <span class="bad">not the snapshot the contract points at</span>`],
+    ]) + `<table style="margin-top:12px"><thead><tr><th>Node</th><th>Recoverable from</th><th>Reachable</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">no IPFS nodes configured</td></tr>`}</tbody></table>`;
   }
 
   function renderProgress(r) {
@@ -195,8 +193,6 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const problems = r.problems || [];
     $("problems").hidden = problems.length === 0;
     $("problem-list").innerHTML = problems.map(p => `<li>${esc(p)}</li>`).join("");
-    $("log").textContent = (r.log || []).join("\n");
-    $("log").scrollTop = $("log").scrollHeight;
     renderOverview(r);
     renderProgress(r);
     renderSources(r);
