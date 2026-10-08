@@ -74,7 +74,8 @@
   .fact .v { font-size: 16px; font-weight: 650; margin-top: 4px; overflow-wrap: anywhere; line-height: 1.3; }
   .fact .v.mono { font-size: 13px; font-weight: 500; }
   .fact .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .group { margin-top: 22px; }
+  .mark { font-weight: 700; font-size: 16px; }
+  .mark.ok { color: var(--ok); } .mark.bad { color: var(--bad); }
   .group > h3 { font-size: 15px; font-weight: 650; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .group > h3 .sub { font-weight: 400; }
 </style>
@@ -82,10 +83,7 @@
 <body>
 <main>
   <header>
-    <div>
-      <h1>Loculus Eternal health</h1>
-      <div class="sub" id="subtitle">Loading…</div>
-    </div>
+    <div><h1>Loculus Eternal health</h1></div>
     <span class="badge idle" id="badge"><span class="dot"></span><span id="verdict">idle</span></span>
     <span class="links">
       <span class="eth" title="Every blob's hash is anchored in an immutable Ethereum contract"><svg viewBox="0 0 256 417" aria-hidden="true"><path d="M127.9 0 125.2 9.5v275.7l2.7 2.8 127.9-75.6z" opacity=".6"/><path d="M127.9 0 0 212.4l127.9 75.6V0z"/><path d="m127.9 312.2-1.5 1.9v98.2l1.5 4.5L256 236.6z" opacity=".6"/><path d="M127.9 416.8v-104.6L0 236.6z"/></svg>Secured by Ethereum</span>
@@ -99,50 +97,24 @@
     <div class="detail" id="detail"></div>
   </section>
 
-  <div class="facts" id="facts"></div>
-
   <section class="card problems" id="problems" hidden>
     <h2>Problems</h2>
     <ul id="problem-list"></ul>
   </section>
 
-  <div class="grid">
-    <section class="card wide"><h2>Deployment</h2><div id="deployment" class="empty">Loading…</div></section>
-  </div>
+  <section class="card"><h2>Overview</h2><div id="overview" class="empty">Loading…</div></section>
 
-  <section class="group">
-    <h3>Contract check <span class="sub">— what the contract on Ethereum says, and that the blob list reproduces it</span></h3>
-    <div class="grid">
-      <section class="card"><h2>Contract state</h2><div id="chain" class="empty">No check yet.</div></section>
-      <section class="card"><h2>Blob list</h2><div id="bloblist" class="empty">No check yet.</div></section>
-    </div>
-  </section>
+  <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
-  <section class="group">
-    <h3>Blob check <span class="sub">— every blob fetched from every source and verified against the contract; the record read back</span></h3>
-    <div class="grid">
-      <section class="card wide"><h2>Blob sources</h2><div id="sources" class="empty">No check yet.</div></section>
-      <section class="card wide"><h2>Record structure</h2><div id="stream" class="empty">No check yet.</div></section>
-      <section class="card wide"><h2>Organisms</h2><div id="organisms" class="empty">No check yet.</div></section>
-    </div>
-  </section>
+  <section class="card" style="margin-top:14px"><h2>IPFS check</h2><div id="ipfs" class="empty">No check yet.</div></section>
 
-  <section class="group">
-    <h3>IPFS check <span class="sub">— the snapshot the contract points at</span></h3>
-    <div class="grid">
-      <section class="card wide"><h2>IPFS snapshot</h2><div id="ipfs" class="empty">No check yet.</div></section>
-    </div>
-  </section>
+  <section class="card" style="margin-top:14px"><h2>Check log</h2><pre class="log" id="log"></pre></section>
 
-  <div class="grid" style="margin-top:22px">
-    <section class="card wide notes" id="notes" hidden><h2>Notes</h2><ul id="note-list"></ul></section>
-    <section class="card wide"><h2>Check log</h2><pre class="log" id="log"></pre></section>
-    <section class="card wide"><h2>Quickstart</h2>
-      <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
+  <section class="card" style="margin-top:14px"><h2>Quickstart</h2>
+    <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
 uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
-      <p class="sub" style="margin:10px 0 0">The configuration file names the contract and the blob sources; the one this page runs from is shown above. Full instructions are in the repository's <a href="https://github.com/JossDuff/loculus-eternal/blob/main/docs/runbook.md" target="_blank" rel="noopener">runbook</a>.</p>
-    </section>
-  </div>
+    <p class="sub" style="margin:10px 0 0">The configuration file names the contract and the blob sources. Full instructions are in the repository's <a href="https://github.com/JossDuff/loculus-eternal/blob/main/docs/runbook.md" target="_blank" rel="noopener">runbook</a>.</p>
+  </section>
 
   <footer>
     <span>This page verifies the published record against the chain and the configured sources without trusting any of them.
@@ -155,58 +127,53 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const n = v => v === null || v === undefined ? "—" : Number(v).toLocaleString();
-  const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
-  const short = h => h && h.length > 20 ? `${h.slice(0, 10)}…${h.slice(-6)}` : h;
+  const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;
+  const mark = ok => ok ? `<span class="mark ok" title="yes">✓</span>` : `<span class="mark bad" title="no">✗</span>`;
+  const kind = name => name.replace(/\(.*$/, "");
+  const endpointsOf = name => { const m = name.match(/\((.*)\)$/); return m ? m[1].replace(/^[^;]*…;\s*/, "") : ""; };
   let timer = null;
-  let deploymentShown = false;
+  const now = () => Date.now() / 1000;
 
-  function renderDeployment(cfg) {
-    if (deploymentShown || !cfg) return;
-    deploymentShown = true;
-    const srcs = (cfg.sources || []).map(s => `<li><span class="mono">${esc(s.type)}</span> ${s.endpoints.map(e => esc(e)).join(", ")}${s.snapshotCid ? ` <span class="sub">snapshot ${esc(short(s.snapshotCid))}</span>` : ""}</li>`).join("");
-    $("deployment").className = "";
-    $("deployment").innerHTML = dl([
-      ["Contract", `${mono(cfg.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">view on explorer</a>` : ""}`],
-      ["Network", `${esc(cfg.network)}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
-      ["Deployed at block", n(cfg.deploymentBlock)],
-      ["RPC endpoint", mono(cfg.rpc)],
-      ["Blob sources", srcs ? `<ul class="srcs" style="padding-left:16px">${srcs}</ul>` : `<span class="empty">none configured</span>`],
-      cfg.ipfsEndpoints && cfg.ipfsEndpoints.length ? ["IPFS endpoints", mono(cfg.ipfsEndpoints.join(", "))] : null,
-      ["Config file", mono(cfg.configFile)],
+  function renderOverview(r) {
+    const cfg = r.config || {}, c = r.chain || {};
+    const has = c.blobCount !== undefined;
+    const lastUpload = has ? (c.lastPublishBlock ? `${ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : 0))} <span class="sub">(block ${n(c.lastPublishBlock)}, ${n(c.blobCount)} blobs on chain)</span>` : "none yet") : "—";
+    const lastCheck = r.finished_at ? `${ago(now() - r.finished_at)} <span class="sub">(verdict ${esc(r.verdict)}, took ${Math.round(r.finished_at - r.started_at)} s)</span>` : r.running ? "running now" : "never";
+    $("overview").className = "";
+    $("overview").innerHTML = dl([
+      ["Contract", `${mono(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
+      ["Owner", has ? mono(c.publisher) : "—"],
+      ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
+      ["Last update", lastUpload],
+      ["Last health check", lastCheck],
     ]);
   }
 
-  function renderFacts(r) {
-    const cfg = r.config || {}, c = r.chain || {}, s = r.sources || {}, i = r.ipfs || {};
-    const has = c.blobCount !== undefined;
-    const fact = (k, v, sub, cls) => `<div class="fact"><div class="k">${esc(k)}</div><div class="v ${cls || ""}">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
-    // Blobs: verifiable from at least one source is the record's availability; the line
-    // under it says what each source could actually serve, so a dead source is visible.
-    const blobs = s.matrix ? (s.verifiedFromAnySource === s.blobs ? `<span class="ok">${n(s.blobs)} of ${n(s.blobs)} verified</span>` : `<span class="bad">${n(s.verifiedFromAnySource)} of ${n(s.blobs)} verified</span>`) : "—";
-    const kind = name => name.replace(/\(.*$/, "");
-    const blobsSub = s.matrix ? Object.entries(s.matrix).map(([name, m]) => `<span class="${m.verified === s.blobs ? "ok" : m.verified === 0 ? "bad" : "warn"}">${esc(kind(name))} ${n(m.verified)}</span>`).join(" · ") : "";
-    // IPFS: verified only when the snapshot is the publisher's, its manifest was read and
-    // matches the chain, and every listed blob object came back. Anything less says so.
-    const listed = i.blobObjectsListed ?? i.manifestBlobs;
-    let ipfs, ipfsSub = "";
-    if (i.configured === false) ipfs = `<span class="sub">no snapshot configured</span>`;
-    else if (!i.configured) ipfs = "—";
-    else if (i.error) { ipfs = `<span class="bad">snapshot unreachable</span>`; ipfsSub = esc(i.error); }
-    else if (!i.pointerMatches) ipfs = `<span class="bad">not the publisher's snapshot</span>`;
-    else if (i.manifestMatchesChain === false) ipfs = `<span class="bad">manifest does not match the chain</span>`;
-    else if (i.blobObjectsRetrievable !== undefined && i.blobObjectsRetrievable < listed) { ipfs = `<span class="warn">snapshot incomplete</span>`; ipfsSub = `${n(i.blobObjectsRetrievable)} of ${n(listed)} blob objects retrievable`; }
-    else { ipfs = `<span class="ok">snapshot verified</span>`; ipfsSub = listed !== undefined ? `${n(listed)} blob objects retrievable` : ""; }
-    const checked = r.finished_at ? new Date(r.finished_at * 1000).toLocaleString() : r.running ? "running now" : "—";
-    const checkedSub = r.finished_at ? `took ${Math.round(r.finished_at - r.started_at)} s · verdict ${esc(r.verdict)}` : "";
-    $("facts").innerHTML =
-      fact("Contract", cfg.contract ? esc(cfg.contract) : "—", cfg.explorer ? `${esc(cfg.network)} · <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : esc(cfg.network || ""), "mono") +
-      fact("Publisher (owner)", has ? esc(c.publisher) : "—", has ? (c.successor && !/^0x0+$/.test(c.successor) ? "a successor contract is set" : "the only key that can publish") : "", "mono") +
-      fact("Last upload", has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds) : "none yet") : "—", has && c.lastPublishBlock ? `block ${n(c.lastPublishBlock)} · ${n(c.blobCount)} blobs on chain` : "") +
-      fact("Blobs", blobs, blobsSub) +
-      fact("IPFS", ipfs, ipfsSub) +
-      fact("Last health check", checked, checkedSub);
+  function renderSources(r) {
+    const s = r.sources || {};
+    if (!s.matrix) return;
+    const total = s.needed ?? s.blobs;
+    const rows = Object.entries(s.matrix).map(([name, m]) => {
+      const confirmed = m.neededVerified ?? m.verified;
+      return `<tr><td>${mark(m.reachable !== false && m.complete)}</td><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${m.reachable === false ? `<span class="bad">unreachable</span>` : `<span class="ok">reachable</span>`}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td><td class="num ${m.corrupt ? "bad" : "sub"}">${n(m.corrupt)}</td></tr>`;
+    }).join("");
+    const needOk = s.needed !== undefined && (s.blobs - s.verifiedFromAnySource) <= (s.blobs - s.needed);
+    $("sources").className = "";
+    $("sources").innerHTML = `<p style="margin:0 0 10px">${needOk ? `<span class="ok">Every blob a reader needs is verified from at least one source.</span>` : `<span class="bad">Some blobs a reader needs could not be verified from any source.</span>`} <span class="sub">${n(total)} blobs needed${s.blobs !== total ? ` of ${n(s.blobs)} on chain; the rest belong to an abandoned upload that every reader skips` : ""}. Each blob is verified by recomputing its KZG commitment against the hash the contract recorded.</span></p>
+      <table><thead><tr><th></th><th>Source</th><th>Reachable</th><th class="num">Confirmed blobs</th><th class="num">Corrupt</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">no sources configured</td></tr>`}</tbody></table>`;
+  }
+
+  function renderIpfs(r) {
+    const i = r.ipfs || {};
+    if (i.configured === false) { $("ipfs").className = "empty"; $("ipfs").textContent = "No snapshot CID is configured, so IPFS cannot be checked."; return; }
+    if (!i.configured) return;
+    const rows = (i.nodes || []).map(nd => `<tr><td>${mark(nd.ok)}</td><td class="mono">${esc(nd.url)}</td><td>${nd.error ? `<span class="bad">${esc(nd.error)}</span>` : `${nd.manifestMatchesChain ? `<span class="ok">manifest matches the chain</span>` : `<span class="bad">manifest does not match the chain</span>`}; ${n(nd.blobObjectsRetrievable)}/${n(nd.blobObjectsListed)} blob objects${(nd.files || []).length === 2 ? "" : `; <span class="bad">files missing</span>`}`}</td></tr>`).join("");
+    $("ipfs").className = "";
+    $("ipfs").innerHTML = dl([
+      ["Dataset CID", `${mono(i.snapshotCid)} ${mark(i.pointerMatches)} <span class="sub">${i.pointerMatches ? "hashes to the pointer the contract stores" : "does NOT hash to the pointer the contract stores"}</span>`],
+    ]) + `<table style="margin-top:12px"><thead><tr><th></th><th>Node</th><th>Holds the snapshot</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">no IPFS nodes configured</td></tr>`}</tbody></table>`;
   }
 
   function renderProgress(r) {
@@ -222,96 +189,30 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   }
 
   function render(r) {
-    renderDeployment(r.config);
-    renderFacts(r);
-    renderProgress(r);
     const verdict = r.running ? "running" : (r.verdict || "idle");
     $("badge").className = `badge ${verdict}`;
     $("verdict").textContent = verdict;
     $("run").disabled = !!r.running;
-    const when = r.finished_at ? new Date(r.finished_at * 1000).toLocaleString() : null;
-    $("subtitle").textContent = `Contract ${r.chain?.contract || r.contract || ""}` + (when ? ` · last checked ${when}` : r.running ? " · checking…" : "");
-
     const problems = r.problems || [];
     $("problems").hidden = problems.length === 0;
     $("problem-list").innerHTML = problems.map(p => `<li>${esc(p)}</li>`).join("");
-    const notes = r.notes || [];
-    $("notes").hidden = notes.length === 0;
-    $("note-list").innerHTML = notes.map(p => `<li>${esc(p)}</li>`).join("");
     $("log").textContent = (r.log || []).join("\n");
     $("log").scrollTop = $("log").scrollHeight;
-
-    const c = r.chain || {};
-    if (c.blobCount !== undefined) {
-      $("chain").innerHTML = dl([
-        ["Chain id", esc(c.chainId)],
-        ["Finalized block", `${n(c.finalizedBlock)} <span class="sub">(${ago(c.finalizedAgeSeconds)})</span>`],
-        ["Blobs published", n(c.blobCount)],
-        ["Last publish", c.lastPublishBlock ? `block ${n(c.lastPublishBlock)} <span class="sub">(${ago(c.lastPublishAgeSeconds)})</span>` : "none yet"],
-        ["Head", mono(short(c.head))],
-        ["Pointer", mono(short(c.appPointer))],
-        ["Publisher", mono(c.publisher)],
-        c.successor && !/^0x0+$/.test(c.successor) ? ["Successor", mono(c.successor)] : null,
-      ]);
-    } else if (c.error) {
-      $("chain").innerHTML = `<span class="bad">${esc(c.error)}</span>`;
-    }
-
-    const b = r.blob_list || {};
-    if (b.source) {
-      $("bloblist").innerHTML = dl([
-        ["Obtained from", esc(b.source)],
-        ["Verified against head", b.verified ? `<span class="ok">yes, ${n(b.count)} blobs</span>` : `<span class="bad">no: ${esc(b.error)}</span>`],
-      ]);
-    }
-
-    const s = r.sources || {};
-    if (s.matrix) {
-      const rows = Object.entries(s.matrix).map(([name, m]) => `<tr><td class="mono">${esc(name)}</td><td class="num ok">${n(m.verified)}</td><td class="num ${m.missing ? "warn" : ""}">${n(m.missing)}${m.missingOutsideRetention ? ` <span class="sub">(${n(m.missingOutsideRetention)} older than retention)</span>` : ""}</td><td class="num ${m.corrupt ? "bad" : ""}">${n(m.corrupt)}</td><td class="num ${m.error ? "bad" : ""}">${n(m.error)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td></tr>`).join("");
-      const all = s.verifiedFromAnySource === s.blobs;
-      $("sources").innerHTML = `<p style="margin:0 0 10px">${all ? `<span class="ok">Every one of the ${n(s.blobs)} blobs is verifiable from at least one source.</span>` : `<span class="bad">${n(s.blobs - s.verifiedFromAnySource)} of ${n(s.blobs)} blobs could not be verified from any source.</span>`} <span class="sub">${n(s.withinRetention)} blobs are still inside consensus retention.</span></p>
-        <table><thead><tr><th>Source</th><th class="num">Verified</th><th class="num">Missing</th><th class="num">Corrupt</th><th class="num">Errors</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">no sources configured</td></tr>`}</tbody></table>`;
-    }
-
-    const st = r.stream || {};
-    if (st.header !== undefined) {
-      const batches = (st.batchList || []).map(x => `<tr><td class="num">${x.batch}</td><td class="num">${n(x.firstBlobSeq)}–${n(x.blobCountAfter - 1)}</td><td class="num">${n(x.blobCountAfter - x.firstBlobSeq)}</td><td class="num">${n(x.compressedBytes)}</td><td class="num">${n(x.uncompressedBytes)}</td><td>${x.hasIndex ? "yes" : ""}</td></tr>`).join("");
-      $("stream").innerHTML = dl([
-        ["Container", st.header ? `version ${esc(st.header.version)}, schema ${esc(st.header.schemaId)}, bound to chain ${esc(st.header.chainId)} and ${mono(short(st.header.contract))}` : `<span class="bad">header unreadable</span>`],
-        ["Complete batches", n(st.batches)],
-        ["Entries", `${n(st.entriesTotal)} published${st.withdrawnTotal ? `, ${n(st.withdrawnTotal)} withdrawn` : ""}`],
-        ["Torn ranges", (st.torn || []).length ? `<span class="warn">${(st.torn).map(t => `blobs ${t.first_blob}–${t.last_blob}: ${esc(t.reason)}`).join("; ")}</span>` : "none"],
-        ["Dead blobs", st.deadBlobs ? `${st.deadBlobs} (an abandoned upload a later batch skips; no reader needs them)` : "none"],
-      ]) + (batches ? `<table style="margin-top:12px"><thead><tr><th class="num">Batch</th><th class="num">Blobs</th><th class="num">Count</th><th class="num">Compressed</th><th class="num">Decoded</th><th>Index</th></tr></thead><tbody>${batches}</tbody></table>` : "");
-    }
-
-    const orgs = st.organisms || {};
-    const names = Object.keys(orgs).sort();
-    if (names.length) {
-      const rows = names.map(o => { const p = orgs[o] || {}; return `<tr><td class="mono">${esc(o)}</td><td class="num">${n(p.entriesTotal)}</td><td class="num">${n(p.withdrawnTotal)}</td><td class="mono sub">${esc(p.artifactSha256)}</td></tr>`; }).join("");
-      $("organisms").innerHTML = `<table><thead><tr><th>Organism</th><th class="num">Published</th><th class="num">Withdrawn</th><th>Digest of the organism's file</th></tr></thead><tbody>${rows}</tbody></table>
-        <p class="sub" style="margin:10px 0 0">Counts and digests come from the record's own last manifest; the recovery command rebuilds each organism's file and must reproduce the digest exactly.</p>`;
-    }
-
-    const i = r.ipfs || {};
-    if (i.configured === false) $("ipfs").innerHTML = `<span class="empty">No snapshot CID configured.</span>`;
-    else if (i.configured) $("ipfs").innerHTML = dl([
-      ["Snapshot", mono(short(i.snapshotCid))],
-      ["Matches chain pointer", i.pointerMatches ? `<span class="ok">yes</span>` : `<span class="bad">no</span>`],
-      i.manifestBlobs !== undefined ? ["Manifest", i.manifestMatchesChain ? `<span class="ok">${n(i.manifestBlobs)} blobs, matches the chain</span>` : `<span class="bad">does not match the chain</span>`] : null,
-      i.blobObjectsRetrievable !== undefined ? ["Blob objects retrievable", `${n(i.blobObjectsRetrievable)} of ${n(i.manifestBlobs)}`] : null,
-      i.files ? ["Files present", esc(i.files.join(", "))] : null,
-      i.error ? ["Error", `<span class="bad">${esc(i.error)}</span>`] : null,
-    ]);
+    renderOverview(r);
+    renderProgress(r);
+    renderSources(r);
+    renderIpfs(r);
   }
 
+  let last = null;
   async function poll() {
     try {
       const r = await (await fetch("/api/report", {cache: "no-store"})).json();
+      last = r;
       render(r);
       if (r.running) timer = setTimeout(poll, 700);
     } catch (e) {
-      $("subtitle").textContent = `Cannot reach the local server: ${e}`;
+      $("overview").textContent = `Cannot reach the local server: ${e}`;
     }
   }
   async function start() {
@@ -320,7 +221,8 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     clearTimeout(timer); poll();
   }
   $("run").addEventListener("click", start);
-  fetch("/api/report").then(r => r.json()).then(r => { render(r); if (r.verdict === "idle" && !r.running) start(); else if (r.running) poll(); });
+  setInterval(() => { if (last && !last.running) renderOverview(last); }, 30000);   // "x ago" keeps moving
+  fetch("/api/report").then(r => r.json()).then(r => { last = r; render(r); if (r.verdict === "idle" && !r.running) start(); else if (r.running) poll(); });
 })();
 </script>
 </body>

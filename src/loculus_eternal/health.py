@@ -152,7 +152,7 @@ class HealthCheck:
         for src in self.cfg.sources:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
-            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0}
+            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": []}
             log(f"fetching every blob from {src.name}")
             groups: dict[tuple, list[BlobRef]] = {}
             for r in refs:
@@ -173,12 +173,14 @@ class HealthCheck:
                 for r in group:
                     if r.versioned_hash in accepted:
                         counts["verified"] += 1
+                        counts["verifiedSeqs"].append(r.seq)
                         if blobs[r.seq] is None:
                             blobs[r.seq] = accepted[r.versioned_hash]
                     else:
                         counts["missing"] += 1
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
+            counts["reachable"] = counts["error"] < len(refs)   # some request got an answer
             matrix[src.name] = counts
             log(f"{src.name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
         unavailable = [i for i, b in enumerate(blobs) if b is None]
@@ -201,6 +203,13 @@ class HealthCheck:
         unavailable = [i for i, b in enumerate(blobs) if b is None]
         dead = structure.dead_blobs()
         needed = [i for i in unavailable if i not in dead]
+        # Each source is judged on the blobs a reader needs: the dead blobs of an abandoned
+        # upload do not count against it. A source that holds every needed blob is complete.
+        needed_total = len(blobs) - len(dead)
+        report.sources["needed"] = needed_total
+        for m in report.sources.get("matrix", {}).values():
+            m["neededVerified"] = sum(1 for i in m.pop("verifiedSeqs", []) if i not in dead)
+            m["complete"] = m["neededVerified"] == needed_total
         if needed:
             report.problems.append(f"{len(needed)} blob(s) not verifiable from any configured source: {needed[:10]}{'…' if len(needed) > 10 else ''}")
         if len(needed) < len(unavailable):
@@ -236,48 +245,61 @@ class HealthCheck:
             report.ipfs = {"configured": False}
             report.notes.append("no IPFS snapshot CID is configured; the snapshot cannot be checked")
             return
-        src = ipfs_sources[0]
-        cid = src.snapshot_cid
+        cid = ipfs_sources[0].snapshot_cid
         log(f"checking the IPFS snapshot {cid[:16]}…")
-        result: dict = {"configured": True, "snapshotCid": cid, "pointerMatches": app_pointer(cid) == state.app_pointer}
+        result: dict = {"configured": True, "snapshotCid": cid, "pointerMatches": app_pointer(cid) == state.app_pointer, "nodes": []}
         if not result["pointerMatches"]:
             report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
-        # The question is whether this endpoint holds the snapshot, so every read is offline
-        # with a short deadline: a node that lacks the content must say so in seconds.
-        client = KuboClient(src.endpoints[0], timeout=60)
-        try:
-            manifest = parse_manifest(client.cat(f"{cid}/manifest.json", offline=True))
-            listed = [BlobRef(int(b["seq"]), bytes.fromhex(b["versionedHash"][2:])) for b in manifest["blobs"]]
-            result["manifestBlobs"] = len(listed)
+        # Every node of every ipfs source is asked whether it holds the snapshot: the
+        # manifest, the spec, and each blob object the manifest lists. Reads are offline
+        # with a short deadline, so a node that lacks the content says so in seconds.
+        for url in [e for src in ipfs_sources for e in src.endpoints]:
+            node: dict = {"url": url, "ok": False}
+            client = KuboClient(url, timeout=60)
             try:
-                verify_manifest(listed, state)
-                result["manifestMatchesChain"] = True
-            except ManifestMismatch as e:
-                result["manifestMatchesChain"] = False
-                report.problems.append(f"the snapshot's blob list does not match the chain: {e}")
-            objects_ok = 0
-            # A dead blob of an abandoned upload is listed without a CID; nobody needs it.
-            with_cid = [b for b in manifest["blobs"] if b.get("cid")]
-            for b in with_cid:
+                manifest = parse_manifest(client.cat(f"{cid}/manifest.json", offline=True))
+                listed = [BlobRef(int(b["seq"]), bytes.fromhex(b["versionedHash"][2:])) for b in manifest["blobs"]]
+                node["manifestBlobs"] = len(listed)
                 try:
-                    data = client.block_get(b["cid"], offline=True)
-                    if kzg.verify_blob(data, bytes.fromhex(b["versionedHash"][2:])):
-                        objects_ok += 1
-                except IpfsError:
-                    pass
-            result["blobObjectsRetrievable"] = objects_ok
-            result["blobObjectsListed"] = len(with_cid)
-            if objects_ok < len(with_cid):
-                report.notes.append(f"{len(with_cid) - objects_ok} blob object(s) not retrievable from the IPFS endpoint")
-            files = []
-            for name in ("manifest.json", "container-spec.md"):
-                try:
-                    client.cat(f"{cid}/{name}", offline=True)
-                    files.append(name)
-                except IpfsError:
-                    report.problems.append(f"the snapshot lacks {name}")
-            result["files"] = files
-        except (IpfsError, ValueError, KeyError) as e:
-            result["error"] = str(e)
-            report.problems.append(f"cannot read the snapshot's manifest from IPFS: {e}")
+                    verify_manifest(listed, state)
+                    node["manifestMatchesChain"] = True
+                except ManifestMismatch as e:
+                    node["manifestMatchesChain"] = False
+                    report.problems.append(f"the snapshot's blob list on {url} does not match the chain: {e}")
+                # A dead blob of an abandoned upload is listed without a CID; nobody needs it.
+                with_cid = [b for b in manifest["blobs"] if b.get("cid")]
+                objects_ok = 0
+                for b in with_cid:
+                    try:
+                        data = client.block_get(b["cid"], offline=True)
+                        if kzg.verify_blob(data, bytes.fromhex(b["versionedHash"][2:])):
+                            objects_ok += 1
+                    except IpfsError:
+                        pass
+                node["blobObjectsRetrievable"] = objects_ok
+                node["blobObjectsListed"] = len(with_cid)
+                files = []
+                for name in ("manifest.json", "container-spec.md"):
+                    try:
+                        client.cat(f"{cid}/{name}", offline=True)
+                        files.append(name)
+                    except IpfsError:
+                        report.problems.append(f"the snapshot on {url} lacks {name}")
+                node["files"] = files
+                node["ok"] = result["pointerMatches"] and node["manifestMatchesChain"] and objects_ok == len(with_cid) and len(files) == 2
+                if objects_ok < len(with_cid):
+                    report.notes.append(f"{len(with_cid) - objects_ok} blob object(s) not retrievable from {url}")
+            except (IpfsError, ValueError, KeyError) as e:
+                node["error"] = str(e)
+                report.problems.append(f"cannot read the snapshot's manifest from {url}: {e}")
+            result["nodes"].append(node)
+            log(f"{url}: {'holds the snapshot' if node['ok'] else 'does not hold the whole snapshot'}")
+        # Summary fields: the best node's view, for the verdict and for scripts.
+        best = max(result["nodes"], key=lambda n: (n["ok"], n.get("blobObjectsRetrievable", -1)), default=None)
+        if best is not None and "error" not in best:
+            result["manifestBlobs"] = best["manifestBlobs"]
+            result["manifestMatchesChain"] = best["manifestMatchesChain"]
+            result["blobObjectsRetrievable"] = best["blobObjectsRetrievable"]
+            result["blobObjectsListed"] = best["blobObjectsListed"]
+        result["nodesOk"] = sum(1 for n in result["nodes"] if n["ok"])
         report.ipfs = result
