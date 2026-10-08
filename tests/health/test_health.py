@@ -119,6 +119,8 @@ def test_H1_a_sound_deployment_is_healthy(world):
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
     assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
     assert r.ipfs["configured"] and r.ipfs["pointerMatches"] and r.ipfs["manifestMatchesChain"] and r.ipfs["blobObjectsRetrievable"] == r.sources["blobs"]
+    assert r.ipfs["nodesOk"] == len(r.ipfs["nodes"]) == 1 and r.ipfs["nodes"][0]["ok"]
+    assert r.sources["needed"] == r.sources["blobs"] and all(m["complete"] and m["reachable"] for m in r.sources["matrix"].values())
     assert not hasattr(r, "backend"), "the check judges the record on its own, never against the live database"
     assert r.finished_at and r.log
 
