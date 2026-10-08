@@ -126,7 +126,7 @@ class KuboClient:
     def _read_params(arg: str, offline: bool) -> dict:
         """A read that must say whether THIS node holds the content asks offline, with a
         short deadline; otherwise Kubo searches the public network for minutes."""
-        return {"arg": arg, "offline": "true", "timeout": "20s"} if offline else {"arg": arg}
+        return {"arg": arg, "offline": "true", "timeout": "20s"} if offline else {"arg": arg, "timeout": "60s"}
 
     def pin_add(self, cid: str) -> None:
         self._post("pin/add", params={"arg": cid, "recursive": "true"})

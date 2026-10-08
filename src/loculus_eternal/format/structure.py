@@ -17,6 +17,11 @@ from loculus_eternal.format.chunks import BLOB_DATA_BYTES, unpack_blob
 from loculus_eternal.format.records import DIGEST_BYTES, BatchBegin, FormatError, Header, RecordType, decompress, read_record, sha256
 
 
+# What tears a batch: a framing error, or malformed bytes inside a record (bad JSON, a
+# truncated payload, a manifest that is not an object). The full decoder treats them alike.
+TORN = (FormatError, ValueError, IndexError, KeyError, TypeError, AttributeError)
+
+
 @dataclass
 class BatchSummary:
     batch: int
@@ -102,7 +107,7 @@ def read_structure(blobs: Sequence[bytes | None]) -> StreamStructure:
         if t != RecordType.HEADER:
             raise FormatError("stream does not start with a header record")
         out.header = Header.decode(payload)
-    except FormatError as e:
+    except TORN as e:
         out.torn.append(TornSummary(0, 0, len(blobs) - 1, f"cannot read the stream header: {e}"))
         return out
 
@@ -116,7 +121,7 @@ def read_structure(blobs: Sequence[bytes | None]) -> StreamStructure:
         after_header = False
         try:
             summary, pos = _read_batch(data, pos, expected, previous, blob, record, check_range)
-        except FormatError as e:
+        except TORN as e:
             next_blob = _resync(data, blob + 1, len(blobs), missing, expected, previous)
             last = (next_blob if next_blob is not None else len(blobs)) - 1
             out.torn.append(TornSummary(expected, blob, last, str(e)))
@@ -179,7 +184,7 @@ def _resync(data, from_blob, blob_count, missing, expected, previous):
             if t != RecordType.BATCH_BEGIN:
                 continue
             begin = BatchBegin.decode(payload)
-        except FormatError:
+        except TORN:
             continue
         if begin.batch == expected and begin.previous_manifest_digest == previous and begin.first_blob_seq == b:
             return b

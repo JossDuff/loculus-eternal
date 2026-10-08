@@ -14,17 +14,57 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Callable
+from urllib.parse import urlsplit
 
 from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, verify_manifest
 from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
 from loculus_eternal.ipfs import app_pointer
 from loculus_eternal.rpc import connect
-from loculus_eternal.sources import IpfsSource
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
-RETENTION_SECONDS = 4096 * 32 * 12   # 4096 epochs of 32 slots of 12 seconds, about 18.2 days
+RETENTION_SLOTS = 4096 * 32   # 4096 epochs of 32 slots: about 18.2 days at 12 seconds a slot
 STEPS = ["contract check", "blob check"]   # how the page groups the work
+
+
+def public_url(url: str) -> str:
+    """An endpoint as the page may show it: scheme and host only. Hosted RPC and archive
+    URLs carry API keys in their path or query, and the page must never show one."""
+    parts = urlsplit(str(url))
+    if not parts.scheme or not parts.netloc:
+        return str(url)
+    host = parts.hostname or parts.netloc
+    if parts.port and parts.port not in (80, 443):
+        host = f"{host}:{parts.port}"
+    return f"{parts.scheme}://{host}"
+
+
+def source_endpoints(src) -> list[str]:
+    """The raw endpoint strings a source was built with."""
+    if isinstance(src, (BeaconSource, IpfsSource)):
+        return list(src.endpoints)
+    if isinstance(src, (BlobscanSource, BlobArchiverSource)):
+        return [src.base_url]
+    if isinstance(src, LocalDirectorySource):
+        return [str(src.directory)]
+    return []
+
+
+def source_kind(src) -> str:
+    return {BeaconSource: "beacon", BlobscanSource: "blobscan", BlobArchiverSource: "blob-archiver", IpfsSource: "ipfs", LocalDirectorySource: "local"}.get(type(src), type(src).__name__)
+
+
+def public_source(src) -> str:
+    """The name a source goes by on the page: its kind and its hosts, never a full URL."""
+    return f"{source_kind(src)}({', '.join(public_url(e) for e in source_endpoints(src))})"
+
+
+def redact(text: str, src) -> str:
+    """Error text with every raw endpoint of the source replaced by its public form."""
+    for raw in source_endpoints(src):
+        text = text.replace(raw.rstrip("/"), public_url(raw))
+    return text
 
 
 @dataclass
@@ -116,7 +156,7 @@ class HealthCheck:
             report.problems.append(f"cannot read the contract: {e}")
             report.chain = {"contract": self.cfg.chain.contract, "error": str(e)}
             return None, []
-        block = self.w3.eth.get_block(state.block_number)
+        block = {"timestamp": reader.block_timestamp(state.block_number)}
         report.chain = {
             "contract": self.cfg.chain.contract,
             "chainId": self.w3.eth.chain_id,
@@ -173,28 +213,36 @@ class HealthCheck:
         which is the safe direction."""
         blobs: list[bytes | None] = [None] * len(refs)
         now = time.time()
-        in_retention = {r.seq for r in refs if r.block_timestamp and now - r.block_timestamp < RETENTION_SECONDS}
+        retention_seconds = RETENTION_SLOTS * self.cfg.chain.seconds_per_slot
+        in_retention = {r.seq for r in refs if r.block_timestamp and now - r.block_timestamp < retention_seconds}
         matrix: dict[str, dict] = {}
+        dead: set[int] = set()
+        in_hand = 0
         for src in self.cfg.sources:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
-            dead = read_structure(blobs).dead_blobs() if any(b is not None for b in blobs) else set()
+            name = public_source(src)
+            # Re-read the structure only when something new arrived since the last walk.
+            have = sum(1 for b in blobs if b is not None)
+            if have and have != in_hand:
+                dead = read_structure(blobs).dead_blobs()
+                in_hand = have
             to_ask = [r for r in refs if r.seq not in dead]
             counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": len(to_ask)}
-            log(f"fetching {len(to_ask)} blob(s) from {src.name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
+            log(f"fetching {len(to_ask)} blob(s) from {name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
             groups: dict[tuple, list[BlobRef]] = {}
             for r in to_ask:
                 groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
             asked = 0
             for (bn, bt), group in groups.items():
-                self._step(report, "blob check", f"{src.name}: {asked:,} of {len(to_ask):,} blobs asked for")
+                self._step(report, "blob check", f"{name}: {asked:,} of {len(to_ask):,} blobs asked for")
                 asked += len(group)
                 wanted = [r.versioned_hash for r in group]
                 try:
                     candidates = src.fetch(BlobContext(bn, bt), wanted)
                 except Exception as e:
                     counts["error"] += len(group)
-                    counts.setdefault("lastError", str(e)[:200])
+                    counts.setdefault("lastError", redact(str(e), src)[:200])
                     continue
                 accepted, rejected = verify_candidates(candidates, set(wanted))
                 counts["corrupt"] += rejected
@@ -209,8 +257,8 @@ class HealthCheck:
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
             counts["reachable"] = counts["error"] < len(to_ask)   # some request got an answer
-            matrix[src.name] = counts
-            log(f"{src.name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
+            matrix[name] = counts
+            log(f"{name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
         unavailable = [i for i, b in enumerate(blobs) if b is None]
         report.sources = {"matrix": matrix, "blobs": len(refs), "verifiedFromAnySource": len(refs) - len(unavailable), "unavailable": unavailable, "withinRetention": len(in_retention)}
         if refs and not self.cfg.sources:
@@ -258,8 +306,6 @@ class HealthCheck:
                 report.problems.append(f"the stream header names chain {structure.header.chain_id} but the node serves chain {report.chain.get('chainId')}")
             if structure.header.contract.hex().lower() != self.cfg.chain.contract[2:].lower():
                 report.problems.append("the stream header names a different contract than the one being checked")
-        if structure.batches and structure.batches[-1].blob_count_after != state.blob_count and not structure.torn_tail():
-            report.problems.append("the last complete batch does not reach the chain's blob count")
         tail = structure.torn_tail()
         if tail is not None:
             report.problems.append(f"torn batch at the end of the stream (blobs {tail.first_blob} to {tail.last_blob}): {tail.reason}; an upload was interrupted or its blobs are unavailable")

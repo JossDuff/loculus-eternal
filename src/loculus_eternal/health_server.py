@@ -13,27 +13,14 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from loculus_eternal.config import Config
-from loculus_eternal.health import HealthCheck, Report
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
+from loculus_eternal.health import HealthCheck, Report, public_url, source_endpoints, source_kind
+from loculus_eternal.sources import IpfsSource
 
 PAGE = Path(__file__).with_name("health_page.html")
 REPOSITORY = "https://github.com/JossDuff/loculus-eternal"
 NETWORKS = {1: ("Ethereum mainnet", "https://etherscan.io"), 11155111: ("Sepolia testnet", "https://sepolia.etherscan.io")}
-
-
-def public_url(url: str) -> str:
-    """An endpoint as the page may show it: scheme and host only. Hosted RPC and archive
-    URLs carry API keys in their path or query, and the page must never show one."""
-    parts = urlsplit(str(url))
-    if not parts.scheme or not parts.netloc:
-        return str(url)
-    host = parts.hostname or parts.netloc
-    if parts.port and parts.port not in (80, 443):
-        host = f"{host}:{parts.port}"
-    return f"{parts.scheme}://{host}"
 
 
 def public_config(config: Config) -> dict:
@@ -42,18 +29,10 @@ def public_config(config: Config) -> dict:
     name, explorer = NETWORKS.get(config.chain.chain_id or 0, (f"chain {config.chain.chain_id}" if config.chain.chain_id else "unknown chain", None))
     sources = []
     for src in config.sources:
-        if isinstance(src, BeaconSource):
-            sources.append({"type": "beacon", "endpoints": [public_url(e) for e in src.endpoints]})
-        elif isinstance(src, BlobscanSource):
-            sources.append({"type": "blobscan", "endpoints": [public_url(src.base_url)]})
-        elif isinstance(src, BlobArchiverSource):
-            sources.append({"type": "blob-archiver", "endpoints": [public_url(src.base_url)]})
-        elif isinstance(src, IpfsSource):
-            sources.append({"type": "ipfs", "endpoints": [public_url(e) for e in src.endpoints], "snapshotCid": src.snapshot_cid})
-        elif isinstance(src, LocalDirectorySource):
-            sources.append({"type": "local", "endpoints": [str(src.directory)]})
-        else:
-            sources.append({"type": type(src).__name__, "endpoints": []})
+        entry = {"type": source_kind(src), "endpoints": [public_url(e) for e in source_endpoints(src)]}
+        if isinstance(src, IpfsSource):
+            entry["snapshotCid"] = src.snapshot_cid
+        sources.append(entry)
     return {
         "contract": config.chain.contract,
         "chainId": config.chain.chain_id,
@@ -148,8 +127,8 @@ class HealthServer:
         except Exception as e:  # the page must always get a result
             report = Report(started_at=live.started_at, finished_at=time.time(), verdict="not recoverable", problems=[f"the check itself failed: {e}"], log=list(live.log))
         with self._lock:
-            # Keep the live log lines the page already showed, then the finished report's own.
-            report.log = live.log + [l for l in report.log if l not in live.log]
+            # Every line went through log() above, so the live copy is the whole log.
+            report.log = live.log
             self._report = report
             self._running = False
 
