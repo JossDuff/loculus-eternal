@@ -32,6 +32,12 @@ from loculus_eternal.store import _write_atomic
 MAX_BLOBS_PER_TX = 6
 BLOB_GAS_PER_BLOB = 131_072
 NOMINAL_GAS_LIMIT = 120_000   # a publish transaction needs well under this; used before the real estimate
+# How much more than a mid-batch transaction the batch-end one can cost: the pointer write
+# and the BatchCommitted event. The worst case is the first batch end ever, when the CID's
+# storage slots are written for the first time: about 60,000 gas more inside the call than
+# a first mid-batch call (the gas table in docs/contract.md), plus the CID's calldata. The
+# dry run sizes its maximum cost from the first transaction's estimate plus this headroom.
+BATCH_END_EXTRA_GAS = 70_000
 GWEI = 10**9
 
 # Custom errors of LoculusEternal, by selector, so a simulated revert reads as a sentence.
@@ -517,9 +523,9 @@ class Submitter:
 
 
 def _gas_limit(estimate: int) -> int:
-    """A limit with room for the batch-end transaction's extra storage write and event, which
+    """A limit with room for the batch-end transaction's extra storage writes and event, which
     the first transaction's estimate does not include."""
-    return max(estimate + estimate // 4, estimate + 60_000)
+    return max(estimate + estimate // 4, estimate + BATCH_END_EXTRA_GAS)
 
 
 def current_fees(w3: Web3, policy: FeePolicy) -> dict:
