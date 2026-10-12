@@ -78,6 +78,9 @@ public page. The chain then verifies it.
    the stream's own cumulative digests before trusting them.
 
 The recovery command does this when an `ipfs` source with a `snapshot_cid` is configured.
+Every read it makes through a Kubo node carries a sixty-second deadline on the node's side,
+so an object the node has to find on the public network either arrives within it or the
+next source is tried, instead of a lost object stalling the recovery for minutes.
 
 ## Who pins
 

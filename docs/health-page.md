@@ -16,8 +16,7 @@ check over today's stream takes well under a minute. To rebuild the files, run
 
 The page has two boxes. **Overview**: the contract (linked to a block explorer), the
 owner (the publisher, the only key that can publish), the network, how long ago the last
-upload landed, how long ago this check ran, and the IPFS snapshot CID linked to a public
-gateway, marked only when it is not the snapshot the contract's pointer commits to. **Blob check**: one row per configured blob
+upload landed and how long ago this check ran. **Blob check**: one row per configured blob
 source with a check or a cross for whether the dataset is recoverable from it, a check or a
 cross for whether it was reachable, and how many of the blobs a reader needs it served and
 verified; the dead blobs of an abandoned upload are not counted against a source. IPFS is
@@ -44,8 +43,8 @@ CID are listed as problems, because they reduce the number of places the data ca
 but they do not change the verdict while the other sources still cover every needed blob.
 
 Blobs older than the 18-day consensus retention are expected to be missing from a beacon
-source; the page says how many of a source's misses fall outside retention so that is not
-read as a failure.
+source; the report counts how many of a source's misses fall outside retention, for scripts
+that read the JSON.
 
 ## Running it
 
