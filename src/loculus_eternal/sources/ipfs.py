@@ -42,8 +42,11 @@ class IpfsSource:
             self._cid_by_hash = {}
 
     def set_app_pointer(self, pointer: bytes) -> None:
-        """Called by the recovery command with the contract's pointer at the finalized block."""
+        """Called at the start of every run with the contract's pointer at the finalized
+        block. A manifest failure remembered from an earlier run is forgotten here: the node
+        may be back."""
         self.expected_pointer = pointer
+        self._manifest_error = None
 
     def _load_manifest(self) -> dict:
         if self.manifest is not None:
