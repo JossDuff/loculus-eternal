@@ -23,7 +23,9 @@ cross for whether it was reachable, and how many of the blobs a reader needs it 
 verified; the dead blobs of an abandoned upload are not counted against a source. IPFS is
 one of the sources: the `ipfs` source reads the snapshot whose CID the contract holds and
 fetches every blob object from it, so a stopped node, an unreadable snapshot or a lost
-object all show in that row. Problems, when there are any, are
+object all show in that row. A source with nothing to be asked for, which is every source
+before the first blob is published and the IPFS source until the first batch commits a
+snapshot, is not asked, and its row says so rather than showing the node as unreachable. Problems, when there are any, are
 listed above the overview. The check's log goes to the console the server runs in, not to
 the page. The check never consults the live Pathoplexus database: the record is judged on
 its own, against the chain. The steps in detail:

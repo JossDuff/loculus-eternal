@@ -114,10 +114,14 @@ transaction, so storage starts cold; a 59-character CID occupies three storage s
 | `publish` with 3 blobs, batch end, storage written before | ~32,500 gas inside the call |
 
 Add the transaction's intrinsic cost (21,000 plus calldata) to get the execution fee of a
-publish transaction: on the order of 40,000 to 75,000 gas in steady state, well under the
-120,000 allowance used in the design doc's cost table. Blob gas is separate and is 131,072
-per blob. Storing the CID whole rather than a 32-byte digest adds roughly 10,000 gas to a
-batch end, cents at any plausible price.
+publish transaction: about 38,000 gas for a mid-batch transaction and about 55,000 for a
+batch end in steady state, well under the 120,000 allowance used in the design doc's cost
+table. The one exception is the first batch end ever, about 122,000 gas with its calldata,
+because the pointer's three storage slots are written for the first time; the upload
+command's gas headroom is sized for that case. Blob gas is separate and is 131,072 per
+blob. Storing the CID whole rather than a 32-byte digest costs two more storage slots:
+about 3,500 more gas per batch end in steady state and about 44,000 more the first time,
+cents at any plausible price.
 
 ## Open item
 

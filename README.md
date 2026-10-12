@@ -75,7 +75,8 @@ endpoints = ["http://127.0.0.1:5001"]
 ```
 
 The snapshot's CID is read from the contract at the start of every run, never configured.
-To recover with nothing but IPFS, add `"ipfs"` to `manifest_sources` as well.
+To recover with nothing but IPFS, add `"ipfs"` to `manifest_sources` as well; every
+configured `ipfs` source is tried in turn.
 
 Then:
 
