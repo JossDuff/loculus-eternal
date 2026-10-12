@@ -103,7 +103,7 @@ contract LoculusEternalTest is Test {
         vm.expectRevert(LoculusEternal.NoBlobs.selector);
         record.publish(0, 4096, false, "");
         assertEq(record.blobCount(), 0);
-        assertEq(record.head(), "");
+        assertEq(record.head(), bytes32(0));
     }
 
     // --- C4 chunk count bounds --------------------------------------------------------------
@@ -240,7 +240,8 @@ contract LoculusEternalTest is Test {
         LoculusEternal fresh = new LoculusEternal(publisher);
         assertEq(fresh.publisher(), publisher);
         assertEq(fresh.blobCount(), 0);
-        assertEq(fresh.head(), "");
+        assertEq(fresh.head(), bytes32(0));
+        assertEq(fresh.appPointer(), "");
     }
 
     // --- C13 size and gas, recorded in docs/contract.md ----------------------------------------
