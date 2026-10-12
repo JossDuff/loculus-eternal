@@ -76,6 +76,10 @@ def test_R4_ipfs_manifest_failure_is_remembered_within_a_run_and_forgotten_at_th
         src.fetch(BlobContext(2, 2), [b"\x02" * 32])
     src.set_app_pointer(app_pointer(cid))   # the next run starts here
     assert src._manifest_error is None
+    # A different pointer means a different snapshot: a cached manifest is dropped.
+    src.manifest = {"blobs": []}
+    src.set_app_pointer(b"\x01" * 32)
+    assert src.manifest is None
 
 
 def test_R4_outage_is_an_error_attempt_not_a_crash(stub):

@@ -222,6 +222,13 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     keyed = HealthCheck(cfg, log=lambda s: None).run()
     dumped = json.dumps(keyed.to_json(), default=str)
     assert "SECRETKEY" not in dumped and any(k.startswith("blobscan(https://api.example.com)") for k in keyed.sources["matrix"])
+    # An RPC error quotes the full URL, key included; it must leave as the host alone.
+    from loculus_eternal.health import redact_all
+
+    rpc_cfg = configuration.load(cfg_path)
+    rpc_cfg.chain.rpc_url = "https://sepolia.infura.io/v3/RPCSECRET"
+    cleaned = redact_all("HTTPError: 401 for url: https://sepolia.infura.io/v3/RPCSECRET; archive https://api.example.com/v1/SECRETKEY/blobs", rpc_cfg)
+    assert "RPCSECRET" not in cleaned and "SECRETKEY" not in cleaned and "https://sepolia.infura.io" in cleaned
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
