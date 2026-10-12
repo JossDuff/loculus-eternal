@@ -22,15 +22,16 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
         if m == "logs":
             manifest_sources.append(ManifestSource(logs=True))
         elif m == "ipfs":
-            # The snapshot the contract names. Reuse the configured IPFS source when there is
-            # one, so the manifest and the blobs come from the same place; otherwise use
-            # [ipfs].endpoints.
-            existing = next((s for s in cfg.sources if isinstance(s, IpfsSource)), None)
-            if existing is None:
+            # The snapshot the contract names. Reuse every configured IPFS source, in their
+            # order, so the manifest and the blobs come from the same places and a node that
+            # is down does not hide the manifest another node holds; with no ipfs source,
+            # use [ipfs].endpoints.
+            existing = [s for s in cfg.sources if isinstance(s, IpfsSource)]
+            if not existing:
                 if cfg.ipfs is None or not cfg.ipfs.endpoints:
                     raise SystemExit("configuration error: manifest source 'ipfs' needs an ipfs source or [ipfs].endpoints")
-                existing = IpfsSource(cfg.ipfs.endpoints)
-            manifest_sources.append(ManifestSource(ipfs=existing))
+                existing = [IpfsSource(cfg.ipfs.endpoints)]
+            manifest_sources.extend(ManifestSource(ipfs=s) for s in existing)
         elif m.startswith("ipfs:"):
             raise SystemExit(f"configuration error: manifest source {m!r} names a snapshot, but the snapshot CID is read from the contract now; write \"ipfs\"")
         else:

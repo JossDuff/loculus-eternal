@@ -87,7 +87,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 ### R — recovery command
 
-- **R1 — verified blob list.** The ordered list of versioned hashes obtained from event logs reproduces the contract's `head` and `blobCount` at a finalized block; a list with a swapped pair, a dropped entry or a changed hash is rejected; a rejected manifest source is followed by the next one.
+- **R1 — verified blob list.** The ordered list of versioned hashes obtained from event logs reproduces the contract's `head` and `blobCount` at a finalized block; a list with a swapped pair, a dropped entry or a changed hash is rejected; a rejected manifest source is followed by the next one; the `ipfs` manifest source stands for every configured IPFS source, in their order, so one node being down does not hide the manifest another holds.
 - **R2 — verify before write.** Bytes offered for a blob are written to the store only after their recomputed versioned hash matches; a source returning corrupted bytes is counted as rejected and the next source is tried; the store on disk contains nothing from a rejected candidate.
 - **R3 — wrong blob.** A valid blob served under another blob's hash is not accepted for that hash.
 - **R4 — withholding.** When no source supplies a blob, the run continues, the store keeps everything else, and `missing.json` lists the blob with every source tried and each outcome; a source outage is recorded as an error attempt, not a crash. An IPFS manifest that could not be read is not retried for every block group within a run, and the failure is forgotten when the next run begins.

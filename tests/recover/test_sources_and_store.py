@@ -178,3 +178,39 @@ def test_R6_store_lock_is_exclusive(tmp_path):
     with BlobStore(tmp_path / "s"):
         with pytest.raises(StoreError, match="another process"):
             BlobStore(tmp_path / "s")
+
+
+def test_R1_every_configured_ipfs_source_is_a_manifest_source_in_order(tmp_path):
+    from loculus_eternal import config as configuration
+    from loculus_eternal.cli import recovery_config
+    from loculus_eternal.sources import IpfsSource
+
+    cfg_path = tmp_path / "loculus-eternal.toml"
+    cfg_path.write_text(
+        """
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[[sources]]
+type = "ipfs"
+endpoints = ["http://127.0.0.1:5001"]
+
+[[sources]]
+type = "ipfs"
+endpoints = ["http://127.0.0.1:5002"]
+
+[recover]
+manifest_sources = ["logs", "ipfs"]
+"""
+    )
+    cfg = configuration.load(cfg_path)
+    rc = recovery_config(cfg, skip_decode=True)
+    # One manifest source per IPFS source, the very objects that fetch the blobs, in the
+    # configured order: with the first node down the second still yields the manifest.
+    assert rc.manifest_sources[0].logs
+    ipfs_sources = [m.ipfs for m in rc.manifest_sources[1:]]
+    assert ipfs_sources == [s for s in cfg.sources if isinstance(s, IpfsSource)] and len(ipfs_sources) == 2
+    assert [s.endpoints for s in ipfs_sources] == [["http://127.0.0.1:5001"], ["http://127.0.0.1:5002"]]
