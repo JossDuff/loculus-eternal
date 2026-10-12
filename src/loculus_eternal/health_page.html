@@ -130,27 +130,30 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 
   function renderOverview(r) {
     const cfg = r.config || {}, c = r.chain || {};
+    // Contract and network come from the config and never change. Owner and last update
+    // are read from the contract, so they reset at the start of a run and come back as soon
+    // as the contract check is done.
     const has = c.blobCount !== undefined;
-    const lastUpload = has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : 0)) : "none yet") : "—";
+    const pending = r.running ? "checking…" : "—";
+    const lastUpload = has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : now() - r.started_at)) : "none yet") : pending;
     const lastCheck = r.finished_at ? ago(now() - r.finished_at) : r.running ? "running now" : "never";
-    // The CID is known from the config before any check; whether it is the snapshot the
-    // contract points at is known once the contract has been read.
-    const cid = c.snapshotCid || ((cfg.sources || []).find(s => s.snapshotCid) || {}).snapshotCid;
-    const snapshot = !cid ? null : `${mono(cid)} <a href="https://ipfs.io/ipfs/${esc(cid)}" target="_blank" rel="noopener">gateway</a>${c.snapshotMatchesPointer === false ? ` ${mark(false)} <span class="bad">not the snapshot the contract points at</span>` : ""}`;
     $("overview").className = "";
     $("overview").innerHTML = dl([
       ["Contract", `${mono(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
-      ["Owner", has ? mono(c.publisher) : "—"],
+      ["Owner", has ? mono(c.publisher) : pending],
       ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
       ["Last update", lastUpload],
       ["Last health check", lastCheck],
-      snapshot ? ["IPFS snapshot", snapshot] : null,
     ]);
   }
 
   function renderSources(r) {
     const s = r.sources || {};
-    if (!s.matrix) return;
+    if (!s.matrix) {
+      $("sources").className = "empty";
+      $("sources").textContent = r.running ? "Checking every source…" : "No check yet.";
+      return;
+    }
     const total = s.needed ?? s.blobs;
     const rows = Object.entries(s.matrix).map(([name, m]) => {
       const confirmed = m.neededVerified ?? m.verified;

@@ -113,22 +113,16 @@ class HealthServer:
 
         def log(msg: str) -> None:
             # The log is for whoever runs the server: it goes to the console, not the page.
-            line = f"{time.strftime('%H:%M:%S')} {msg}"
-            print(line, file=sys.stderr, flush=True)
-            with self._lock:
-                live.log.append(line)
-
-        def progress(p: dict) -> None:
-            with self._lock:
-                live.progress = dict(p)
+            # The check records each line on the report itself.
+            print(f"{time.strftime('%H:%M:%S')} {msg}", file=sys.stderr, flush=True)
 
         try:
-            report = HealthCheck(self.config, log=log, progress=progress).run()
+            # The check fills the live report in place, so the page sees the contract's
+            # facts as soon as that step is done, before the sources are asked.
+            report = HealthCheck(self.config, log=log).run(report=live)
         except Exception as e:  # the page must always get a result
             report = Report(started_at=live.started_at, finished_at=time.time(), verdict="not recoverable", problems=[f"the check itself failed: {e}"], log=list(live.log))
         with self._lock:
-            # Every line went through log() above, so the live copy is the whole log.
-            report.log = live.log
             self._report = report
             self._running = False
 

@@ -97,8 +97,12 @@ class HealthCheck:
         report.progress = {"steps": STEPS, "step": step, "detail": detail}
         self._progress(report.progress)
 
-    def run(self) -> Report:
-        report = Report(started_at=time.time())
+    def run(self, report: Report | None = None) -> Report:
+        """Run one check. With `report` given, that object is filled in step by step, so a
+        caller that shows it while the check runs sees the contract's facts as soon as the
+        contract check is done, then the sources, and finally the verdict."""
+        if report is None:
+            report = Report(started_at=time.time())
 
         def log(msg: str) -> None:
             report.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
@@ -281,12 +285,16 @@ class HealthCheck:
         needed = [i for i in unavailable if i not in dead]
         # Each source is judged on the blobs a reader needs: the dead blobs of an abandoned
         # upload do not count against it. A source that holds every needed blob is complete.
+        # The report may be serialised by another thread while a check runs, so sections
+        # are replaced whole rather than edited in place.
         needed_total = len(blobs) - len(dead)
-        report.sources["needed"] = needed_total
-        report.sources["neededUnavailable"] = needed
-        for m in report.sources.get("matrix", {}).values():
-            m["neededVerified"] = sum(1 for i in m.pop("verifiedSeqs", []) if i not in dead)
+        matrix = {}
+        for name, m in report.sources.get("matrix", {}).items():
+            m = {k: v for k, v in m.items() if k != "verifiedSeqs"}
+            m["neededVerified"] = sum(1 for i in report.sources["matrix"][name].get("verifiedSeqs", []) if i not in dead)
             m["complete"] = m["neededVerified"] == needed_total
+            matrix[name] = m
+        report.sources = {**report.sources, "matrix": matrix, "needed": needed_total, "neededUnavailable": needed}
         if needed:
             report.problems.append(f"{len(needed)} blob(s) not verifiable from any configured source: {needed[:10]}{'…' if len(needed) > 10 else ''}")
         if len(needed) < len(unavailable):
