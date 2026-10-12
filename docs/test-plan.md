@@ -16,6 +16,7 @@ phase that builds them.
 | `R` | Recovery command: manifest acquisition, sources, store, decoder | recovery command |
 | `U` | Upload command: published set, sync, eligibility, planner, submitter, journal | upload command |
 | `I` | IPFS profile, pinning, IPFS source | IPFS |
+| `H` | Health page and check | health page |
 
 ## Layers
 
@@ -88,7 +89,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **R1 — verified blob list.** The ordered list of versioned hashes obtained from event logs reproduces the contract's `head` and `blobCount` at a finalized block; a list with a swapped pair, a dropped entry or a changed hash is rejected; a rejected manifest source is followed by the next one.
 - **R2 — verify before write.** Bytes offered for a blob are written to the store only after their recomputed versioned hash matches; a source returning corrupted bytes is counted as rejected and the next source is tried; the store on disk contains nothing from a rejected candidate.
 - **R3 — wrong blob.** A valid blob served under another blob's hash is not accepted for that hash.
-- **R4 — withholding.** When no source supplies a blob, the run continues, the store keeps everything else, and `missing.json` lists the blob with every source tried and each outcome; a source outage is recorded as an error attempt, not a crash.
+- **R4 — withholding.** When no source supplies a blob, the run continues, the store keeps everything else, and `missing.json` lists the blob with every source tried and each outcome; a source outage is recorded as an error attempt, not a crash. An IPFS manifest that could not be read is not retried for every block group within a run, and the failure is forgotten when the next run begins.
 - **R5 — RPC flaps.** Transient failures of chain reads during a run are retried with backoff and the run completes.
 - **R6 — resume.** A run interrupted after a partial store resumes without refetching what is already verified; a region in `chunks.dat` not recorded in `have.json` is treated as absent; the store refuses a second concurrent opener.
 - **R7 — decode step.** The materialised per-organism files are byte-identical to the encoder's and the report lists batches, torn batches, per-file digests against the last manifest, warnings and tooling paths.
@@ -130,6 +131,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 - **I1 — blob object CID.** A blob object's CID is computable locally from the bytes (CIDv1, raw, sha2-256) and Kubo's `block put` with the profile's parameters returns the same CID; the on-chain pointer is the SHA-256 of the CID's binary form.
 - **I2 — snapshot determinism.** Two independent Kubo nodes adding the same snapshot files with the profile's parameters return the same directory CID, which does not depend on the directory's name and does change when the file set changes.
+- **I13 — read deadline.** Every read through a Kubo node carries a sixty-second deadline on the node's side; a manifest that could not be read is not retried within a run; a changed pointer drops a manifest cached for the old snapshot.
 - **I3 — publishing.** A published batch adds every blob object and a snapshot (manifest, spec, compressed per-organism files) to every configured endpoint; the batch-end transaction stores the pointer to that snapshot; the manifest lists every blob with its CID and the chain's head; the compressed files decompress to the published entries.
 - **I4 — recovery from IPFS alone.** With only an IPFS source and the snapshot's manifest as the blob list, and event logs unavailable, the recovered files are byte-identical and the snapshot's compressed files decompress to them.
 - **I5 — IPFS is a hedge.** When no endpoint is reachable the batch still publishes with the previous pointer carried forward and the report records the failure; with `required` set the run refuses instead.
@@ -140,6 +142,16 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **I9 — per-endpoint bookkeeping.** An endpoint that was unreachable for one batch still ends with exactly the latest snapshot once it takes a new one, because the upload command remembers what each endpoint holds.
 - **I10 — configuration.** `required = true` without endpoints is a configuration error.
 - **I11 — upload-side IPFS source.** An `ipfs` source without a snapshot CID in the upload configuration follows the machine's latest snapshot, is checked against the chain's pointer, and can supply the stream's own blobs back to the upload command.
+
+### H — health page
+
+- **H1 — recoverable deployment.** Against a sound deployment the check reads the chain, verifies the blob list, verifies every blob from every source including the IPFS snapshot's blob objects, walks the stream, judges every source complete when it served every needed blob, and says recoverable; it never consults the backend.
+- **H2 — unavailable blob.** A needed blob that no configured source can supply makes the verdict not recoverable and names the blob, and the batch holding it is reported torn; while another source still has it, the check stays healthy and the miss is visible per source. A blob of an abandoned upload that a later batch skips (never blob 0) is a note, not a problem, and the structure walker names those dead blobs.
+- **H3 — corrupting source.** Corrupt bytes from a source are rejected and noted, and do not count as confirmed; the dataset stays recoverable when another copy verifies.
+- **H4 — stale or foreign snapshot.** A snapshot CID that does not hash to the chain's pointer makes the IPFS source refuse its manifest: that source shows as not recoverable from, with the reason, while the dataset stays recoverable from the other sources.
+- **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
+- **H6 — once.** `health --once` prints the report as JSON and exits 0 only when the dataset is recoverable.
+- **H7 — public configuration and progress.** Every report, including the idle one, carries the contract, network, explorer link and the check's inputs with each URL reduced to scheme and host, so an API key in an RPC or archive URL never reaches the page; while a check runs the report names the current step and a line of detail, and the page shows the repository link, the quickstart commands and the Ethereum mark.
 
 ## Process checks (in force from the groundwork phase)
 

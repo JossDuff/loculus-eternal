@@ -23,6 +23,7 @@ class IpfsSource:
         self.endpoints = list(endpoints)
         self.clients = [KuboClient(e, timeout=timeout, client=client) for e in endpoints]
         self.snapshot_cid = snapshot_cid
+        self._manifest_error: str | None = None
         self.expected_pointer: bytes | None = None
         self.manifest: dict | None = None
         self._cid_by_hash: dict[bytes, str] = {}
@@ -37,15 +38,27 @@ class IpfsSource:
         if snapshot_cid != self.snapshot_cid:
             self.snapshot_cid = snapshot_cid
             self.manifest = None
+            self._manifest_error = None
             self._cid_by_hash = {}
 
     def set_app_pointer(self, pointer: bytes) -> None:
-        """Called by the recovery command with the contract's pointer at the finalized block."""
+        """Called at the start of every run with the contract's pointer at the finalized
+        block. A manifest failure remembered from an earlier run is forgotten here: the node
+        may be back."""
+        if pointer != self.expected_pointer:
+            # A new pointer means a new snapshot: a manifest cached for the old one must
+            # not be served against it.
+            self.manifest = None
+            self._cid_by_hash = {}
         self.expected_pointer = pointer
+        self._manifest_error = None
 
     def _load_manifest(self) -> dict:
         if self.manifest is not None:
             return self.manifest
+        if self._manifest_error is not None:
+            # Asked once per block group: a manifest that could not be read is not retried.
+            raise SourceError(self._manifest_error)
         if self.snapshot_cid is None:
             raise SourceError("no snapshot CID: the IPFS source cannot locate blobs without one")
         if self.expected_pointer is None:
@@ -60,7 +73,8 @@ class IpfsSource:
             except (IpfsError, ValueError) as e:
                 errors.append(f"{c.api_url}: {e}")
         if self.manifest is None:
-            raise SourceError("cannot read the snapshot manifest: " + "; ".join(errors))
+            self._manifest_error = "cannot read the snapshot manifest: " + "; ".join(errors)
+            raise SourceError(self._manifest_error)
         # A blob the publisher could not obtain (dead bytes of an abandoned upload) has no CID.
         self._cid_by_hash = {bytes.fromhex(b["versionedHash"][2:]): b["cid"] for b in self.manifest["blobs"] if b.get("cid")}
         return self.manifest

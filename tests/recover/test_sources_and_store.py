@@ -61,6 +61,27 @@ def test_R4_withholding_source_yields_nothing_and_everything_is_reported(stub):
     assert all(a.outcome == "nothing" for a in result.attempts)
 
 
+def test_R4_ipfs_manifest_failure_is_remembered_within_a_run_and_forgotten_at_the_next(tmp_path):
+    from loculus_eternal.ipfs import app_pointer
+    from loculus_eternal.sources import IpfsSource
+    from loculus_eternal.sources.base import BlobContext, SourceError
+
+    cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    src = IpfsSource(["http://127.0.0.1:1"], cid, timeout=2)   # nothing listens there
+    src.set_app_pointer(app_pointer(cid))
+    with pytest.raises(SourceError, match="cannot read the snapshot manifest"):
+        src.fetch(BlobContext(1, 1), [b"\x01" * 32])
+    assert src._manifest_error, "the failure is kept so later block groups do not retry the node"
+    with pytest.raises(SourceError, match="cannot read the snapshot manifest"):
+        src.fetch(BlobContext(2, 2), [b"\x02" * 32])
+    src.set_app_pointer(app_pointer(cid))   # the next run starts here
+    assert src._manifest_error is None
+    # A different pointer means a different snapshot: a cached manifest is dropped.
+    src.manifest = {"blobs": []}
+    src.set_app_pointer(b"\x01" * 32)
+    assert src.manifest is None
+
+
 def test_R4_outage_is_an_error_attempt_not_a_crash(stub):
     pairs = make_blobs(1)
     stub.add(1700, pairs)
