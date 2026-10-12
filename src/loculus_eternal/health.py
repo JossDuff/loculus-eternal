@@ -67,6 +67,15 @@ def redact(text: str, src) -> str:
     return text
 
 
+def redact_all(text: str, config: Config) -> str:
+    """Error text with the RPC URL and every source endpoint replaced by their hosts. An
+    RPC error from a hosted node quotes the full URL, key included."""
+    text = text.replace(config.chain.rpc_url.rstrip("/"), public_url(config.chain.rpc_url))
+    for src in config.sources:
+        text = redact(text, src)
+    return text
+
+
 @dataclass
 class Report:
     started_at: float
@@ -129,6 +138,14 @@ class HealthCheck:
         report.progress = {}
         if report.verdict == "running":
             report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
+        # Nothing that quotes a URL leaves with a key in it, whichever step produced it.
+        clean = lambda t: redact_all(t, self.cfg)
+        report.problems = [clean(p) for p in report.problems]
+        report.notes = [clean(p) for p in report.notes]
+        report.log = [clean(l) for l in report.log]
+        for section in (report.chain, report.blob_list):
+            if "error" in section:
+                section["error"] = clean(section["error"])
         return report
 
     @staticmethod
@@ -203,6 +220,7 @@ class HealthCheck:
         if refs:
             last = refs[-1]
             report.chain["lastPublishBlock"] = last.block_number
+            report.chain["lastPublishTimestamp"] = last.block_timestamp
             report.chain["lastPublishAgeSeconds"] = int(time.time() - last.block_timestamp) if last.block_timestamp else None
         return state, refs
 
@@ -226,6 +244,8 @@ class HealthCheck:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
             name = public_source(src)
+            if name in matrix:   # two sources of one kind on one host keep separate rows
+                name = f"{name} #{sum(1 for k in matrix if k.startswith(name)) + 1}"
             # Re-read the structure only when something new arrived since the last walk.
             have = sum(1 for b in blobs if b is not None)
             if have and have != in_hand:
@@ -260,7 +280,7 @@ class HealthCheck:
                         counts["missing"] += 1
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
-            counts["reachable"] = counts["error"] < len(to_ask)   # some request got an answer
+            counts["reachable"] = not to_ask or counts["error"] < len(to_ask)   # some request got an answer
             matrix[name] = counts
             log(f"{name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
         unavailable = [i for i, b in enumerate(blobs) if b is None]

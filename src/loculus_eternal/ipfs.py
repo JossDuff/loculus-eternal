@@ -116,17 +116,16 @@ class KuboClient:
         r = self._post("block/put", params={"cid-codec": "raw", "mhtype": "sha2-256", "pin": "true"}, files={"file": ("blob", data)})
         return r.json()["Key"]
 
-    def block_get(self, cid: str, *, offline: bool = False) -> bytes:
-        return self._post("block/get", params=self._read_params(cid, offline)).content
+    # A read is given a deadline on the node's side: a block the node must find on the
+    # public network either arrives within it or the read fails and the next source is
+    # tried, instead of a lost object stalling a recovery for minutes.
+    READ_DEADLINE = "60s"
 
-    def cat(self, path: str, *, offline: bool = False) -> bytes:
-        return self._post("cat", params=self._read_params(path, offline)).content
+    def block_get(self, cid: str) -> bytes:
+        return self._post("block/get", params={"arg": cid, "timeout": self.READ_DEADLINE}).content
 
-    @staticmethod
-    def _read_params(arg: str, offline: bool) -> dict:
-        """A read that must say whether THIS node holds the content asks offline, with a
-        short deadline; otherwise Kubo searches the public network for minutes."""
-        return {"arg": arg, "offline": "true", "timeout": "20s"} if offline else {"arg": arg, "timeout": "60s"}
+    def cat(self, path: str) -> bytes:
+        return self._post("cat", params={"arg": path, "timeout": self.READ_DEADLINE}).content
 
     def pin_add(self, cid: str) -> None:
         self._post("pin/add", params={"arg": cid, "recursive": "true"})

@@ -39,8 +39,11 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
   .card.wide { grid-column: 1 / -1; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
-  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); user-select: none; } dd { margin: 0; overflow-wrap: anywhere; }
+  .addr { user-select: all; -webkit-user-select: all; }
+  .copy { margin-left: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; vertical-align: middle; }
+  .copy:hover { color: var(--text); border-color: var(--muted); }
   code, .mono { font-family: var(--mono); font-size: 13px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -122,6 +125,12 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;
+  // One click selects the whole address and nothing else; the button copies it.
+  const addr = v => `<span class="mono addr">${esc(v)}</span><button type="button" class="copy" data-copy="${esc(v)}" title="copy">copy</button>`;
+  // Rewriting a box's HTML destroys any text selection in it, so a box is rewritten only
+  // when its content actually changed.
+  const shown = {};
+  const put = (id, html, cls) => { const el = $(id); if (shown[id] !== html) { el.innerHTML = html; shown[id] = html; } if (cls !== undefined && el.className !== cls) el.className = cls; };
   const mark = ok => ok ? `<span class="mark ok" title="yes">✓</span>` : `<span class="mark bad" title="no">✗</span>`;
   const kind = name => name.replace(/\(.*$/, "");
   const endpointsOf = name => { const m = name.match(/\((.*)\)$/); return m ? m[1].replace(/^[^;]*…;\s*/, "") : ""; };
@@ -135,23 +144,30 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     // as the contract check is done.
     const has = c.blobCount !== undefined;
     const pending = r.running ? "checking…" : "—";
-    const lastUpload = has ? (c.lastPublishBlock ? ago(c.lastPublishAgeSeconds + (r.finished_at ? now() - r.finished_at : now() - r.started_at)) : "none yet") : pending;
+    // The last publish is known once the blob list is rebuilt, a step after the contract's
+    // state; until then, during a run, it is still pending rather than "none yet".
+    const lastUpload = c.lastPublishTimestamp ? ago(now() - c.lastPublishTimestamp) : c.lastPublishBlock ? `block ${n(c.lastPublishBlock)}` : has && !r.running ? "none yet" : pending;
     const lastCheck = r.finished_at ? ago(now() - r.finished_at) : r.running ? "running now" : "never";
-    $("overview").className = "";
-    $("overview").innerHTML = dl([
-      ["Contract", `${mono(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
-      ["Owner", has ? mono(c.publisher) : pending],
+    put("overview", dl([
+      ["Contract", `${addr(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
+      ["Owner", has ? addr(c.publisher) : pending],
       ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
-      ["Last update", lastUpload],
-      ["Last health check", lastCheck],
-    ]);
+      ["Last update", `<span id="ago-upload">${lastUpload}</span>`],
+      ["Last health check", `<span id="ago-check">${lastCheck}</span>`],
+    ]), "");
+  }
+
+  // The "x ago" values move on their own, without rewriting the box around them.
+  function tickAges(r) {
+    const c = r.chain || {};
+    if (c.lastPublishTimestamp) $("ago-upload").textContent = ago(now() - c.lastPublishTimestamp);
+    if (r.finished_at) $("ago-check").textContent = ago(now() - r.finished_at);
   }
 
   function renderSources(r) {
     const s = r.sources || {};
     if (!s.matrix) {
-      $("sources").className = "empty";
-      $("sources").textContent = r.running ? "Checking every source…" : "No check yet.";
+      put("sources", esc(r.running ? "Checking every source…" : "No check yet."), "empty");
       return;
     }
     const total = s.needed ?? s.blobs;
@@ -160,9 +176,8 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       return `<tr><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
     }).join("");
     const missing = (s.neededUnavailable || []).length;
-    $("sources").className = "";
-    $("sources").innerHTML = `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
-      <table><thead><tr><th>Source</th><th>Recoverable from</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`;
+    put("sources", `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
+      <table><thead><tr><th>Source</th><th>Recoverable from</th><th>Reachable</th><th class="num">Confirmed blobs</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">no sources configured</td></tr>`}</tbody></table>`, "");
   }
 
   function renderProgress(r) {
@@ -184,7 +199,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     $("run").disabled = !!r.running;
     const problems = r.problems || [];
     $("problems").hidden = problems.length === 0;
-    $("problem-list").innerHTML = problems.map(p => `<li>${esc(p)}</li>`).join("");
+    put("problem-list", problems.map(p => `<li>${esc(p)}</li>`).join(""));
     renderOverview(r);
     renderProgress(r);
     renderSources(r);
@@ -198,16 +213,25 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       render(r);
       if (r.running) timer = setTimeout(poll, 700);
     } catch (e) {
-      $("overview").textContent = `Cannot reach the local server: ${e}`;
+      // One failed poll must not end the watch: try again, a little later.
+      put("overview", `<span class="bad">Cannot reach the local server: ${esc(e)}; retrying…</span>`, "");
+      timer = setTimeout(poll, 3000);
     }
   }
   async function start() {
     $("run").disabled = true;
-    await fetch("/api/check", {method: "POST"});
+    try { await fetch("/api/check", {method: "POST"}); }
+    catch (e) { $("run").disabled = false; put("overview", `<span class="bad">Cannot reach the local server: ${esc(e)}</span>`, ""); return; }
     clearTimeout(timer); poll();
   }
   $("run").addEventListener("click", start);
-  setInterval(() => { if (last && !last.running) renderOverview(last); }, 30000);   // "x ago" keeps moving
+  setInterval(() => { if (last && !last.running) tickAges(last); }, 30000);
+  document.addEventListener("click", async e => {
+    const b = e.target.closest("button.copy");
+    if (!b) return;
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "copied"; setTimeout(() => { b.textContent = "copy"; }, 1200); }
+    catch { b.textContent = "select it"; setTimeout(() => { b.textContent = "copy"; }, 1200); }
+  });
   fetch("/api/report").then(r => r.json()).then(r => { last = r; render(r); if (r.verdict === "idle" && !r.running) start(); else if (r.running) poll(); });
 })();
 </script>

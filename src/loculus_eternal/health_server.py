@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from loculus_eternal.config import Config
-from loculus_eternal.health import HealthCheck, Report, public_url, source_endpoints, source_kind
+from loculus_eternal.health import HealthCheck, Report, public_url, redact_all, source_endpoints, source_kind
 from loculus_eternal.sources import IpfsSource
 
 PAGE = Path(__file__).with_name("health_page.html")
@@ -121,7 +121,7 @@ class HealthServer:
             # facts as soon as that step is done, before the sources are asked.
             report = HealthCheck(self.config, log=log).run(report=live)
         except Exception as e:  # the page must always get a result
-            report = Report(started_at=live.started_at, finished_at=time.time(), verdict="not recoverable", problems=[f"the check itself failed: {e}"], log=list(live.log))
+            report = Report(started_at=live.started_at, finished_at=time.time(), verdict="not recoverable", problems=[redact_all(f"the check itself failed: {e}", self.config)], log=list(live.log))
         with self._lock:
             self._report = report
             self._running = False

@@ -45,6 +45,11 @@ class IpfsSource:
         """Called at the start of every run with the contract's pointer at the finalized
         block. A manifest failure remembered from an earlier run is forgotten here: the node
         may be back."""
+        if pointer != self.expected_pointer:
+            # A new pointer means a new snapshot: a manifest cached for the old one must
+            # not be served against it.
+            self.manifest = None
+            self._cid_by_hash = {}
         self.expected_pointer = pointer
         self._manifest_error = None
 

@@ -17,9 +17,24 @@ from loculus_eternal.format.chunks import BLOB_DATA_BYTES, unpack_blob
 from loculus_eternal.format.records import DIGEST_BYTES, BatchBegin, FormatError, Header, RecordType, decompress, read_record, sha256
 
 
-# What tears a batch: a framing error, or malformed bytes inside a record (bad JSON, a
-# truncated payload, a manifest that is not an object). The full decoder treats them alike.
-TORN = (FormatError, ValueError, IndexError, KeyError, TypeError, AttributeError)
+# What tears a batch here: a framing error, or malformed bytes inside a record (bad JSON, a
+# truncated index payload, a manifest that is not an object). The full decoder reaches the
+# same verdicts by checking each case explicitly; this walker only reports, so it catches.
+TORN = (FormatError, ValueError, IndexError)
+
+
+def dead_blob_range(batches, torn) -> set[int]:
+    """The rule shared with the full decoder: blobs of a torn range that a complete batch
+    follows are dead, except blob 0, which holds the stream header; a torn tail is not."""
+    if not batches:
+        return set()
+    last_complete = batches[-1].blob_count_after
+    dead: set[int] = set()
+    for t in torn:
+        if t.last_blob < last_complete:
+            dead.update(range(t.first_blob, t.last_blob + 1))
+    dead.discard(0)
+    return dead
 
 
 @dataclass
@@ -63,15 +78,7 @@ class StreamStructure:
         """Blobs no reader needs: those of a torn batch that a complete batch follows. The
         later batch header proves the publisher started over. Blob 0 is never dead, since it
         holds the stream header; a torn range at the end of the stream is not dead either."""
-        if not self.batches:
-            return set()
-        last_complete = self.batches[-1].blob_count_after
-        dead: set[int] = set()
-        for t in self.torn:
-            if t.last_blob < last_complete:
-                dead.update(range(t.first_blob, t.last_blob + 1))
-        dead.discard(0)
-        return dead
+        return dead_blob_range(self.batches, self.torn)
 
     def torn_tail(self) -> TornSummary | None:
         """A torn range at the very end of the stream means an upload is unfinished or lost."""
@@ -161,6 +168,8 @@ def _read_batch(data, pos, expected, previous, first_blob, record, check_range) 
     if t != RecordType.BATCH_MANIFEST:
         raise FormatError(f"expected a manifest, found record type {t:#x}")
     manifest = canonical.loads(payload)
+    if not isinstance(manifest, dict):
+        raise FormatError("manifest is not a JSON object")
     if not canonical.is_canonical(payload):
         raise FormatError("manifest is not canonical JSON")
     blob_count_after = -(-pos // BLOB_DATA_BYTES)
