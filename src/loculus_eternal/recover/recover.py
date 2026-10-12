@@ -39,7 +39,7 @@ class ManifestSource:
             return "event logs"
         if self.file is not None:
             return f"file {self.file}"
-        return f"IPFS snapshot {self.ipfs.snapshot_cid}"
+        return f"IPFS snapshot {self.ipfs.snapshot_cid or 'named by the contract'}"
 
 
 @dataclass
@@ -92,7 +92,7 @@ class Recovery:
     def read_chain_state(self) -> ChainState:
         state = self.reader.state_at_finalized()
         self.cfg.log(f"contract {self.cfg.contract} at finalized block {state.block_number}: {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
-        # IPFS sources trust a snapshot only if its CID hashes to the contract's pointer.
+        # IPFS sources read the snapshot the contract names, and only that one.
         for src in list(self.cfg.sources) + [m.ipfs for m in self.cfg.manifest_sources if m.ipfs is not None]:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
@@ -211,7 +211,7 @@ class Recovery:
                             self.cfg.log(f"{unneeded} missing blob(s) belong to an abandoned upload that a later batch skips; no reader needs them")
                         (self.cfg.data_dir / "missing.json").write_text(json.dumps(missing, indent=1))
             report = RecoveryReport(
-                chain={"contract": self.cfg.contract, "blockNumber": state.block_number, "blobCount": state.blob_count, "head": "0x" + state.head.hex(), "appPointer": "0x" + state.app_pointer.hex(), "publisher": state.publisher},
+                chain={"contract": self.cfg.contract, "blockNumber": state.block_number, "blobCount": state.blob_count, "head": "0x" + state.head.hex(), "snapshotCid": state.app_pointer or None, "publisher": state.publisher},
                 manifest_source=manifest_source,
                 manifest_errors=manifest_errors,
                 blobs_total=len(refs),

@@ -100,9 +100,12 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         elif kind == "local":
             out.append(LocalDirectorySource(s["path"]))
         elif kind == "ipfs":
-            # snapshot_cid may be omitted for the upload command, which fills in its own
-            # latest snapshot; the recovery command needs it.
-            out.append(IpfsSource(s["endpoints"], s.get("snapshot_cid")))
+            # The snapshot is never configured: its CID is read from the contract at the start
+            # of every run, so it cannot go stale. A leftover key is refused rather than
+            # ignored, so that nobody believes it still does something.
+            if "snapshot_cid" in s:
+                raise ConfigError("snapshot_cid is no longer configured: the snapshot CID is read from the contract's appPointer; remove the key")
+            out.append(IpfsSource(s["endpoints"]))
         else:
             raise ConfigError(f"unknown source type {kind!r} (known: beacon, blobscan, blob-archiver, local, ipfs)")
     return out

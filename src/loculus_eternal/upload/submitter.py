@@ -83,7 +83,7 @@ class PlannedTx:
     versioned_hashes: list[str]
     last_blob_chunk_count: int
     is_batch_end: bool
-    app_pointer: str
+    app_pointer: str                   # the snapshot CID the batch end stores; empty mid-batch
     status: str = "planned"            # planned -> sent -> included -> finalized
     nonce: int | None = None
     attempts: list[SentAttempt] = field(default_factory=list)
@@ -162,7 +162,7 @@ class Submitter:
     def existing_journal(self) -> Journal | None:
         return Journal.load(self.journal_path) if self.journal_path.exists() else None
 
-    def plan(self, batch, blobs: list[bytes], app_pointer: bytes, *, snapshot_cid: str | None = None, snapshot_endpoints: list[str] | None = None, blob_cids: list[str] | None = None, ipfs_publish: dict | None = None) -> Journal:
+    def plan(self, batch, blobs: list[bytes], app_pointer: str, *, snapshot_cid: str | None = None, snapshot_endpoints: list[str] | None = None, blob_cids: list[str] | None = None, ipfs_publish: dict | None = None) -> Journal:
         """Write the journal and the blob files for a freshly encoded batch."""
         if self.journal_path.exists():
             raise SubmitError(f"a journal already exists at {self.journal_path}; resume or abandon it first")
@@ -183,7 +183,7 @@ class Submitter:
                     versioned_hashes=["0x" + kzg.blob_to_versioned_hash(b).hex() for b in group],
                     last_blob_chunk_count=batch.last_blob_chunk_count if last else ELEMENTS_PER_BLOB,
                     is_batch_end=last,
-                    app_pointer="0x" + (app_pointer if last else bytes(32)).hex(),
+                    app_pointer=app_pointer if last else "",
                 )
             )
         journal = Journal(
@@ -212,7 +212,7 @@ class Submitter:
         return current_fees(self.w3, self.policy)
 
     def calldata(self, tx: PlannedTx) -> bytes:
-        return bytes.fromhex(self.contract.encode_abi("publish", args=[tx.seqs[0], tx.last_blob_chunk_count, tx.is_batch_end, bytes.fromhex(tx.app_pointer[2:])])[2:])
+        return bytes.fromhex(self.contract.encode_abi("publish", args=[tx.seqs[0], tx.last_blob_chunk_count, tx.is_batch_end, tx.app_pointer])[2:])
 
     def simulate(self, tx: PlannedTx, fees: dict) -> int:
         """Run the call with the blob hashes attached; return the gas estimate or raise Refused
@@ -558,7 +558,7 @@ _PUBLISH_ABI = {
         {"name": "expectedFirstSeq", "type": "uint64"},
         {"name": "lastBlobChunkCount", "type": "uint32"},
         {"name": "isBatchEnd", "type": "bool"},
-        {"name": "newAppPointer", "type": "bytes32"},
+        {"name": "newAppPointer", "type": "string"},
     ],
     "outputs": [],
 }

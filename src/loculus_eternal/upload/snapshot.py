@@ -21,7 +21,7 @@ from loculus_eternal.chain import chain_head
 from loculus_eternal.config import IpfsConfig
 from loculus_eternal.format.decode import StreamDecoder
 from loculus_eternal.format.entrystore import safe_dirname
-from loculus_eternal.ipfs import MANIFEST_NAME, SPEC_NAME, IpfsError, KuboClient, app_pointer, blob_cid, publish_blobs, snapshot_manifest
+from loculus_eternal.ipfs import MANIFEST_NAME, SPEC_NAME, IpfsError, KuboClient, blob_cid, publish_blobs, snapshot_manifest
 from loculus_eternal.store import BlobStore
 
 SNAPSHOT_ZSTD_LEVEL = 9
@@ -29,19 +29,19 @@ SNAPSHOT_ZSTD_LEVEL = 9
 
 @dataclass
 class SnapshotResult:
-    snapshot_cid: str | None
-    pointer: bytes | None
+    snapshot_cid: str | None            # what the batch-end transaction stores as the pointer
     blob_cids: list[str]
     endpoints: list[dict] = field(default_factory=list)   # {"url", "snapshot": ok/error, "blobs": n or error}
     files: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
-        return {"snapshotCid": self.snapshot_cid, "appPointer": None if self.pointer is None else "0x" + self.pointer.hex(), "blobObjects": len(self.blob_cids), "endpoints": self.endpoints, "files": self.files}
+        return {"snapshotCid": self.snapshot_cid, "blobObjects": len(self.blob_cids), "endpoints": self.endpoints, "files": self.files}
 
 
 def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: BlobStore, refs, batch, work_dir: Path, log: Callable[[str], None]) -> SnapshotResult:
     """Decode the stream as it will stand after `batch`, write the snapshot files, add them
-    and the batch's blob objects to every endpoint, and return the pointer to store on-chain.
+    and the batch's blob objects to every endpoint, and return the snapshot's CID, which the
+    batch-end transaction stores on-chain.
 
     `refs` are the chain's BlobRefs for the blobs already published (with block numbers and
     timestamps), so the manifest can carry them; the new batch's blobs get theirs later.
@@ -95,7 +95,7 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
         files[MANIFEST_NAME] = snapshot_manifest(chain_id=chain_id, contract=contract, blob_count=len(all_blobs), head=chain_head(hashes), batches=batches, blobs=manifest_blobs)
         files[SPEC_NAME] = cfg.spec_path.read_bytes()
 
-        result = SnapshotResult(snapshot_cid=None, pointer=None, blob_cids=cids[existing_blob_count:], files=sorted(files))
+        result = SnapshotResult(snapshot_cid=None, blob_cids=cids[existing_blob_count:], files=sorted(files))
         for url in cfg.endpoints:
             log(f"snapshot: adding {len(files)} file(s) and {len(batch.blobs)} blob object(s) to {url}")
             client = KuboClient(url)
@@ -123,8 +123,7 @@ def build_and_publish(cfg: IpfsConfig, *, chain_id: int, contract: str, store: B
                 log(f"IPFS endpoint {url} did not take the blob objects: {e}")
             result.endpoints.append(entry)
     if result.snapshot_cid is not None:
-        result.pointer = app_pointer(result.snapshot_cid)
-        log(f"snapshot {result.snapshot_cid} added to {sum(1 for e in result.endpoints if e.get('snapshot') == 'ok')} endpoint(s); pointer 0x{result.pointer.hex()[:16]}…")
+        log(f"snapshot {result.snapshot_cid} added to {sum(1 for e in result.endpoints if e.get('snapshot') == 'ok')} endpoint(s)")
     elif cfg.endpoints:
         msg = "no IPFS endpoint accepted the snapshot"
         if cfg.required:

@@ -365,13 +365,13 @@ def test_U11_tooling_is_republished_when_the_version_changes(world):
 
 def test_U12_batch_end_carries_the_existing_pointer_forward(world):
     anvil = world["anvil"]
-    pointer = b"\x42" * 32
+    pointer = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"   # set by hand, not by an upload
     tx = anvil.contract.functions.setAppPointer(pointer).build_transaction({"from": anvil.publisher.address, "nonce": anvil.w3.eth.get_transaction_count(anvil.publisher.address), "chainId": anvil.chain_id})
     anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.publisher.sign_transaction(tx).raw_transaction))
     anvil.mine(3)
     report = uploader(world).run()
     assert report.outcome == "published"
-    assert bytes(anvil.contract.functions.appPointer().call()) == pointer
+    assert anvil.contract.functions.appPointer().call() == pointer
 
 
 def test_U3_check_refuses_while_an_interrupted_batch_is_waiting(world):

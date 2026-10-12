@@ -1,4 +1,4 @@
-"""IPFS: per-blob objects, the snapshot directory, pinning, and the on-chain pointer.
+"""IPFS: per-blob objects, the snapshot directory, and pinning.
 
 Every pinner must derive identical content identifiers from identical bytes, so the rules
 are fixed by `docs/ipfs-profile.md` and encoded here:
@@ -7,8 +7,8 @@ are fixed by `docs/ipfs-profile.md` and encoded here:
   multihash sha2-256. Its CID is computed locally and Kubo's answer must agree;
 - a **snapshot** is a UnixFS directory added with CIDv1, raw leaves, chunker size-262144,
   sha2-256, holding `manifest.json`, the container spec, and each organism's file compressed
-  with zstd;
-- the **application pointer** stored on-chain is sha256 of the snapshot CID's binary form.
+  with zstd. Its CID is what the contract stores as the application pointer, whole, so a
+  reader learns it from the chain and never from configuration.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def cid_v1(codec: int, digest: bytes) -> str:
 
 
 def cid_bytes(cid: str) -> bytes:
-    """The binary form of a base32 CIDv1 string, which is what the on-chain pointer hashes."""
+    """The binary form of a base32 CIDv1 string: version, codec, multihash."""
     if not cid.startswith("b"):
         raise IpfsError(f"only base32 CIDv1 strings are used here, got {cid!r}")
     return _unb32(cid[1:])
@@ -73,10 +73,6 @@ def blob_cid(blob: bytes) -> str:
     if len(blob) != BLOB_BYTES:
         raise IpfsError(f"a blob object is exactly {BLOB_BYTES} bytes, got {len(blob)}")
     return cid_v1(CODEC_RAW, hashlib.sha256(blob).digest())
-
-
-def app_pointer(snapshot_cid: str) -> bytes:
-    return hashlib.sha256(cid_bytes(snapshot_cid)).digest()
 
 
 # --- Kubo RPC ---------------------------------------------------------------------------------

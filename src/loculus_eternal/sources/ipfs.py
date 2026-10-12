@@ -1,10 +1,11 @@
 """IPFS source: blob objects located through a snapshot's manifest.
 
 A blob object's CID is the sha2-256 of its bytes, which cannot be derived from the versioned
-hash the chain records, so IPFS recovery starts from a snapshot CID learned off-chain. The
-snapshot is trusted only after its CID hashes to the contract's `appPointer`; its manifest
-then maps every versioned hash to a blob-object CID, and every blob fetched is verified like
-any other. Endpoints are Kubo RPC API URLs.
+hash the chain records, so IPFS recovery starts from the snapshot. The snapshot's CID is the
+contract's `appPointer`, read at the start of every run; no configuration names a snapshot,
+so none can go stale. The snapshot's manifest maps every versioned hash to a blob-object
+CID, and every blob fetched is verified like any other, so the snapshot is trusted for
+nothing but locating bytes. Endpoints are Kubo RPC API URLs.
 """
 
 from __future__ import annotations
@@ -12,19 +13,18 @@ from __future__ import annotations
 import httpx
 
 from loculus_eternal.chain import BlobRef
-from loculus_eternal.ipfs import IpfsError, KuboClient, app_pointer, parse_manifest
+from loculus_eternal.ipfs import IpfsError, KuboClient, parse_manifest
 from loculus_eternal.sources.base import BlobContext, SourceError
 
 
 class IpfsSource:
-    def __init__(self, endpoints: list[str], snapshot_cid: str | None, *, timeout: float = 300.0, client: httpx.Client | None = None):
+    def __init__(self, endpoints: list[str], *, timeout: float = 300.0, client: httpx.Client | None = None):
         if not endpoints:
             raise ValueError("at least one IPFS endpoint is required")
         self.endpoints = list(endpoints)
         self.clients = [KuboClient(e, timeout=timeout, client=client) for e in endpoints]
-        self.snapshot_cid = snapshot_cid
+        self.snapshot_cid: str | None = None    # set from the contract's pointer at the start of every run
         self._manifest_error: str | None = None
-        self.expected_pointer: bytes | None = None
         self.manifest: dict | None = None
         self._cid_by_hash: dict[bytes, str] = {}
 
@@ -33,24 +33,16 @@ class IpfsSource:
         cid = (self.snapshot_cid or "no snapshot")[:16]
         return f"ipfs({cid}…; " + ", ".join(self.endpoints) + ")"
 
-    def set_snapshot(self, snapshot_cid: str | None) -> None:
-        """Point the source at another snapshot (the upload command's latest, for instance)."""
-        if snapshot_cid != self.snapshot_cid:
-            self.snapshot_cid = snapshot_cid
-            self.manifest = None
-            self._manifest_error = None
-            self._cid_by_hash = {}
-
-    def set_app_pointer(self, pointer: bytes) -> None:
+    def set_app_pointer(self, pointer: str) -> None:
         """Called at the start of every run with the contract's pointer at the finalized
-        block. A manifest failure remembered from an earlier run is forgotten here: the node
-        may be back."""
-        if pointer != self.expected_pointer:
-            # A new pointer means a new snapshot: a manifest cached for the old one must
-            # not be served against it.
+        block: the snapshot CID, or an empty string before the first batch is committed. A
+        manifest read for another snapshot is dropped, and a manifest failure remembered
+        from an earlier run is forgotten here: the node may be back."""
+        cid = pointer or None
+        if cid != self.snapshot_cid:
+            self.snapshot_cid = cid
             self.manifest = None
             self._cid_by_hash = {}
-        self.expected_pointer = pointer
         self._manifest_error = None
 
     def _load_manifest(self) -> dict:
@@ -60,11 +52,7 @@ class IpfsSource:
             # Asked once per block group: a manifest that could not be read is not retried.
             raise SourceError(self._manifest_error)
         if self.snapshot_cid is None:
-            raise SourceError("no snapshot CID: the IPFS source cannot locate blobs without one")
-        if self.expected_pointer is None:
-            raise SourceError("the snapshot has not been checked against the contract's appPointer; refusing to trust it")
-        if app_pointer(self.snapshot_cid) != self.expected_pointer:
-            raise SourceError(f"snapshot {self.snapshot_cid} does not match the contract's appPointer; refusing its manifest")
+            raise SourceError("the contract names no IPFS snapshot: the IPFS source cannot locate blobs without one")
         errors = []
         for c in self.clients:
             try:

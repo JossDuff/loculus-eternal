@@ -98,9 +98,10 @@ endpoints = ["{kubo.api_url}"]
                 for tx in report.transactions:
                     archive.add(tx["blockTimestamp"], [(bytes.fromhex(vh[2:]), store.read_blob(seq)) for seq, vh in zip(tx["seqs"], tx["versionedHashes"])])
             snapshot_cid = report.ipfs["snapshotCid"]
-            # A third party's config: the same deployment, the published snapshot, no key needed.
+            # A third party's config: the same deployment and the same sources, no key needed
+            # and no CID either, since the snapshot is read from the contract.
             viewer_cfg = tmp / "viewer.toml"
-            viewer_cfg.write_text(cfg_path.read_text().replace(f'type = "ipfs"\nendpoints = ["{kubo.api_url}"]\n', f'type = "ipfs"\nendpoints = ["{kubo.api_url}"]\nsnapshot_cid = "{snapshot_cid}"\n'))
+            viewer_cfg.write_text(cfg_path.read_text())
             anvil.mine(3)
             yield {"anvil": anvil, "archive": archive, "backend": backend, "cfg": viewer_cfg, "snapshot": snapshot_cid, "report": report, "tmp": tmp}
         finally:
@@ -119,7 +120,7 @@ def test_H1_a_sound_deployment_is_recoverable(world):
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
     assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
     assert not hasattr(r, "ipfs"), "IPFS is checked as a blob source, not separately"
-    assert r.chain["snapshotCid"] == world["snapshot"] and r.chain["snapshotMatchesPointer"] is True
+    assert r.chain["snapshotCid"] == world["snapshot"], "the snapshot CID comes from the contract"
     assert r.sources["needed"] == r.sources["blobs"] and all(m["complete"] and m["reachable"] for m in r.sources["matrix"].values())
     assert any(k.startswith("ipfs") and m["verified"] == r.sources["blobs"] for k, m in r.sources["matrix"].items())
     assert not hasattr(r, "backend"), "the check judges the record on its own, never against the live database"
@@ -162,18 +163,23 @@ def test_H3_a_corrupting_source_is_noted_but_does_not_fail_the_check(world):
     assert sum(m["corrupt"] for m in r.sources["matrix"].values()) >= 1
 
 
-def test_H4_a_snapshot_that_is_not_the_publishers_is_a_problem(world):
+def test_H4_a_snapshot_the_contract_names_but_that_cannot_be_read_is_a_problem(world):
     from loculus_eternal.ipfs import KuboClient
 
+    anvil = world["anvil"]
     a = KuboClient(configuration.load(world["cfg"]).ipfs.endpoints[0])
-    impostor = a.add_directory("snapshot", {"manifest.json": a.cat(f"{world['snapshot']}/manifest.json"), "container-spec.md": b"tampered\n"})
-    cfg = world["tmp"] / "impostor.toml"
-    cfg.write_text(world["cfg"].read_text().replace(world["snapshot"], impostor))
-    r = check(world, cfg)
-    assert r.verdict == "recoverable", "a stale CID is not a loss of the data"
-    assert r.chain["snapshotMatchesPointer"] is False and any("appPointer" in p for p in r.problems)
+    # The publisher re-points the contract at a directory that is not a snapshot: no
+    # manifest. A reader learns the CID from the contract, so there is no configuration to
+    # go stale; what can go wrong is that the named snapshot cannot be read.
+    not_a_snapshot = a.add_directory("snapshot", {"container-spec.md": b"tampered\n"})
+    tx = anvil.contract.functions.setAppPointer(not_a_snapshot).build_transaction({"from": anvil.publisher.address, "nonce": anvil.w3.eth.get_transaction_count(anvil.publisher.address), "chainId": anvil.chain_id})
+    anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.publisher.sign_transaction(tx).raw_transaction))
+    anvil.mine(3)
+    r = check(world)
+    assert r.verdict == "recoverable", "an unreadable snapshot is not a loss of the data while the other sources cover it"
+    assert r.chain["snapshotCid"] == not_a_snapshot
     ipfs_row = next(m for k, m in r.sources["matrix"].items() if k.startswith("ipfs"))
-    assert not ipfs_row["complete"] and ipfs_row["verified"] == 0 and "appPointer" in ipfs_row.get("lastError", "")
+    assert not ipfs_row["complete"] and ipfs_row["verified"] == 0 and "manifest" in ipfs_row.get("lastError", "")
 
 
 def test_H5_the_server_serves_the_page_and_runs_checks(world):
@@ -215,7 +221,7 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     dumped = json.dumps(public)
     assert "SECRETKEY" not in dumped and public["contract"] == cfg.chain.contract and public["network"]
     assert any(s["type"] == "blobscan" and s["endpoints"] == ["https://api.example.com"] for s in public["sources"])
-    assert any(s["type"] == "ipfs" and s["snapshotCid"] == world["snapshot"] for s in public["sources"])
+    assert any(s["type"] == "ipfs" and "snapshotCid" not in s for s in public["sources"]), "the snapshot is a chain fact, not a config fact"
     assert "backend" not in public and public["repository"].startswith("https://github.com/")
     # A full check against that config must not leak the key either: not in source names,
     # not in error text, nowhere in the report.

@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, verify_manifest
 from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
-from loculus_eternal.ipfs import app_pointer
 from loculus_eternal.rpc import connect
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
@@ -186,19 +185,15 @@ class HealthCheck:
             "publisher": state.publisher,
             "blobCount": state.blob_count,
             "head": "0x" + state.head.hex(),
-            "appPointer": "0x" + state.app_pointer.hex(),
+            "snapshotCid": state.app_pointer or None,
             "successor": state.successor,
         }
         if int(state.successor, 16) != 0:
             report.notes.append(f"a successor contract is set: {state.successor}; this deployment may have been replaced")
-        # The configured snapshot CID is the publisher's only if its hash is the contract's
-        # pointer; that costs no request. The blob check then uses the snapshot as a source.
-        cid = next((s.snapshot_cid for s in self.cfg.sources if isinstance(s, IpfsSource) and s.snapshot_cid), None)
-        if cid:
-            report.chain["snapshotCid"] = cid
-            report.chain["snapshotMatchesPointer"] = app_pointer(cid) == state.app_pointer
-            if not report.chain["snapshotMatchesPointer"]:
-                report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
+        # The snapshot CID comes from the contract, so there is nothing to compare it with;
+        # the blob check reads that snapshot through the IPFS source and shows what it finds.
+        if not state.app_pointer and any(isinstance(s, IpfsSource) for s in self.cfg.sources):
+            report.notes.append("the contract names no IPFS snapshot yet: the IPFS source has nothing to read until a batch is committed")
         log(f"contract holds {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
 
         self._step(report, "contract check", "rebuilding the blob list from event logs")

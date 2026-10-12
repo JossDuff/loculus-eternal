@@ -21,16 +21,18 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
     for m in cfg.recover.manifest_sources:
         if m == "logs":
             manifest_sources.append(ManifestSource(logs=True))
-        elif m.startswith("ipfs:"):
-            # Reuse a configured IPFS source for the same snapshot when there is one, so the
-            # manifest and the blobs come from the same place; otherwise use [ipfs].endpoints.
-            cid = m[len("ipfs:") :]
-            existing = next((s for s in cfg.sources if isinstance(s, IpfsSource) and s.snapshot_cid == cid), None)
+        elif m == "ipfs":
+            # The snapshot the contract names. Reuse the configured IPFS source when there is
+            # one, so the manifest and the blobs come from the same place; otherwise use
+            # [ipfs].endpoints.
+            existing = next((s for s in cfg.sources if isinstance(s, IpfsSource)), None)
             if existing is None:
                 if cfg.ipfs is None or not cfg.ipfs.endpoints:
-                    raise SystemExit(f"configuration error: manifest source {m!r} needs an ipfs source for that snapshot or [ipfs].endpoints")
-                existing = IpfsSource(cfg.ipfs.endpoints, cid)
+                    raise SystemExit("configuration error: manifest source 'ipfs' needs an ipfs source or [ipfs].endpoints")
+                existing = IpfsSource(cfg.ipfs.endpoints)
             manifest_sources.append(ManifestSource(ipfs=existing))
+        elif m.startswith("ipfs:"):
+            raise SystemExit(f"configuration error: manifest source {m!r} names a snapshot, but the snapshot CID is read from the contract now; write \"ipfs\"")
         else:
             manifest_sources.append(ManifestSource(file=Path(m)))
     return RecoveryConfig(

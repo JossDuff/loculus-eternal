@@ -21,7 +21,7 @@ ABI = [
     {"type": "function", "name": "blobCount", "inputs": [], "outputs": [{"type": "uint64"}], "stateMutability": "view"},
     {"type": "function", "name": "head", "inputs": [], "outputs": [{"type": "bytes32"}], "stateMutability": "view"},
     {"type": "function", "name": "publisher", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
-    {"type": "function", "name": "appPointer", "inputs": [], "outputs": [{"type": "bytes32"}], "stateMutability": "view"},
+    {"type": "function", "name": "appPointer", "inputs": [], "outputs": [{"type": "string"}], "stateMutability": "view"},
     {"type": "function", "name": "successor", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
     {
         "type": "event",
@@ -40,7 +40,7 @@ ABI = [
             {"name": "firstSeq", "type": "uint64", "indexed": False},
             {"name": "lastSeq", "type": "uint64", "indexed": False},
             {"name": "lastBlobChunkCount", "type": "uint32", "indexed": False},
-            {"name": "appPointer", "type": "bytes32", "indexed": False},
+            {"name": "appPointer", "type": "string", "indexed": False},
         ],
     },
 ]
@@ -67,7 +67,7 @@ class ChainState:
     block_number: int
     blob_count: int
     head: bytes
-    app_pointer: bytes
+    app_pointer: str      # the current IPFS snapshot's CID; empty until the first batch is committed
     publisher: str
     successor: str
 
@@ -147,7 +147,7 @@ class ChainReader:
             block_number=n,
             blob_count=self._retry("reading blobCount", lambda: f.blobCount().call(block_identifier=n)),
             head=bytes(self._retry("reading head", lambda: f.head().call(block_identifier=n))),
-            app_pointer=bytes(self._retry("reading appPointer", lambda: f.appPointer().call(block_identifier=n))),
+            app_pointer=str(self._retry("reading appPointer", lambda: f.appPointer().call(block_identifier=n))),
             publisher=self._retry("reading publisher", lambda: f.publisher().call(block_identifier=n)),
             successor=self._retry("reading successor", lambda: f.successor().call(block_identifier=n)),
         )
