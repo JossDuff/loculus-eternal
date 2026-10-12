@@ -153,7 +153,7 @@ class HealthCheck:
         there? It cannot when the contract cannot be read, when the blob list does not
         reproduce the chain's head, when a blob a reader needs is unavailable from every
         source, when the blobs do not parse as a stream, or when the check itself broke.
-        A dead archive, a stopped IPFS node or a stale snapshot CID are listed as problems
+        A dead archive, a stopped IPFS node or an unreadable snapshot are listed as problems
         but do not change the answer: the other sources still recover the dataset."""
         if "error" in report.chain:
             return True
@@ -241,6 +241,18 @@ class HealthCheck:
             name = public_source(src)
             if name in matrix:   # two sources of one kind on one host keep separate rows
                 name = f"{name} #{sum(1 for k in matrix if k.startswith(name)) + 1}"
+            # A source that has nothing to be asked for is neither reachable nor unreachable;
+            # its row says why it was not asked. That is every source before the first blob
+            # is published, and the IPFS source until the first batch commits a snapshot.
+            skipped = None
+            if state.blob_count == 0:
+                skipped = "no blobs published yet"
+            elif isinstance(src, IpfsSource) and not state.app_pointer:
+                skipped = "the contract names no IPFS snapshot yet"
+            if skipped:
+                matrix[name] = {"skipped": skipped, "verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": 0}
+                log(f"{name}: not asked, {skipped}")
+                continue
             # Re-read the structure only when something new arrived since the last walk.
             have = sum(1 for b in blobs if b is not None)
             if have and have != in_hand:

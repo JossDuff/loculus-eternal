@@ -182,6 +182,24 @@ def test_H4_a_snapshot_the_contract_names_but_that_cannot_be_read_is_a_problem(w
     assert not ipfs_row["complete"] and ipfs_row["verified"] == 0 and "manifest" in ipfs_row.get("lastError", "")
 
 
+def test_H4_before_the_first_blob_no_source_is_asked_and_none_is_blamed(world):
+    from loculus_eternal.testkit.anvil import load_artifact
+
+    anvil = world["anvil"]
+    artifact = load_artifact()
+    factory = anvil.w3.eth.contract(abi=artifact["abi"], bytecode=artifact["bytecode"]["object"])
+    tx = factory.constructor(anvil.publisher.address).build_transaction({"from": anvil.deployer.address, "nonce": anvil.w3.eth.get_transaction_count(anvil.deployer.address), "chainId": anvil.chain_id})
+    receipt = anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.deployer.sign_transaction(tx).raw_transaction))
+    anvil.mine(3)
+    fresh_cfg = world["tmp"] / "fresh.toml"
+    fresh_cfg.write_text(world["cfg"].read_text().replace(anvil.contract.address, receipt.contractAddress))
+    r = check(world, fresh_cfg)
+    assert r.verdict == "recoverable" and r.chain["blobCount"] == 0 and r.chain["snapshotCid"] is None
+    rows = r.sources["matrix"]
+    assert len(rows) == 3 and all(m["skipped"] == "no blobs published yet" and "reachable" not in m for m in rows.values())
+    assert r.stream == {"batches": 0} and not r.problems
+
+
 def test_H5_the_server_serves_the_page_and_runs_checks(world):
     server = HealthServer(configuration.load(world["cfg"]), port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
