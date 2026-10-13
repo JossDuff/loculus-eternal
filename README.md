@@ -14,7 +14,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 For the Loculus dataset maintainer. You'll need:
 
 - [uv](https://docs.astral.sh/uv/)
-- for the one-time deployment, [Foundry](https://getfoundry.sh/)
+- for the one-time contract deployment, [Foundry](https://getfoundry.sh/)
 - an Ethereum RPC endpoint (ex: [dRPC](https://drpc.org/chainlist/ethereum-mainnet-rpc), [Alchemy](https://www.alchemy.com/), [Infura](https://www.infura.io/), etc)
 - a wallet (ex: [Ambire](https://www.ambire.com/)) that holds some Ether on the network you publish to.  Its private key is the publisher private key below.
 - optional: a [Kubo](https://docs.ipfs.tech/install/command-line/) IPFS node you control, reachable over its RPC API (`http://127.0.0.1:5001` by default). The `upload` then adds and pins every blob and a snapshot of the dataset there as well. Without it the blobs live only where Ethereum and the public archives keep them.
@@ -43,7 +43,7 @@ forge script script/Deploy.s.sol \
 cd ..
 ```
 
-The output names the contract address and the block it was deployed in. Write both down for the
+The output names the contract address and the block it was deployed in. Copy both for the
 config file in the next step. If the deployment runs out of gas, add `--gas-estimate-multiplier 800`: Foundry's local simulation does not know every network's
 gas schedule.
 
@@ -56,7 +56,7 @@ including the contract address and deployment block from the step above:
 cp config/sepolia.example.toml loculus-eternal.toml
 ```
 
-The example is written for the Sepolia test network. For mainnet, also set `chain_id = 1` and
+The example is written for the Sepolia test network. For mainnet, set `chain_id = 1` and
 use mainnet URLs for the RPC endpoint, the beacon node and Blobscan (`https://api.blobscan.com`).
 
 Then, with the publisher private key in the environment:
@@ -82,7 +82,7 @@ cd loculus-eternal
 
 Then write a config file, `loculus-eternal.toml`, naming your RPC endpoint, the contract, and
 where to look for blob bytes. The contract address is the one from
-[deploying it](#1-deploy-the-contract-once); ask the dataset's maintainer for it.
+[the deploy section](#1-deploy-the-contract-once), ask the dataset's maintainer for it.
 
 ```toml
 [chain]
