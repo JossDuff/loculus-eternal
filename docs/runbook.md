@@ -46,14 +46,14 @@ One run does, in order:
 
    [upload]
    data_dir = "upload-data"                      # local state; keep it, but losing it is survivable
-   tooling_paths = ["docs/container-spec.md", "docs/contract.md", "docs/ipfs-profile.md",
+   tooling_paths = ["spec/container-spec.md", "spec/contract.md", "spec/ipfs-profile.md",
                     "src/loculus_eternal/**/*.py", "pyproject.toml", "uv.lock"]
    max_blob_fee_gwei = 5                         # refuse to publish when blob space is pricier than this
    max_priority_fee_gwei = 1
 
    [ipfs]                                        # optional: Kubo RPC endpoints that pin every blob and snapshot
    endpoints = ["http://kubo-1:5001", "http://kubo-2:5001"]
-   spec_path = "docs/container-spec.md"          # included in every snapshot
+   spec_path = "spec/container-spec.md"          # included in every snapshot
    required = false                              # true: refuse to publish when no endpoint takes the snapshot
 
    [[sources]]                                   # where the command gets the published stream back from
@@ -68,10 +68,10 @@ One run does, in order:
    Paths in `tooling_paths` are relative to the config file's directory, so keep the file in
    the repository checkout.
 
-3. Put the publisher key in the environment, never in a file:
+3. Put the publisher private key in the environment, never in a file:
 
    ```
-   export LOCULUS_ETERNAL_PUBLISHER_KEY=0x…
+   export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
    ```
 
    The command refuses to start without it (except `--check`). The key's wallet must hold
@@ -111,7 +111,7 @@ between, from another machine or by someone else with the key. Just run again; t
 will see what they published and publish only the rest.
 
 **"released line has an unexpected shape"**: the backend's data format changed. Do not
-publish until someone has reviewed the pinned schema in `docs/container-spec.md` and updated
+publish until someone has reviewed the pinned schema in `spec/container-spec.md` and updated
 the code. This check exists so that a format change is caught here and not in the permanent
 record.
 
@@ -196,7 +196,7 @@ published record against the chain and the configured sources, without a key. Ru
 an upload, or any time someone asks whether the backup is intact. `--once` prints the same
 check as JSON for a script.
 
-## Rotating the publisher key
+## Rotating the publisher private key
 
 From the current key, call `setPublisher(newAddress)` on the contract (any wallet tool that
 can call a contract will do), then export the new key. Do this before a key is at risk, not

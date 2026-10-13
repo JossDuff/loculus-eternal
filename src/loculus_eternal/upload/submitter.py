@@ -379,7 +379,7 @@ class Submitter:
         if head.nonce is not None and self.w3.eth.get_transaction_count(self.account.address) > head.nonce:
             self.sleep(min(self.policy.poll_interval, 2.0))
             if self._receipt_for_any(head) is None:
-                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index + 1} was used by a transaction that is not part of this batch; another upload ran with the publisher key in between")
+                raise NonceTaken(f"nonce {head.nonce} of transaction {head.index + 1} was used by a transaction that is not part of this batch; another upload ran with the publisher private key in between")
             return  # it landed after all; the next poll records it
         last = head.attempts[-1]
         waited_blocks = self.w3.eth.block_number - (last.sent_block if last.sent_block is not None else self.w3.eth.block_number)

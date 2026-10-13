@@ -30,7 +30,7 @@ IPFS profile are frozen.
    Verify the source on a block explorer so the bytecode is checkable.
 
 2. **Configure.** Copy `config/sepolia.example.toml` to `loculus-eternal.toml` in the checkout
-   and fill in the marked lines. Export the publisher key.
+   and fill in the marked lines. Export the publisher private key.
 
 3. **Rehearse the refusals.** `loculus-eternal upload --config loculus-eternal.toml --check`
    should report about 294,000 entries and the estimated cost. Run `--dry-run` once. Try a
@@ -58,7 +58,7 @@ IPFS profile are frozen.
 8. **Write it up.** Fill in `docs/testnet-report.md`: costs, timings, every operational
    surprise, and what should change before mainnet.
 
-9. **Freeze.** Mark `docs/container-spec.md`, `docs/contract.md` and `docs/ipfs-profile.md`
+9. **Freeze.** Mark `spec/container-spec.md`, `spec/contract.md` and `spec/ipfs-profile.md`
    as frozen, bump the package version, and tag the release. The tooling records in the
    mainnet genesis will carry that version.
 

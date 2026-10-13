@@ -71,7 +71,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **C10 — standalone re-point.** `setAppPointer` replaces the pointer whole, so a shorter CID leaves nothing of a longer one behind, and emits `AppPointerSet` without touching the record.
 - **C11 — constructor.** Deployment rejects a zero publisher and emits `PublisherChanged(0, publisher)`; the record starts empty with `head` zero and no pointer.
 - **C12 — invariant.** Under random publishes, rotations and rejected calls, `head` always equals the chain over the blobs the contract accepted and `blobCount` equals their number (handler-based invariant test).
-- **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `docs/contract.md`.
+- **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `spec/contract.md`.
 - **C14 — real blob transactions.** On anvil, `publish` called from a real type-3 transaction records the blobs' versioned hashes exactly as computed off-chain from the blob bytes (covered in the anvil harness phase).
 
 ### K — KZG and harness
@@ -124,7 +124,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **U7 — finality before anything counts.** Blobs enter the local store and the report only after the including block is finalized.
 - **U8 — torn batch, lost journal.** When the journal is lost after a partial batch, the next run reports the torn blobs, starts a fresh batch at the next blob boundary, and the recovered stream decodes with the torn range reported and every entry present; once the torn blobs other than blob 0 are gone from every source, recovery still succeeds and a later upload still knows the published set; the success line says how many blobs on chain belong to the abandoned upload.
 - **U9 — concurrent upload.** If the contract's blob count moves between planning and sending, the simulation reports the sequence mismatch and nothing is sent; if another upload with the same key runs while a batch is in flight and takes one of its nonces, the batch is set aside and the next run starts a fresh one after the torn blobs.
-- **U10 — command line.** `loculus-eternal upload --config file.toml` reads the key only from `LOCULUS_ETERNAL_PUBLISHER_KEY`, refuses without it, publishes with it, and is a no-op the second time; `--check` works without the key.
+- **U10 — command line.** `loculus-eternal upload --config file.toml` reads the key only from `LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`, refuses without it, publishes with it, and is a no-op the second time; `--check` works without the key.
 - **U12 — pointer carried forward.** A batch end rewrites the on-chain pointer with the value it already has, so a pointer set by hand or by a snapshot is never wiped by a data upload.
 - **U14 — vanished entries.** Published entries that no longer appear in the backend feed are reported and never withdrawn on their own; with the maintainer's explicit confirmation the next batch carries withdrawal records for them, after which recoveries and snapshots exclude them.
 - **U13 — chain mismatch.** A configured chain id that differs from the RPC endpoint's is a configuration error before anything is read or sent.
@@ -160,4 +160,4 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 
 - **P1 — no numbered references.** No human-facing file (README, CLAUDE.md, docs, the plan file, source, tests, contract sources) contains a milestone reference (the letter M followed by a digit) or a section sign. The check is a grep for those two patterns and must return nothing.
 - **P3 — metered endpoints.** Every JSON-RPC connection spaces its requests to a configured maximum per second and retries a failed request with growing pauses, for every method the project uses including sending a signed transaction, which is idempotent; a run that still fails on the endpoint ends with a plain message and a journal that resumes.
-- **P2 — no secrets.** No private key, token, or password appears anywhere in the tree; the publisher key is read only from `LOCULUS_ETERNAL_PUBLISHER_KEY`.
+- **P2 — no secrets.** No private key, token, or password appears anywhere in the tree; the publisher private key is read only from `LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`.

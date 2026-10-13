@@ -2,8 +2,8 @@
 
 This document is the *why*. It explains what problem Loculus Eternal solves for Pathoplexus,
 what it promises, what it deliberately does not promise, and why each design choice was made.
-The normative *what* lives in `docs/container-spec.md`, `docs/contract.md` and
-`docs/ipfs-profile.md`; the roadmap and the dated record of every decision live in
+The normative *what* lives in `spec/container-spec.md`, `spec/contract.md` and
+`spec/ipfs-profile.md`; the roadmap and the dated record of every decision live in
 `loculus-eternal-PLAN.md`.
 
 ## The problem
@@ -49,7 +49,7 @@ it.
    published, in order, and to check any list of blob hashes someone hands you. Even if
    Ethereum nodes one day stop serving old event logs, the `head` in contract storage lets a
    consumer verify a list obtained from anywhere else.
-3. **Authorization.** Only the holder of the publisher key can append to the record.
+3. **Authorization.** Only the holder of the publisher private key can append to the record.
 
 ## What is not promised, and how it is hedged
 
@@ -89,7 +89,7 @@ public medium cannot honour that, so only entries whose terms are Open at upload
 eligible. A restricted entry becomes eligible on the day it turns open, and is picked up by the
 next upload.
 
-**The publisher is trusted for content, not for integrity.** A compromised publisher key can
+**The publisher is trusted for content, not for integrity.** A compromised publisher private key can
 append garbage; it cannot alter or remove anything already published. Garbage is identifiable
 by its position in the stream and can be disowned socially or superseded by a successor
 deployment. Nothing proves that the published bytes are the *right* dataset; that rests on
@@ -110,7 +110,7 @@ nucleotide sequences, insertions, and aligned amino-acid sequences. Four metadat
 removed because they change over time without a new version and are derivable: the entry's
 status relative to later versions, and the three data-use-terms fields, which are always the
 open-data values for anything we publish. The exact schema is pinned in
-`docs/container-spec.md`.
+`spec/container-spec.md`.
 
 Why publish the pipeline-produced fields at all, when only the submitted material is
 immutable? Because the point of a backup is that someone can use it. A copy that already
@@ -215,7 +215,7 @@ published. A journal on disk records each transaction's progress so a restart re
 than duplicates. Finally it pins the same bytes on IPFS and writes a report.
 
 The command reads its key only from the environment variable
-`LOCULUS_ETERNAL_PUBLISHER_KEY`, makes no assumptions about where it runs, and writes its
+`LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`, makes no assumptions about where it runs, and writes its
 error messages for the people who will actually run it.
 
 ### The recovery command
@@ -338,7 +338,7 @@ tip, and the blob gas at the block's blob base fee, limited to whatever the pot 
 refund lands in the same transaction, so the net effect per upload is exactly "pot first,
 wallet covers the shortfall", with the one difference that the wallet must hold the full
 maximum fee for the instant the transaction runs. There would be no withdraw function at all.
-The tip cap exists so that a careless or compromised publisher key cannot drain the pot by
+The tip cap exists so that a careless or compromised publisher private key cannot drain the pot by
 paying absurd priority fees. This is parked and must be decided before the contract is
 written, because the contract cannot be changed afterwards.
 

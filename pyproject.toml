@@ -3,7 +3,7 @@ name = "loculus-eternal"
 version = "0.0.1"
 description = "Permanent, verifiable backup of Pathoplexus (Loculus) released data in Ethereum blobs"
 readme = "README.md"
-license = "AGPL-3.0-or-later"
+license = "AGPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [
     "ckzg>=2",

@@ -145,7 +145,7 @@ Guaranteed:
    holding a candidate blob can verify it. Anyone holding one 31-byte chunk plus a 48-byte
    KZG opening can verify that chunk. No trust in Pathoplexus, archives, or IPFS.
 2. **Complete manifest.** The chain suffices to enumerate every blob ever published.
-3. **Authorization.** Only the publisher key can append.
+3. **Authorization.** Only the publisher private key can append.
 
 Not guaranteed, but hedged: **availability**. Sources, in the order the recovery command tries
 them: consensus nodes (18 days), public blob archives (which ingest *all* blobs and would each
@@ -298,7 +298,7 @@ estimated cost, without sending anything.
 
 Configuration: backend URL, organism list, RPC URL, contract address, blob source list, IPFS
 endpoints, data directory. Key via environment variable **only**
-(`LOCULUS_ETERNAL_PUBLISHER_KEY`), never config or code. No assumptions about where it runs
+(`LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`), never config or code. No assumptions about where it runs
 (hosting decided before mainnet). Operated by the Pathoplexus team, so error messages and the
 runbook are written for them.
 
@@ -578,7 +578,7 @@ semi-supernode beacon node plus one hosted historical-blob provider, plus Blobsc
 
 **Naming — DECIDED 2026-09-30: Loculus Eternal everywhere.** Repository `loculus-eternal`,
 Python package `loculus_eternal`, one console script `loculus-eternal` with subcommands,
-contract `LoculusEternal`, environment variable `LOCULUS_ETERNAL_PUBLISHER_KEY`. Pathoplexus
+contract `LoculusEternal`, environment variable `LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`. Pathoplexus
 is documented as the first and only instance. Licence: AGPL-3.0 (the repository's LICENSE).
 
 **Sepolia campaign operations — DECIDED 2026-10-07.** Infura (free tier, key in the

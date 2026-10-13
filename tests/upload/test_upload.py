@@ -458,7 +458,7 @@ def test_U9_another_upload_mid_batch_sets_the_batch_aside(world):
             stranger_results.append((blobs, publish_blobs(anvil, blobs, last_blob_chunk_count=17, is_batch_end=True)))
 
     up.submitter.after_send = race_after_first_and_record
-    # The other upload uses the same publisher key, so it consumes the nonce our second
+    # The other upload uses the same publisher private key, so it consumes the nonce our second
     # transaction was going to use; the submitter notices and sets the batch aside.
     report = up.run()
     assert report.outcome == "failed" and "another upload ran" in report.message, report.message
