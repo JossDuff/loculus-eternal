@@ -29,6 +29,17 @@ class KzgError(ValueError):
     pass
 
 
+# eth-account reads the trusted setup from disk again for every commitment and every proof
+# set it computes while signing a blob transaction, close to two seconds each time, so a
+# six-blob transaction spent twenty seconds loading the same file before it was signed.
+# Memoising its loader keeps one copy per process. Pinned to the eth-account release in
+# uv.lock; if an upgrade caches the setup itself, this wrapper becomes a harmless no-op.
+import eth_account.typed_transactions.base as _signer_internals  # noqa: E402
+
+if not hasattr(_signer_internals.load_trusted_setup, "cache_info"):
+    _signer_internals.load_trusted_setup = lru_cache(maxsize=2)(_signer_internals.load_trusted_setup)
+
+
 @lru_cache(maxsize=1)
 def settings():
     """Load the trusted setup once. `precompute=0` keeps load time short; openings are rare."""

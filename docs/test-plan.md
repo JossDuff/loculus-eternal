@@ -82,6 +82,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **K4 — harness.** The anvil harness starts a chain with the contract deployed and the publisher funded; the finalized block is two behind the latest; time can be warped.
 - **K5 — real blob transactions.** A type-3 transaction built from blob bytes is included; the node's versioned hashes equal the locally computed ones; a batch larger than six blobs spans several transactions in order with only the last one committing the batch. (Covers C14.)
 - **K6 — beacon stub.** The stub serves `GET /eth/v1/beacon/blobs/{slot}` in the real response shape, honours the `versioned_hashes` filter, returns 404 for an unknown slot and 400 for a non-numeric block id, and stops serving a slot once told to forget it.
+- **K8 — one trusted setup per process.** The KZG trusted setup is read from disk once per process, by this project's wrapper and by the transaction signer alike; signing a second blob transaction loads nothing again.
 - **K7 — end to end.** Two batches encoded from the vector entries are published on anvil, the blob list is rebuilt from events and verified against `head`, every blob is fetched from the stub by slot and verified, and the decoded stream reproduces the entries, tooling and index with verifying manifests.
 
 ### R — recovery command
