@@ -100,6 +100,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **R11 — adapter shapes.** The beacon, Blobscan and blob-archiver adapters each return the verified blob from their respective response shapes; the beacon adapter sends the `versioned_hashes` filter and derives the slot from the block timestamp.
 - **R12 — adaptive log paging.** `eth_getLogs` paging halves after an error and doubles after a success, and still covers the whole range.
 - **R15 — dead blobs are not missing.** A missing blob that the decode step shows to be dead is marked unneeded in `missing.json`, and the run ends with SUCCESS and a note instead of INCOMPLETE; without a decode, or when the missing blob is blob 0 or in a torn tail, every missing blob counts.
+- **R16 — garbage pointer.** The contract accepts any bytes as its pointer; one that is not valid UTF-8 is read with replacement characters so the chain state, the event logs and every other source stay usable, and a value of the wrong type is a plain error naming the ABI mismatch.
 - **R14 — withdrawn entries.** Recovery output excludes withdrawn entries and the report names the withdrawn identifiers; the command offers no option that produces the withdrawn data.
 - **R13 — command line.** `loculus-eternal recover --config file.toml` runs the whole recovery from a TOML file and exits non-zero when blobs are missing or the list cannot be verified.
 
