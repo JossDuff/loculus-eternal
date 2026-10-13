@@ -158,4 +158,4 @@ files it produces.
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+AGPL-3.0-only. See [LICENSE](LICENSE).
