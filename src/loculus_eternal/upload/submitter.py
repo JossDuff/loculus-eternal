@@ -33,11 +33,13 @@ MAX_BLOBS_PER_TX = 6
 BLOB_GAS_PER_BLOB = 131_072
 NOMINAL_GAS_LIMIT = 120_000   # a publish transaction needs well under this; used before the real estimate
 # How much more than a mid-batch transaction the batch-end one can cost: the pointer write
-# and the BatchCommitted event. The worst case is the first batch end ever, when the CID's
-# storage slots are written for the first time: about 60,000 gas more inside the call than
-# a first mid-batch call (the gas table in docs/contract.md), plus the CID's calldata. The
-# dry run sizes its maximum cost from the first transaction's estimate plus this headroom.
-BATCH_END_EXTRA_GAS = 70_000
+# and the BatchCommitted event. The worst case is a batch end that writes the CID's storage
+# slots for the first time after blobs are already on chain, which is what a torn first
+# attempt leaves behind: the mid-batch estimate is then warm, about 16,500 gas inside the
+# call, while the batch end costs about 99,000 (the gas table in docs/contract.md), plus the
+# CID's calldata. The dry run sizes its maximum cost from the first transaction's estimate
+# plus this headroom.
+BATCH_END_EXTRA_GAS = 90_000
 GWEI = 10**9
 
 # Custom errors of LoculusEternal, by selector, so a simulated revert reads as a sentence.

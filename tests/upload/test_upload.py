@@ -708,3 +708,7 @@ def test_U18_the_gas_headroom_covers_the_first_batch_end_ever():
     first_mid_batch_call = 39_000 + 21_000 + 700
     first_batch_end_call = 99_000 + 21_000 + 2_000
     assert _gas_limit(first_mid_batch_call) >= first_batch_end_call
+    # After a torn first attempt the blob count and head are warm but the pointer slots are
+    # still empty, so the mid-batch estimate is at its lowest and the batch end at its highest.
+    warm_mid_batch_call = 16_500 + 21_000 + 700
+    assert _gas_limit(warm_mid_batch_call) >= first_batch_end_call
