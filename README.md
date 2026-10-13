@@ -54,8 +54,6 @@ type = "ipfs"                     # copies pinned on IPFS, found through the con
 endpoints = ["http://127.0.0.1:5001"]
 ```
 
-The current deployment is a test on Sepolia: contract `0x7b19365a0e811901Cb53aaA8bfaA82854c46914D`, chain id `11155111`.
-
 ```
 uv run loculus-eternal recover --config loculus-eternal.toml
 ```
