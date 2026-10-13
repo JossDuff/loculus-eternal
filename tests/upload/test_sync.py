@@ -151,3 +151,26 @@ endpoint = ["http://127.0.0.1:2"]
     )
     with pytest.raises(configuration.ConfigError, match="unknown key.*endpoint.*takes endpoints"):
         configuration.load(cfg)
+
+
+def test_U23_a_hash_keyed_archive_without_a_url_uses_its_public_api(tmp_path):
+    from loculus_eternal import config as configuration
+
+    cfg = tmp_path / "loculus-eternal.toml"
+    cfg.write_text(
+        """
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[[sources]]
+type = "blobscan"
+
+[[sources]]
+type = "blockscout"
+"""
+    )
+    loaded = configuration.load(cfg)
+    assert [s.base_url for s in loaded.sources] == ["https://api.blobscan.com", "https://eth.blockscout.com"]

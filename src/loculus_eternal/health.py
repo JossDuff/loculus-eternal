@@ -20,7 +20,7 @@ from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, verify
 from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
 from loculus_eternal.rpc import connect
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, IpfsSource, LocalDirectorySource
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, HashLookupSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
 
 RETENTION_SLOTS = 4096 * 32   # 4096 epochs of 32 slots: about 18.2 days at 12 seconds a slot
@@ -43,7 +43,7 @@ def source_endpoints(src) -> list[str]:
     """The raw endpoint strings a source was built with."""
     if isinstance(src, (BeaconSource, IpfsSource)):
         return list(src.endpoints)
-    if isinstance(src, (BlobscanSource, BlockscoutSource, BlobArchiverSource)):
+    if isinstance(src, (HashLookupSource, BlobArchiverSource)):
         return [src.base_url]
     if isinstance(src, LocalDirectorySource):
         return [str(src.directory)]

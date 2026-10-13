@@ -9,8 +9,10 @@ One stub serves four shapes at once:
 
 Faults are configured per versioned hash: `withhold` makes the stub pretend it has no such
 blob, `corrupt` flips a byte, `swap` serves another blob's bytes under this hash. `fail_next`
-makes the next N requests return HTTP 500 regardless, to imitate an outage. `pending` lists
-hashes Blockscout has indexed but not yet archived: served with `blob_data` null.
+makes the next N requests return HTTP 500 regardless, to imitate an outage; `throttle_next`
+answers the next N with HTTP 429 and a reset header, as a metered explorer does. `pending`
+lists hashes Blockscout has indexed but not yet archived: served with `blob_data` null.
+`empty` lists hashes served as an empty hex string by both hash-keyed shapes.
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ class ArchiveStub:
         self.corrupt: set[bytes] = set()
         self.swap: dict[bytes, bytes] = {}            # serve blobs[swap[vh]] under vh
         self.pending: set[bytes] = set()
+        self.empty: set[bytes] = set()
         self.fail_next = 0
+        self.throttle_next = 0
+        self.throttle_reset_ms = 1500
         self.requests: list[str] = []
         stub = self
 
@@ -44,16 +49,23 @@ class ArchiveStub:
                     if stub.fail_next > 0:
                         stub.fail_next -= 1
                         return self._reply(500, {"message": "simulated outage"})
+                    if stub.throttle_next > 0:
+                        stub.throttle_next -= 1
+                        return self._reply(429, {"message": "Too Many Requests"}, {"x-ratelimit-limit": "180", "x-ratelimit-reset": str(stub.throttle_reset_ms)})
                 url = urlparse(self.path)
                 parts = url.path.strip("/").split("/")
                 if len(parts) == 3 and parts[0] == "blobs" and parts[2] == "data":
                     vh = bytes.fromhex(parts[1][2:])
+                    if vh in stub.empty:
+                        return self._reply(200, "")
                     blob = stub._serve(vh)
                     if blob is None:
                         return self._reply(404, {"message": "Blob not found"})
                     return self._reply(200, "0x" + blob.hex())
                 if len(parts) == 4 and parts[:3] == ["api", "v2", "blobs"]:
                     vh = bytes.fromhex(parts[3][2:])
+                    if vh in stub.empty:
+                        return self._reply(200, {"blob_data": "", "hash": parts[3]})
                     blob = None if vh in stub.pending else stub._serve(vh)
                     if blob is None and vh not in stub.pending:
                         return self._reply(404, {"message": "Not found"})
@@ -80,9 +92,11 @@ class ArchiveStub:
                     return self._reply(200, {"execution_optimistic": False, "finalized": True, "data": items})
                 return self._reply(404, {"message": "not found"})
 
-            def _reply(self, status, body):
+            def _reply(self, status, body, headers=None):
                 payload = json.dumps(body).encode()
                 self.send_response(status)
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()

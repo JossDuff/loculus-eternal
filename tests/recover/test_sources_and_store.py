@@ -121,6 +121,41 @@ def test_R11_a_blob_blockscout_has_indexed_but_not_archived_yet_is_simply_not_th
     assert set(result.blobs) == set(wanted)
 
 
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_throttled_archive_is_waited_for_and_asked_again(stub, make):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.throttle_next = 1
+    waits: list[float] = []
+    source = make(stub.url, sleep=waits.append)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    assert waits == [1.5]    # x-ratelimit-reset is in milliseconds
+    # Throttled twice in a row for the same blob: an error for that blob, the other still comes.
+    stub.throttle_next = 2
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {pairs[1][0]}
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_an_empty_payload_is_absent_not_a_corrupt_blob(stub, make):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.empty.add(pairs[0][0])
+    result = SourceChain([make(stub.url)]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {pairs[1][0]} and result.rejected == 0
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_an_outage_behind_a_missing_blob_is_reported_not_hidden(stub, make):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.withhold.add(pairs[1][0])
+    stub.fail_next = 1    # the first request, for the blob the stub does hold, fails
+    result = SourceChain([make(stub.url)]).acquire(CTX, [vh for vh, _ in pairs])
+    assert result.blobs == {} and result.attempts[0].outcome == "error" and "HTTP 500" in result.attempts[0].detail
+
+
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):
     pairs = make_blobs(2)
     stub.add(1700, pairs)

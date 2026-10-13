@@ -16,6 +16,7 @@ from pathlib import Path
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
 from loculus_eternal.sources.blobscan import PUBLIC_API
+from loculus_eternal.sources.blockscout import PUBLIC_API as BLOCKSCOUT_PUBLIC_API
 from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND
 
 PUBLISHER_KEY_ENV = "LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY"
@@ -111,7 +112,7 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         elif kind == "blobscan":
             out.append(BlobscanSource(s.get("url", PUBLIC_API)))
         elif kind == "blockscout":
-            out.append(BlockscoutSource(s["url"]))
+            out.append(BlockscoutSource(s.get("url", BLOCKSCOUT_PUBLIC_API)))
         elif kind == "blob-archiver":
             out.append(BlobArchiverSource(s["url"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "local":
