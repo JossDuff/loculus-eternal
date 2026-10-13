@@ -4,14 +4,14 @@ pragma solidity 0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 import {LoculusEternal} from "../src/LoculusEternal.sol";
 
-/// Deploys LoculusEternal with the publisher taken from the PUBLISHER environment variable.
+/// Deploys LoculusEternal with the publisher taken from the LOCULUS_ETERNAL_PUBLISHER_PUBLIC_KEY environment variable.
 ///
-///   PUBLISHER=0x... forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --private-key $DEPLOYER_KEY
+///   LOCULUS_ETERNAL_PUBLISHER_PUBLIC_KEY=0x... forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --private-key $DEPLOYER_KEY
 ///
 /// The deployer and the publisher may be different keys; the deployer has no role afterwards.
 contract Deploy is Script {
     function run() external returns (LoculusEternal deployed) {
-        address publisher = vm.envAddress("PUBLISHER");
+        address publisher = vm.envAddress("LOCULUS_ETERNAL_PUBLISHER_PUBLIC_KEY");
         vm.startBroadcast();
         deployed = new LoculusEternal(publisher);
         vm.stopBroadcast();

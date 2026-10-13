@@ -90,7 +90,7 @@ fixed storage slot; any ABI-aware tool decodes it, for example
 ## Deployment
 
 ```
-PUBLISHER=0x<publisher address> forge script script/Deploy.s.sol \
+LOCULUS_ETERNAL_PUBLISHER_PUBLIC_KEY=0x<publisher address> forge script script/Deploy.s.sol \
     --rpc-url $RPC_URL --broadcast --private-key $DEPLOYER_KEY
 ```
 
