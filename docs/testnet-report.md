@@ -5,16 +5,25 @@ measured on Sepolia, not estimated.
 
 ## Deployment
 
-| | |
-|---|---|
-| Contract address | `0x1b141bfbe4db1335c62f8a281b372eea0cfeef21` |
-| Deployment block | 11,863,798 (2026-10-07) |
-| Deployment transaction | `0x9f6b9e8e9e3a995fa910d5f117927fdd4079435c0c8ad1edccfa6238713de972` |
-| Deployer | `0xE30036308E139D4aC1e07D0f3F3D3cd6597fBBD0` (the publisher, a development key) |
-| Publisher | `0xE30036308E139D4aC1e07D0f3F3D3cd6597fBBD0` |
-| Gas used | 3,925,933 at 0.0011 gwei |
-| Compiler and settings | Solidity 0.8.30, Prague, optimizer 10000 runs, no metadata hash |
-| Verified on explorer | not yet |
+The campaign has used two contracts. The second was deployed on 2026-10-12 when the
+pointer changed from a digest of the snapshot CID to the CID itself, a new ABI; the first
+stays on chain with the first genesis in it, and the figures recorded below for that genesis
+still stand.
+
+| | Second contract (current) | First contract |
+|---|---|---|
+| Contract address | `0x7b19365a0e811901Cb53aaA8bfaA82854c46914D` | `0x1b141bfbe4db1335c62f8a281b372eea0cfeef21` |
+| Deployment block | 11,903,469 (2026-10-12) | 11,863,798 (2026-10-07) |
+| Deployment transaction | `0x653fc684ad82e10684bb9f4e62d4b0e2c0b5f8564af1561989e5405b2f995e7c` | `0x9f6b9e8e9e3a995fa910d5f117927fdd4079435c0c8ad1edccfa6238713de972` |
+| Deployer | `0xE30036308E139D4aC1e07D0f3F3D3cd6597fBBD0` (the publisher, a development key) | same |
+| Publisher | `0xE30036308E139D4aC1e07D0f3F3D3cd6597fBBD0` | same |
+| Gas used | 5,539,686 at 0.0012 gwei | 3,925,933 at 0.0011 gwei |
+| Compiler and settings | Solidity 0.8.30, Prague, optimizer 10000 runs, no metadata hash | same |
+| Verified on explorer | not yet | not yet |
+
+The second deployment cost 1.6 million gas more than the first for a contract whose
+bytecode grew by about a kilobyte: string storage and the string-carrying events, under
+Glamsterdam's prices.
 
 **First surprise, before anything was published.** The first deployment attempt
 (`0x7ea631d7…`) ran out of gas. Glamsterdam activated on Sepolia on 2026-10-06 and reprices
