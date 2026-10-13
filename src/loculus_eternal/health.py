@@ -93,6 +93,10 @@ class Report:
         return dict(self.__dict__)
 
 
+def _row_copy(row: dict) -> dict:
+    return {**row, "verifiedSeqs": list(row["verifiedSeqs"])} if "verifiedSeqs" in row else dict(row)
+
+
 def _empty_counts(asked: int = 0) -> dict:
     """One source's row before anything is fetched from it."""
     return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": asked}
@@ -237,15 +241,27 @@ class HealthCheck:
         now = time.time()
         retention_seconds = RETENTION_SLOTS * self.cfg.chain.seconds_per_slot
         in_retention = {r.seq for r in refs if r.block_timestamp and now - r.block_timestamp < retention_seconds}
-        matrix: dict[str, dict] = {}
+        order: list[tuple] = []
+        for src in self.cfg.sources:
+            name = public_source(src)
+            taken = [n for _, n in order]
+            if name in taken:   # two sources of one kind on one host keep separate rows
+                name = f"{name} #{sum(1 for k in taken if k.startswith(name)) + 1}"
+            order.append((src, name))
+        # While the check runs the page shows every source with where it stands: queued, in
+        # progress or done. The rows are published as copies, since the server serialises the
+        # report from another thread while these counts are still being changed.
+        matrix: dict[str, dict] = {name: {"status": "queued"} for _, name in order}
+
+        def publish() -> None:
+            report.sources = {"matrix": {k: _row_copy(v) for k, v in matrix.items()}, "blobs": len(refs)}
+
+        publish()
         dead: set[int] = set()
         in_hand = 0
-        for src in self.cfg.sources:
+        for src, name in order:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
-            name = public_source(src)
-            if name in matrix:   # two sources of one kind on one host keep separate rows
-                name = f"{name} #{sum(1 for k in matrix if k.startswith(name)) + 1}"
             # A source that has nothing to be asked for is neither reachable nor unreachable;
             # its row says why it was not asked. That is every source before the first blob
             # is published, and the IPFS source until the first batch commits a snapshot.
@@ -257,6 +273,7 @@ class HealthCheck:
             if skipped:
                 matrix[name] = {**_empty_counts(), "skipped": skipped}
                 log(f"{name}: not asked, {skipped}")
+                publish()
                 continue
             # Re-read the structure only when something new arrived since the last walk.
             have = sum(1 for b in blobs if b is not None)
@@ -265,12 +282,15 @@ class HealthCheck:
                 in_hand = have
             to_ask = [r for r in refs if r.seq not in dead]
             counts = _empty_counts(asked=len(to_ask))
+            counts["status"] = "in progress"
+            matrix[name] = counts
             log(f"fetching {len(to_ask)} blob(s) from {name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
             groups: dict[tuple, list[BlobRef]] = {}
             for r in to_ask:
                 groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
             asked = 0
             for (bn, bt), group in groups.items():
+                publish()
                 self._step(report, "blob check", f"{name}: {asked:,} of {len(to_ask):,} blobs asked for")
                 asked += len(group)
                 wanted = [r.versioned_hash for r in group]
@@ -293,8 +313,11 @@ class HealthCheck:
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
             counts["reachable"] = not to_ask or counts["error"] < len(to_ask)   # some request got an answer
-            matrix[name] = counts
+            counts["status"] = "done"
             log(f"{name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
+            publish()
+        for row in matrix.values():
+            row.pop("status", None)   # the finished report carries results, not progress
         unavailable = [i for i, b in enumerate(blobs) if b is None]
         report.sources = {"matrix": matrix, "blobs": len(refs), "verifiedFromAnySource": len(refs) - len(unavailable), "unavailable": unavailable, "withinRetention": len(in_retention)}
         if refs and not self.cfg.sources:

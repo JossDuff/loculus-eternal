@@ -13,7 +13,7 @@ import pytest
 
 from loculus_eternal import config as configuration
 from loculus_eternal import kzg
-from loculus_eternal.health import HealthCheck
+from loculus_eternal.health import HealthCheck, Report
 from loculus_eternal.health_server import HealthServer
 from loculus_eternal.testkit import Anvil, ArchiveStub, BackendStub, preconditions_met, released_line
 from loculus_eternal.testkit.kubo import Kubo, kubo_available
@@ -256,10 +256,25 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     assert "RPCSECRET" not in cleaned and "SECRETKEY" not in cleaned and "https://sepolia.infura.io" in cleaned
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
-    HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
+    live = Report(started_at=time.time())
+    statuses = []    # the sources box at each step: every source with where it stands
+
+    def on_progress(p):
+        seen.append((p["step"], p["detail"]))
+        statuses.append([m.get("status") for m in live.sources.get("matrix", {}).values()])
+
+    HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=on_progress).run(live)
     steps = [st for st, _ in seen]
     assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check"]
     assert any(d and "blobs asked for" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
+    # While sources are asked, every row is done, in progress or queued, in that order, with
+    # one in progress at a time; the finished report carries results and no status at all.
+    asked = [s for s in statuses if "in progress" in s]
+    assert asked and any("queued" in s for s in asked)
+    for s in asked:
+        i = s.index("in progress")
+        assert all(x == "done" for x in s[:i]) and all(x == "queued" for x in s[i + 1:])
+    assert all("status" not in m for m in live.sources["matrix"].values())
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):
