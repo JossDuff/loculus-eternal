@@ -13,26 +13,63 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 
 For the Loculus dataset maintainer. You'll need:
 
-- [uv](https://docs.astral.sh/uv/)
+- [uv](https://docs.astral.sh/uv/) and, for the one-time deployment, [Foundry](https://getfoundry.sh/)
 - an Ethereum RPC endpoint ([dRPC](https://drpc.org/chainlist/ethereum-mainnet-rpc), [Alchemy](https://www.alchemy.com/), [Infura](https://www.infura.io/), etc)
-- a wallet that holds some Ether on the network you publish to
-- a deployed `LoculusEternal` contract with that wallet as its publisher (`contracts/script/Deploy.s.sol` deploys one)
+- a wallet that holds some Ether on the network you publish to; its private key is the publisher private key below
 - optional: a [Kubo](https://docs.ipfs.tech/install/command-line/) IPFS node you control, reachable over its RPC API (`http://127.0.0.1:5001` by default). The upload then adds and pins every blob and a snapshot of the dataset there as well. Without it the blobs live only where Ethereum and the public archives keep them.
 
-Copy `config/sepolia.example.toml` to `loculus-eternal.toml` and fill in the lines marked CHANGE. Put the publisher private key in the environment:
+Start by cloning the repository:
+
+```
+git clone https://github.com/JossDuff/loculus-eternal
+cd loculus-eternal
+```
+
+### 1. Deploy the contract (once)
+
+Each dataset gets one `LoculusEternal` contract, deployed once and never changed. The wallet
+you name as the publisher is the only one that can ever publish to it.
 
 ```
 export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
+cd contracts
+PUBLISHER=0x…your wallet address… forge script script/Deploy.s.sol \
+  --rpc-url "https://your-ethereum-rpc" \
+  --private-key "$LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY" \
+  --broadcast
+cd ..
+```
+
+The output names the contract address and the block it was deployed in. Any funded key can
+deploy; the deployer has no role afterwards. If the deployment runs out of gas, add
+`--gas-estimate-multiplier 800`: Foundry's local simulation does not know every network's
+gas schedule.
+
+### 2. Upload data (repeatable)
+
+Copy `config/sepolia.example.toml` to `loculus-eternal.toml` and fill in the lines marked
+CHANGE, including the contract address and deployment block from the step above. Then, with
+the publisher private key in the environment:
+
+```
 uv run loculus-eternal upload --config loculus-eternal.toml --check   # Check what would be published and the cost.  Nothing gets uploaded
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```
 
-The upload works out what is already published by reading the chain, so it runs from any
-machine. With nothing new it does nothing. If it is interrupted, run it again.
+Run it whenever there is new data. The upload works out what is already published by
+reading the chain, so it runs from any machine. With nothing new it does nothing. If it is
+interrupted, run it again.
 
 ## Recovering
 
-For anyone to run. No key is needed. The config file names your RPC endpoint, the contract, and
+For anyone to run. No key is needed. Clone the repository:
+
+```
+git clone https://github.com/JossDuff/loculus-eternal
+cd loculus-eternal
+```
+
+Then write a config file, `loculus-eternal.toml`, naming your RPC endpoint, the contract, and
 where to look for blob bytes:
 
 ```toml
