@@ -304,12 +304,16 @@ def test_R10_unverified_run_does_not_overwrite_a_saved_manifest(published, tmp_p
     bad.write_text(json.dumps({"blobs": []}))
     flaky = FlakyProvider(Web3.HTTPProvider(anvil.url), fail_methods={"eth_getLogs"}, fail_count=10**6)
     cfg = config(published, tmp_path, [BlobscanSource(published["stub"].url)], manifest_sources=[ManifestSource(logs=True), ManifestSource(file=bad)], decode=False)
-    failed = Recovery(cfg, w3=Web3(flaky)).run()
+    failing = Recovery(cfg, w3=Web3(flaky))
+    failing.reader.sleep = lambda s: None   # the backoff is the reader's business, tested elsewhere
+    failed = failing.run()
     assert failed.manifest_source is None and len(failed.manifest_errors) == 2
     assert saved.read_bytes() == before
     # And the saved manifest rescues the next run with logs still gone.
     cfg = config(published, tmp_path, [BlobscanSource(published["stub"].url)], manifest_sources=[ManifestSource(logs=True), ManifestSource(file=saved)])
-    rescued = Recovery(cfg, w3=Web3(flaky)).run()
+    rescuing = Recovery(cfg, w3=Web3(flaky))
+    rescuing.reader.sleep = lambda s: None
+    rescued = rescuing.run()
     assert rescued.manifest_source == f"file {saved}" and rescued.missing == []
 
 
