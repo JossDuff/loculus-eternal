@@ -43,9 +43,18 @@ def _free_port() -> int:
 
 
 def load_artifact() -> dict:
-    """The forge build output; builds the contracts if it is missing."""
-    if not ARTIFACT.exists():
-        subprocess.run(["forge", "build"], cwd=CONTRACTS_DIR, check=True, capture_output=True)
+    """The forge build output; builds the contracts when it is missing or older than any
+    contract source, so a branch switch never runs the tests against a stale binary. The
+    build is serialised across test processes with a lock file; forge skips the compile when
+    its cache is current, and the artifact is touched so the check is not repeated."""
+    sources = list((CONTRACTS_DIR / "src").glob("*.sol"))
+    if not ARTIFACT.exists() or ARTIFACT.stat().st_mtime < max(p.stat().st_mtime for p in sources):
+        import fcntl
+
+        with open(CONTRACTS_DIR / ".build-lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            subprocess.run(["forge", "build"], cwd=CONTRACTS_DIR, check=True, capture_output=True)
+            ARTIFACT.touch()
     return json.loads(ARTIFACT.read_text())
 
 
