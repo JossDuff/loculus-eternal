@@ -154,7 +154,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **H4 — unreadable snapshot.** When the contract names a snapshot whose manifest cannot be read, the page shows that CID, the IPFS source shows as not recoverable from with the reason, and the dataset stays recoverable from the other sources. Before the first blob is published no source is asked and each row says so; after that and before the first batch commits a snapshot, the IPFS source alone is not asked, its row says the contract names no snapshot yet, and no node is shown as unreachable.
 - **H5 — server.** The page is served from one HTML file, a check can be started and polled, and unknown paths are 404.
 - **H6 — once.** `health --once` prints the report as JSON and exits 0 only when the dataset is recoverable.
-- **H7 — public configuration and progress.** Every report, including the idle one, carries the contract, network, explorer link and the check's inputs with each URL reduced to scheme and host, so an API key in an RPC or archive URL never reaches the page; while a check runs the report names the current step and a line of detail, and the page shows the repository link, the quickstart commands and the Ethereum mark.
+- **H7 — public configuration and progress.** Every report, including the idle one, carries the contract, network and the check's inputs with each URL reduced to scheme and host, so an API key in an RPC or archive URL never reaches the page; while a check runs the report names the current step and a line of detail, and the page shows the repository link, the quickstart commands and the Ethereum mark.
 
 ## Process checks (in force from the groundwork phase)
 

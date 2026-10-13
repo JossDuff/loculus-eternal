@@ -19,13 +19,13 @@ from loculus_eternal.health import HealthCheck, Report, public_url, redact_all, 
 
 PAGE = Path(__file__).with_name("health_page.html")
 REPOSITORY = "https://github.com/JossDuff/loculus-eternal"
-NETWORKS = {1: ("Ethereum mainnet", "https://etherscan.io"), 11155111: ("Sepolia testnet", "https://sepolia.etherscan.io")}
+NETWORKS = {1: "Ethereum mainnet", 11155111: "Sepolia testnet"}
 
 
 def public_config(config: Config) -> dict:
     """What the page shows about the deployment and the check's inputs, with every URL
     reduced to its host so no credential can leak onto a page meant to be shown around."""
-    name, explorer = NETWORKS.get(config.chain.chain_id or 0, (f"chain {config.chain.chain_id}" if config.chain.chain_id else "unknown chain", None))
+    name = NETWORKS.get(config.chain.chain_id or 0, f"chain {config.chain.chain_id}" if config.chain.chain_id else "unknown chain")
     sources = []
     for src in config.sources:
         sources.append({"type": source_kind(src), "endpoints": [public_url(e) for e in source_endpoints(src)]})
@@ -33,7 +33,6 @@ def public_config(config: Config) -> dict:
         "contract": config.chain.contract,
         "chainId": config.chain.chain_id,
         "network": name,
-        "explorer": f"{explorer}/address/{config.chain.contract}" if explorer else None,
         "rpc": public_url(config.chain.rpc_url),
         "deploymentBlock": config.chain.deployment_block,
         "sources": sources,
