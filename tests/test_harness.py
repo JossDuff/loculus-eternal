@@ -14,7 +14,7 @@ from web3.logs import DISCARD
 
 from loculus_eternal.testkit import Anvil, BeaconStub, preconditions_met, publish_blobs
 
-pytestmark = pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed for harness tests")
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("harness"), pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed for harness tests")]
 
 
 @pytest.fixture(scope="module")

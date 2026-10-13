@@ -16,7 +16,7 @@ from loculus_eternal.testkit import Anvil, ArchiveStub, BackendStub, preconditio
 from loculus_eternal.testkit.kubo import Kubo, kubo_available
 from loculus_eternal.upload.upload import Uploader
 
-pytestmark = pytest.mark.skipif(not (kubo_available() and preconditions_met()), reason="Docker (for Kubo), anvil and forge are needed")
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("ipfs"), pytest.mark.skipif(not (kubo_available() and preconditions_met()), reason="Docker (for Kubo), anvil and forge are needed")]
 
 
 @pytest.fixture(scope="module")

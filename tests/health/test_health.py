@@ -19,7 +19,7 @@ from loculus_eternal.testkit import Anvil, ArchiveStub, BackendStub, preconditio
 from loculus_eternal.testkit.kubo import Kubo, kubo_available
 from loculus_eternal.upload.upload import Uploader
 
-pytestmark = pytest.mark.skipif(not (preconditions_met() and kubo_available()), reason="anvil, forge and Docker (for Kubo) are needed")
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("health"), pytest.mark.skipif(not (preconditions_met() and kubo_available()), reason="anvil, forge and Docker (for Kubo) are needed")]
 ROOT = Path(__file__).resolve().parents[2]
 
 

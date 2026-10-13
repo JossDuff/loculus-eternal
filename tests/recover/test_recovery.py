@@ -21,7 +21,7 @@ from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSo
 from loculus_eternal.store import BlobStore
 from loculus_eternal.testkit import Anvil, ArchiveStub, FlakyProvider, preconditions_met, publish_blobs
 
-pytestmark = pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed")
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("recovery"), pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed")]
 
 
 @pytest.fixture(scope="module")

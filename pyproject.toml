@@ -21,6 +21,7 @@ loculus-eternal = "loculus_eternal.cli:main"
 dev = [
     "pytest>=8",
     "hypothesis>=6",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
@@ -32,3 +33,9 @@ packages = ["src/loculus_eternal"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests spread over every core; a file whose tests share one chain or one Kubo node is kept
+# on one worker by its xdist_group mark. `-m "not slow"` is the quick tier: no anvil, no Docker.
+addopts = "-n auto --dist loadgroup"
+markers = [
+    "slow: needs anvil or a Kubo container; left out of the quick tier",
+]

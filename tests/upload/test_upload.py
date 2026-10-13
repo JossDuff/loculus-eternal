@@ -20,7 +20,7 @@ from loculus_eternal.testkit.anvil import dev_account
 from loculus_eternal.upload.submitter import Refused
 from loculus_eternal.upload.upload import Uploader
 
-pytestmark = pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed")
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed")]
 
 ROOT = Path(__file__).resolve().parents[2]
 
