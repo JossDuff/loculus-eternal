@@ -71,7 +71,7 @@ One run does, in order:
 3. Put the publisher private key in the environment, never in a file:
 
    ```
-   export LOCULUS_ETERNAL_PUBLISHER_KEY=0x…
+   export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
    ```
 
    The command refuses to start without it (except `--check`). The key's wallet must hold

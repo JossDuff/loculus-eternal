@@ -29,7 +29,7 @@ chain_id = 11155111
 For the Pathoplexus maintainer. Put the publisher private key in the environment, never in a file:
 
 ```
-export LOCULUS_ETERNAL_PUBLISHER_KEY=0x…
+export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
 uv run loculus-eternal upload --config loculus-eternal.toml --check   # what would be published, and the cost
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```

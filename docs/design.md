@@ -215,7 +215,7 @@ published. A journal on disk records each transaction's progress so a restart re
 than duplicates. Finally it pins the same bytes on IPFS and writes a report.
 
 The command reads its key only from the environment variable
-`LOCULUS_ETERNAL_PUBLISHER_KEY`, makes no assumptions about where it runs, and writes its
+`LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`, makes no assumptions about where it runs, and writes its
 error messages for the people who will actually run it.
 
 ### The recovery command
