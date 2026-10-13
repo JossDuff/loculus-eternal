@@ -30,7 +30,7 @@ IPFS profile are frozen.
    Verify the source on a block explorer so the bytecode is checkable.
 
 2. **Configure.** Copy `config/sepolia.example.toml` to `loculus-eternal.toml` in the checkout
-   and fill in the marked lines. Export the publisher key.
+   and fill in the marked lines. Export the publisher private key.
 
 3. **Rehearse the refusals.** `loculus-eternal upload --config loculus-eternal.toml --check`
    should report about 294,000 entries and the estimated cost. Run `--dry-run` once. Try a

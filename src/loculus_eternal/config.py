@@ -1,7 +1,7 @@
 """The TOML configuration file shared by the upload and recover subcommands.
 
 One file describes one deployment: the chain and contract, where to find blob bytes, the
-Loculus backend to publish from, and where to keep local state. The publisher key is never
+Loculus backend to publish from, and where to keep local state. The publisher private key is never
 in this file; it comes from the environment variable named below.
 """
 
@@ -216,5 +216,5 @@ def load(path: str | Path) -> Config:
 def publisher_key() -> str:
     key = os.environ.get(PUBLISHER_KEY_ENV)
     if not key:
-        raise ConfigError(f"the publisher key must be in the environment variable {PUBLISHER_KEY_ENV}; it is never read from a file")
+        raise ConfigError(f"the publisher private key must be in the environment variable {PUBLISHER_KEY_ENV}; it is never read from a file")
     return key

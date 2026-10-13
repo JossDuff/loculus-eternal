@@ -306,7 +306,7 @@ class Uploader:
             return self._done(report, started)
 
         if self.submitter is None:
-            raise SystemExit("configuration error: publishing needs the publisher key")
+            raise SystemExit("configuration error: publishing needs the publisher private key")
         # The snapshot of the stream as it will stand after this batch goes to IPFS first,
         # because the batch-end transaction carries its CID as the pointer. Without IPFS, or
         # if no endpoint takes it, the existing pointer is carried forward: a batch end always

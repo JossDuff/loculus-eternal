@@ -39,7 +39,7 @@ nothing that needs anvil or Docker.
 
 ## Secrets
 
-The publisher key is read only from the environment variable `LOCULUS_ETERNAL_PUBLISHER_KEY`.
+The publisher private key is read only from the environment variable `LOCULUS_ETERNAL_PUBLISHER_KEY`.
 No credentials in code, configuration files, fixtures, or docs.
 
 ## Commits and branches

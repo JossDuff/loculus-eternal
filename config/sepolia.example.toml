@@ -1,6 +1,6 @@
 # Loculus Eternal configuration for the Sepolia campaign. Copy to loculus-eternal.toml in the
 # repository checkout (tooling_paths and spec_path are relative to this file) and fill in the
-# four marked lines. The publisher key is never in this file: export LOCULUS_ETERNAL_PUBLISHER_KEY.
+# four marked lines. The publisher private key is never in this file: export LOCULUS_ETERNAL_PUBLISHER_KEY.
 
 [chain]
 rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"   # ${NAME} is read from the environment, so no key lives in this file

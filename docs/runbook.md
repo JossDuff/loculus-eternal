@@ -68,7 +68,7 @@ One run does, in order:
    Paths in `tooling_paths` are relative to the config file's directory, so keep the file in
    the repository checkout.
 
-3. Put the publisher key in the environment, never in a file:
+3. Put the publisher private key in the environment, never in a file:
 
    ```
    export LOCULUS_ETERNAL_PUBLISHER_KEY=0x…
@@ -196,7 +196,7 @@ published record against the chain and the configured sources, without a key. Ru
 an upload, or any time someone asks whether the backup is intact. `--once` prints the same
 check as JSON for a script.
 
-## Rotating the publisher key
+## Rotating the publisher private key
 
 From the current key, call `setPublisher(newAddress)` on the contract (any wallet tool that
 can call a contract will do), then export the new key. Do this before a key is at risk, not

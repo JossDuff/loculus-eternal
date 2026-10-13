@@ -26,7 +26,7 @@ chain_id = 11155111
 
 ## Uploading
 
-For the Pathoplexus maintainer. Put the publisher key in the environment, never in a file:
+For the Pathoplexus maintainer. Put the publisher private key in the environment, never in a file:
 
 ```
 export LOCULUS_ETERNAL_PUBLISHER_KEY=0x…

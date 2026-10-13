@@ -145,7 +145,7 @@ Guaranteed:
    holding a candidate blob can verify it. Anyone holding one 31-byte chunk plus a 48-byte
    KZG opening can verify that chunk. No trust in Pathoplexus, archives, or IPFS.
 2. **Complete manifest.** The chain suffices to enumerate every blob ever published.
-3. **Authorization.** Only the publisher key can append.
+3. **Authorization.** Only the publisher private key can append.
 
 Not guaranteed, but hedged: **availability**. Sources, in the order the recovery command tries
 them: consensus nodes (18 days), public blob archives (which ingest *all* blobs and would each
