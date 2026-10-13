@@ -4,9 +4,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HUMAN_FACING = ["README.md", "CLAUDE.md", "loculus-eternal-PLAN.md", "docs", "src", "tests", "contracts/src"]
-# The copied research note predates this repository and keeps its own numbering.
-EXEMPT = {ROOT / "docs" / "research" / "blob-sourcing.md"}
+HUMAN_FACING = ["README.md", "CLAUDE.md", "loculus-eternal-PLAN.md", "spec", "src", "tests", "contracts/src"]
+EXEMPT: set[Path] = set()
 # A milestone reference is the letter M followed by a digit at a word start; the section
 # sign is never allowed. Hex digests and identifiers like "PP_M1" are not word-start matches.
 # The pattern is assembled from pieces so this file does not itself contain either form.

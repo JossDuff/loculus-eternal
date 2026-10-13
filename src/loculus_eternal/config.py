@@ -196,7 +196,7 @@ def load(path: str | Path) -> Config:
             i = raw["ipfs"]
             ipfs = IpfsConfig(
                 endpoints=list(i.get("endpoints", [])),
-                spec_path=(path.parent / i.get("spec_path", "docs/container-spec.md")),
+                spec_path=(path.parent / i.get("spec_path", "spec/container-spec.md")),
                 required=bool(i.get("required", False)),
             )
             if ipfs.required and not ipfs.endpoints:

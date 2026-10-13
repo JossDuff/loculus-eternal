@@ -1,7 +1,7 @@
 """IPFS: per-blob objects, the snapshot directory, and pinning.
 
 Every pinner must derive identical content identifiers from identical bytes, so the rules
-are fixed by `docs/ipfs-profile.md` and encoded here:
+are fixed by `spec/ipfs-profile.md` and encoded here:
 
 - a **blob object** is the blob's 131,072 bytes as one raw block: CIDv1, codec raw (0x55),
   multihash sha2-256. Its CID is computed locally and Kubo's answer must agree;
@@ -205,7 +205,7 @@ def snapshot_manifest(*, chain_id: int, contract: str, blob_count: int, head: by
         "head": "0x" + head.hex(),
         "batches": batches,
         "blobs": blobs,
-        "profile": "docs/ipfs-profile.md",
+        "profile": "spec/ipfs-profile.md",
     }
     return (json.dumps(doc, indent=1, sort_keys=True) + "\n").encode()
 

@@ -89,7 +89,7 @@ organisms = ["zika", "mpox"]
 
 [upload]
 data_dir = "{tmp_path / 'upload-data'}"
-tooling_paths = ["docs/container-spec.md", "pyproject.toml"]
+tooling_paths = ["spec/container-spec.md", "pyproject.toml"]
 max_blob_fee_gwei = 5
 inclusion_timeout_blocks = 3
 escalation_attempts = 4
@@ -161,7 +161,7 @@ def test_U2_genesis_then_noop_then_delta_published_from_chain_derived_set(world,
     assert report.missing == [] and report.decode["allArtifactsMatch"]
     zika = [json.loads(l) for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
     assert [m["metadata"]["accessionVersion"] for m in zika] == ["PP_1.1", "PP_1.2", "PP_2.1", "PP_3.1"]
-    assert report.decode["tooling"] == ["docs/container-spec.md", "pyproject.toml"]
+    assert report.decode["tooling"] == ["spec/container-spec.md", "pyproject.toml"]
     assert [b["batch"] for b in report.decode["batches"]] == [0, 1]
 
 
@@ -703,7 +703,7 @@ def test_U18_the_gas_headroom_covers_the_first_batch_end_ever():
     # The dry run sizes the batch's maximum cost from the first transaction's estimate, a
     # mid-batch call. The costliest call the batch can hold is the first batch end ever,
     # when the pointer's storage slots are written for the first time. Figures inside the
-    # call come from the gas table in docs/contract.md; the intrinsic 21,000 and the
+    # call come from the gas table in spec/contract.md; the intrinsic 21,000 and the
     # calldata (the batch end carries a 59-character CID) are added on top.
     first_mid_batch_call = 39_000 + 21_000 + 700
     first_batch_end_call = 99_000 + 21_000 + 2_000

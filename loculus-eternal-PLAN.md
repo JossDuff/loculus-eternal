@@ -99,7 +99,7 @@ ignore anything about providers, challenges, custody, or proving:
 ### Pathoplexus / Loculus data model
 
 Verified against the live backend `https://backend.pathoplexus.org` on 2026-09-30. The full
-pinned schema is in `docs/container-spec.md`.
+pinned schema is in `spec/container-spec.md`.
 
 - Data is organised **per organism**. Pathoplexus has 15 organisms today: andv, cchf, dengue,
   ebola-bdbv, ebola-sudan, ebola-zaire, hmpv, marburg, measles, mpox, rsv-a, rsv-b,
@@ -204,7 +204,7 @@ Design notes:
 - The donation pot (open question below) would add a `receive()` function and a refund step
   inside `publish`; nothing else.
 
-### The container format (`src/loculus_eternal/format/` + `docs/container-spec.md` + `vectors/`)
+### The container format (`src/loculus_eternal/format/` + `spec/container-spec.md` + `vectors/`)
 
 The committed stream is an ordered sequence of 31-byte chunks. The container gives it
 structure. **The spec and golden vectors are written BEFORE the library**, and both the
@@ -322,7 +322,7 @@ Input: contract address, an RPC URL, and a source list. Trusts nothing but the c
 6. `loculus-eternal serve` (later): expose the flat store through the blob-archiver API shape
    so a recovered copy is itself a source for others.
 
-### IPFS profile (`docs/ipfs-profile.md`)
+### IPFS profile (`spec/ipfs-profile.md`)
 
 Every pinner must derive identical CIDs from identical bytes, so the profile is fixed forever:
 
@@ -351,14 +351,15 @@ Every pinner must derive identical CIDs from identical bytes, so the profile is 
 README.md                      what this is, how to verify, how to recover (written for a stranger in 2040)
 CLAUDE.md                      working rules
 loculus-eternal-PLAN.md        this file
-docs/
-  design.md                    the WHY, Pathoplexus-specific
+spec/
   container-spec.md            the WHAT for the stream format (normative) + pinned Pathoplexus schema
   ipfs-profile.md              fixed CID derivation rules
   contract.md                  ABI, events, verification procedure
+docs/                          the team's notes, kept on disk and out of git (decided 2026-10-13)
+  design.md                    the WHY, Pathoplexus-specific
   test-plan.md                 behaviour IDs referenced by test names
   runbook.md                   for the Pathoplexus maintainer
-  research/blob-sourcing.md    copied from blobsitter
+  health-page.md, campaign.md, testnet-report.md, research/blob-sourcing.md
 vectors/                       golden vectors, generated, never hand-edited
 contracts/                     Foundry
 src/loculus_eternal/           one Python package
@@ -408,7 +409,7 @@ to mainnet.
 
 **Groundwork.** Resolve the open questions with the human. Write `docs/design.md`. Pull one
 real record per organism from the live backend and pin the exact schema in
-`docs/container-spec.md`. Estimate dataset size and growth from `X-Total-Records` and record
+`spec/container-spec.md`. Estimate dataset size and growth from `X-Total-Records` and record
 sizes; put the cost table in the design doc. Set up `pyproject.toml`, `uv.lock`, `CLAUDE.md`,
 the test-plan skeleton. Deliverable: docs only.
 
