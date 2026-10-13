@@ -16,9 +16,9 @@ organisms = "all"                       # every organism the backend serves, ask
 [upload]
 data_dir = "upload-data"
 tooling_paths = [
-    "docs/container-spec.md",
-    "docs/contract.md",
-    "docs/ipfs-profile.md",
+    "spec/container-spec.md",
+    "spec/contract.md",
+    "spec/ipfs-profile.md",
     "src/loculus_eternal/**/*.py",
     "pyproject.toml",
     "uv.lock",
@@ -33,7 +33,7 @@ finality_timeout_seconds = 1800
 
 [ipfs]
 endpoints = ["http://127.0.0.1:5001"] # CHANGE: the team Kubo nodes
-spec_path = "docs/container-spec.md"
+spec_path = "spec/container-spec.md"
 required = false
 
 [recover]

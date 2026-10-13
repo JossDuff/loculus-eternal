@@ -8,3 +8,4 @@ dist/
 .pytest_cache/
 .rehearsal/
 loculus-eternal.toml
+docs/

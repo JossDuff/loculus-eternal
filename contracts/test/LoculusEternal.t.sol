@@ -244,7 +244,7 @@ contract LoculusEternalTest is Test {
         assertEq(fresh.appPointer(), "");
     }
 
-    // --- C13 size and gas, recorded in docs/contract.md ----------------------------------------
+    // --- C13 size and gas, recorded in spec/contract.md ----------------------------------------
 
     function test_C13_runtime_code_is_small() public view {
         assertLt(address(record).code.length, 4096, "contract should stay tiny");

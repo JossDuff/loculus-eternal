@@ -1,6 +1,6 @@
 """The container format: how the committed stream of 31-byte chunks is read as records.
 
-The normative description is docs/container-spec.md. This package is one implementation of
+The normative description is spec/container-spec.md. This package is one implementation of
 it; the golden vectors in vectors/ are the shared truth that any other implementation must
 reproduce.
 """

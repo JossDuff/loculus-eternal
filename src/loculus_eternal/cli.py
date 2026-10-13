@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     up = sub.add_parser("upload", help="publish every newly eligible entry as one batch; a no-op when there is nothing new")
-    up.add_argument("--config", type=Path, required=True, help="TOML config file (see docs/runbook.md)")
+    up.add_argument("--config", type=Path, required=True, help="TOML config file (see the README)")
     up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")

@@ -36,7 +36,7 @@ NOMINAL_GAS_LIMIT = 120_000   # a publish transaction needs well under this; use
 # and the BatchCommitted event. The worst case is a batch end that writes the CID's storage
 # slots for the first time after blobs are already on chain, which is what a torn first
 # attempt leaves behind: the mid-batch estimate is then warm, about 16,500 gas inside the
-# call, while the batch end costs about 99,000 (the gas table in docs/contract.md), plus the
+# call, while the batch end costs about 99,000 (the gas table in spec/contract.md), plus the
 # CID's calldata. The dry run sizes its maximum cost from the first transaction's estimate
 # plus this headroom.
 BATCH_END_EXTRA_GAS = 90_000
