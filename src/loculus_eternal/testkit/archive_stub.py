@@ -1,14 +1,16 @@
 """Archive-shaped blob servers for tests, with knobs for every way a source can misbehave.
 
-One stub serves three shapes at once:
+One stub serves four shapes at once:
 
     /blobs/{versionedHash}/data              Blobscan: a JSON string of hex
+    /api/v2/blobs/{versionedHash}            Blockscout: {"blob_data": hex or null, ...}
     /eth/v1/beacon/blob_sidecars/{slot}      blob-archiver: {"data": [{"index", "blob", ...}]}
     /eth/v1/beacon/blobs/{slot}              beacon v4 shape, as BeaconStub serves
 
 Faults are configured per versioned hash: `withhold` makes the stub pretend it has no such
 blob, `corrupt` flips a byte, `swap` serves another blob's bytes under this hash. `fail_next`
-makes the next N requests return HTTP 500 regardless, to imitate an outage.
+makes the next N requests return HTTP 500 regardless, to imitate an outage. `pending` lists
+hashes Blockscout has indexed but not yet archived: served with `blob_data` null.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ class ArchiveStub:
         self.withhold: set[bytes] = set()
         self.corrupt: set[bytes] = set()
         self.swap: dict[bytes, bytes] = {}            # serve blobs[swap[vh]] under vh
+        self.pending: set[bytes] = set()
         self.fail_next = 0
         self.requests: list[str] = []
         stub = self
@@ -49,6 +52,13 @@ class ArchiveStub:
                     if blob is None:
                         return self._reply(404, {"message": "Blob not found"})
                     return self._reply(200, "0x" + blob.hex())
+                if len(parts) == 4 and parts[:3] == ["api", "v2", "blobs"]:
+                    vh = bytes.fromhex(parts[3][2:])
+                    blob = None if vh in stub.pending else stub._serve(vh)
+                    if blob is None and vh not in stub.pending:
+                        return self._reply(404, {"message": "Not found"})
+                    data = None if blob is None else "0x" + blob.hex()
+                    return self._reply(200, {"blob_data": data, "hash": parts[3], "kzg_commitment": None, "kzg_proof": None, "transaction_hashes": []})
                 if parts[:3] == ["eth", "v1", "beacon"] and len(parts) == 5 and parts[3] in ("blob_sidecars", "blobs"):
                     if not (parts[4].isascii() and parts[4].isdigit()):
                         return self._reply(400, {"message": "slot required"})

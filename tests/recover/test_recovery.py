@@ -17,7 +17,7 @@ from loculus_eternal.format.encode import StreamEncoder
 from loculus_eternal.format.gen_vectors import genesis_entries, second_batch_entries, tooling
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, LocalDirectorySource
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, LocalDirectorySource
 from loculus_eternal.store import BlobStore
 from loculus_eternal.testkit import Anvil, ArchiveStub, FlakyProvider, preconditions_met, publish_blobs
 
@@ -76,7 +76,7 @@ def assert_recovered_matches(published, out_dir: Path):
     assert [b["batch"] for b in report["batches"]] == [0, 1]
 
 
-@pytest.mark.parametrize("which", ["beacon", "blobscan", "blob-archiver", "local"])
+@pytest.mark.parametrize("which", ["beacon", "blobscan", "blockscout", "blob-archiver", "local"])
 def test_R9_recovery_from_each_single_source_is_byte_identical(published, tmp_path, which):
     stub = published["stub"]
     if which == "local":
@@ -89,6 +89,8 @@ def test_R9_recovery_from_each_single_source_is_byte_identical(published, tmp_pa
         source = BeaconSource([stub.url], genesis_time=0, seconds_per_slot=1)
     elif which == "blobscan":
         source = BlobscanSource(stub.url)
+    elif which == "blockscout":
+        source = BlockscoutSource(stub.url)
     else:
         source = BlobArchiverSource(stub.url, genesis_time=0, seconds_per_slot=1)
     report = Recovery(config(published, tmp_path, [source])).run()

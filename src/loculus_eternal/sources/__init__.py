@@ -10,11 +10,12 @@ that cannot be detected, which is why there is a list of sources and not one.
 from loculus_eternal.sources.base import BlobContext, BlobSource, SourceChain, SourceError, verify_candidates
 from loculus_eternal.sources.beacon import BeaconSource
 from loculus_eternal.sources.blobscan import BlobscanSource
+from loculus_eternal.sources.blockscout import BlockscoutSource
 from loculus_eternal.sources.blob_archiver import BlobArchiverSource
 from loculus_eternal.sources.local import LocalDirectorySource
 from loculus_eternal.sources.ipfs import IpfsSource
 
 __all__ = [
     "BlobContext", "BlobSource", "SourceChain", "SourceError", "verify_candidates",
-    "BeaconSource", "BlobscanSource", "BlobArchiverSource", "LocalDirectorySource", "IpfsSource",
+    "BeaconSource", "BlobscanSource", "BlockscoutSource", "BlobArchiverSource", "LocalDirectorySource", "IpfsSource",
 ]

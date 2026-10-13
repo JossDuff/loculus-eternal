@@ -13,7 +13,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
 from loculus_eternal.sources.blobscan import PUBLIC_API
 from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND
@@ -88,7 +88,7 @@ class Config:
 
 # The keys each source type takes besides `type`. Anything else is refused rather than
 # ignored, so a misspelt key cannot silently leave a source on its defaults.
-SOURCE_KEYS = {"beacon": {"endpoints"}, "blobscan": {"url"}, "blob-archiver": {"url"}, "local": {"path"}, "ipfs": {"endpoints"}}
+SOURCE_KEYS = {"beacon": {"endpoints"}, "blobscan": {"url"}, "blockscout": {"url"}, "blob-archiver": {"url"}, "local": {"path"}, "ipfs": {"endpoints"}}
 
 
 def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) -> list:
@@ -110,6 +110,8 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
             out.append(BeaconSource(s["endpoints"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "blobscan":
             out.append(BlobscanSource(s.get("url", PUBLIC_API)))
+        elif kind == "blockscout":
+            out.append(BlockscoutSource(s["url"]))
         elif kind == "blob-archiver":
             out.append(BlobArchiverSource(s["url"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "local":

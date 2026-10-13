@@ -6,7 +6,7 @@ import pytest
 
 from loculus_eternal import kzg
 from loculus_eternal.format.chunks import pack_blobs
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, LocalDirectorySource, SourceChain
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, LocalDirectorySource, SourceChain
 from loculus_eternal.sources.base import BlobContext, SourceError
 from loculus_eternal.store import BlobStore, StoreError, VerificationFailed
 from loculus_eternal.testkit import ArchiveStub
@@ -100,12 +100,25 @@ def test_R11_every_adapter_shape_returns_the_same_verified_blob(stub, tmp_path):
         BeaconSource([stub.url], genesis_time=0, seconds_per_slot=1),
         BlobArchiverSource(stub.url, genesis_time=0, seconds_per_slot=1),
         BlobscanSource(stub.url),
+        BlockscoutSource(stub.url),
     ):
         result = SourceChain([source]).acquire(CTX, wanted)
         assert set(result.blobs) == set(wanted), source.name
         assert result.rejected == 0
     result = SourceChain([local]).acquire(CTX, wanted)
     assert set(result.blobs) == {pairs[0][0]}
+
+
+def test_R11_a_blob_blockscout_has_indexed_but_not_archived_yet_is_simply_not_there(stub, tmp_path):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.pending.add(pairs[0][0])
+    wanted = [vh for vh, _ in pairs]
+    result = SourceChain([BlockscoutSource(stub.url)]).acquire(CTX, wanted)
+    assert set(result.blobs) == {pairs[1][0]} and result.rejected == 0
+    # The next source fills the gap, as for any withheld blob.
+    result = SourceChain([BlockscoutSource(stub.url), _local_dir_with(pairs, tmp_path)]).acquire(CTX, wanted)
+    assert set(result.blobs) == set(wanted)
 
 
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):
