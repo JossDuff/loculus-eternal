@@ -338,6 +338,9 @@ class HealthCheck:
             "torn": [t.__dict__ for t in structure.torn],
             "deadBlobs": len(dead),
             "organisms": structure.organisms(),
+            # The dataset's size, from the batch headers: no file is materialised for it.
+            "rawBytes": sum(b.uncompressed_length for b in structure.batches),
+            "compressedBytes": sum(b.compressed_length for b in structure.batches),
             "entriesTotal": sum(o.get("entriesTotal", 0) for o in structure.organisms().values()),
             "withdrawnTotal": sum(o.get("withdrawnTotal", 0) for o in structure.organisms().values()),
         }
