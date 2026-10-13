@@ -25,7 +25,6 @@ from web3 import Web3
 from loculus_eternal.config import Config
 from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
-from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import SourceChain
 from loculus_eternal.store import BlobStore
 from loculus_eternal.ipfs import IpfsError, KuboClient
@@ -95,12 +94,8 @@ class Uploader:
     # --- pieces -------------------------------------------------------------------------------
 
     def _view(self, store: BlobStore) -> PublishedView:
-        # An IPFS source configured for uploads follows this machine's latest snapshot rather
-        # than a frozen CID, since each publish unpins the previous snapshot.
-        current = self._current_snapshot_cid()
-        for src in self.cfg.sources:
-            if isinstance(src, IpfsSource) and (src.snapshot_cid is None or current):
-                src.set_snapshot(current or src.snapshot_cid)
+        # An IPFS source follows the snapshot the contract names; the published view hands
+        # every source the chain's pointer before asking it for anything.
         return load_published_view(self.w3, self.cfg.chain.contract, SourceChain(self.cfg.sources), store, deployment_block=self.cfg.chain.deployment_block, spill_dir=self.data_dir / "spill" / "decoded", log=self.log)
 
     def _organisms(self, client: BackendClient) -> list[str]:
@@ -188,7 +183,6 @@ class Uploader:
         # go of the previous one on every endpoint that holds the new one. The blob objects
         # have their own pins and stay. Old blocks leave at the node's next garbage collection.
         if journal.snapshot_cid:
-            (self.data_dir / "snapshot-cid.txt").write_text(journal.snapshot_cid + "\n")
             # Each endpoint remembers which snapshot it holds, because an endpoint that was
             # down for a batch still has an older one to let go of.
             held = self._snapshots_held()
@@ -314,9 +308,9 @@ class Uploader:
         if self.submitter is None:
             raise SystemExit("configuration error: publishing needs the publisher key")
         # The snapshot of the stream as it will stand after this batch goes to IPFS first,
-        # because the batch-end transaction carries the pointer to it. Without IPFS, or if
-        # no endpoint takes it, the existing pointer is carried forward: a batch end always
-        # writes the pointer, so zero would wipe one set by hand.
+        # because the batch-end transaction carries its CID as the pointer. Without IPFS, or
+        # if no endpoint takes it, the existing pointer is carried forward: a batch end always
+        # writes the pointer, so an empty one would wipe a snapshot set by hand.
         pointer = view.state.app_pointer
         snap = None
         if self.cfg.ipfs is not None and self.cfg.ipfs.endpoints and mode == "publish":
@@ -336,8 +330,8 @@ class Uploader:
                 self.log(f"refused: {e}")
                 return self._done(report, started)
             report.ipfs = snap.to_json()
-            if snap.pointer is not None:
-                pointer = snap.pointer
+            if snap.snapshot_cid is not None:
+                pointer = snap.snapshot_cid
         journal = self.submitter.plan(
             batch,
             batch.blobs,
@@ -417,10 +411,6 @@ class Uploader:
                 report.withdrawn[st.organism] = list(st.vanished)
                 self.log(f"{st.organism}: withdrawing {len(st.vanished)} entries the backend no longer serves")
         return out
-
-    def _current_snapshot_cid(self) -> str | None:
-        path = self.data_dir / "snapshot-cid.txt"
-        return path.read_text().strip() or None if path.exists() else None
 
     def _snapshots_held(self) -> dict[str, str]:
         path = self.data_dir / "ipfs-snapshots.json"

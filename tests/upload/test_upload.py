@@ -17,7 +17,7 @@ from loculus_eternal.recover import Recovery, RecoveryConfig
 from loculus_eternal.sources import BeaconSource
 from loculus_eternal.testkit import Anvil, ArchiveStub, BackendStub, preconditions_met, released_line
 from loculus_eternal.testkit.anvil import dev_account
-from loculus_eternal.upload.submitter import Refused
+from loculus_eternal.upload.submitter import Refused, _gas_limit
 from loculus_eternal.upload.upload import Uploader
 
 pytestmark = [pytest.mark.slow, pytest.mark.skipif(not preconditions_met(), reason="anvil and forge are needed")]
@@ -365,13 +365,13 @@ def test_U11_tooling_is_republished_when_the_version_changes(world):
 
 def test_U12_batch_end_carries_the_existing_pointer_forward(world):
     anvil = world["anvil"]
-    pointer = b"\x42" * 32
+    pointer = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"   # set by hand, not by an upload
     tx = anvil.contract.functions.setAppPointer(pointer).build_transaction({"from": anvil.publisher.address, "nonce": anvil.w3.eth.get_transaction_count(anvil.publisher.address), "chainId": anvil.chain_id})
     anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.publisher.sign_transaction(tx).raw_transaction))
     anvil.mine(3)
     report = uploader(world).run()
     assert report.outcome == "published"
-    assert bytes(anvil.contract.functions.appPointer().call()) == pointer
+    assert anvil.contract.functions.appPointer().call() == pointer
 
 
 def test_U3_check_refuses_while_an_interrupted_batch_is_waiting(world):
@@ -697,3 +697,18 @@ def test_U20_an_abandoned_batch_ends_the_run_and_keeps_its_blobs(world):
     assert any(p.suffix == ".json" for p in aside) and any(p.is_dir() and list(p.glob("*.blob")) for p in aside), f"journal and blob files kept: {listing}"
     assert not (up.data_dir / "journal.json").exists()
     assert report.batch is not None and len(list((up.data_dir / "abandoned").glob("*.json"))) == 1, "no second batch was planned in the same run"
+
+
+def test_U18_the_gas_headroom_covers_the_first_batch_end_ever():
+    # The dry run sizes the batch's maximum cost from the first transaction's estimate, a
+    # mid-batch call. The costliest call the batch can hold is the first batch end ever,
+    # when the pointer's storage slots are written for the first time. Figures inside the
+    # call come from the gas table in docs/contract.md; the intrinsic 21,000 and the
+    # calldata (the batch end carries a 59-character CID) are added on top.
+    first_mid_batch_call = 39_000 + 21_000 + 700
+    first_batch_end_call = 99_000 + 21_000 + 2_000
+    assert _gas_limit(first_mid_batch_call) >= first_batch_end_call
+    # After a torn first attempt the blob count and head are warm but the pointer slots are
+    # still empty, so the mid-batch estimate is at its lowest and the batch end at its highest.
+    warm_mid_batch_call = 16_500 + 21_000 + 700
+    assert _gas_limit(warm_mid_batch_call) >= first_batch_end_call

@@ -47,4 +47,4 @@ url = "https://api.sepolia.blobscan.com"
 
 [[sources]]
 type = "ipfs"
-endpoints = ["http://127.0.0.1:5001"]          # follows this machine's latest snapshot
+endpoints = ["http://127.0.0.1:5001"]          # reads the snapshot the contract names; no CID is ever configured

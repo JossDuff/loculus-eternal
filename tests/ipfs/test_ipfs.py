@@ -8,7 +8,7 @@ import pytest
 
 from loculus_eternal import config as configuration
 from loculus_eternal.format.chunks import pack_blobs
-from loculus_eternal.ipfs import KuboClient, app_pointer, blob_cid, cid_bytes, cid_v1, parse_manifest, publish_blobs, CODEC_RAW
+from loculus_eternal.ipfs import KuboClient, blob_cid, cid_bytes, cid_v1, parse_manifest, publish_blobs, CODEC_RAW
 from loculus_eternal.recover import ManifestSource, Recovery, RecoveryConfig
 from loculus_eternal.sources import IpfsSource
 from loculus_eternal.sources.base import BlobContext, SourceChain, SourceError
@@ -34,7 +34,6 @@ def test_I1_blob_object_cid_is_computable_locally_and_kubo_agrees(kubo_pair):
     assert publish_blobs(a, [blob]) == [local]
     assert a.block_get(local) == blob and a.is_pinned(local)
     assert len(cid_bytes(local)) == 36 and cid_bytes(local)[:4] == bytes([0x01, 0x55, 0x12, 0x20])
-    assert app_pointer(local) == hashlib.sha256(cid_bytes(local)).digest()
 
 
 def test_I2_snapshot_directory_cid_is_the_same_on_two_nodes(kubo_pair):
@@ -128,7 +127,7 @@ def test_I3_upload_publishes_blob_objects_and_a_snapshot_the_chain_points_at(wor
     assert report.outcome == "published", report.message
     snap = report.ipfs
     assert snap["snapshotCid"] and all(e["snapshot"] == "ok" for e in snap["endpoints"]) and all(e["blobs"] == report.batch["blobs"] for e in snap["endpoints"])
-    assert bytes(anvil.contract.functions.appPointer().call()) == bytes.fromhex(snap["appPointer"][2:]) == app_pointer(snap["snapshotCid"])
+    assert anvil.contract.functions.appPointer().call() == snap["snapshotCid"], "the batch end stores the snapshot CID whole"
     manifest = parse_manifest(a.cat(f"{snap['snapshotCid']}/manifest.json"))
     assert manifest["blobCount"] == report.batch["blobCountAfter"] and manifest["head"] == "0x" + bytes(anvil.contract.functions.head().call()).hex()
     assert [b_["seq"] for b_ in manifest["blobs"]] == list(range(manifest["blobCount"]))
@@ -138,7 +137,6 @@ def test_I3_upload_publishes_blob_objects_and_a_snapshot_the_chain_points_at(wor
     assert set(snap["files"]) == {"manifest.json", "container-spec.md", "mpox.ndjson.zst", "zika.ndjson.zst"}
     zika = zstandard.ZstdDecompressor().decompress(a.cat(f"{snap['snapshotCid']}/zika.ndjson.zst"), max_output_size=10**8)
     assert [json.loads(l)["metadata"]["accessionVersion"] for l in zika.splitlines()] == ["PP_1.1", "PP_2.1"]
-    assert (world["tmp"] / "upload-data" / "snapshot-cid.txt").read_text().strip() == snap["snapshotCid"]
 
 
 def test_I4_recovery_from_ipfs_alone_with_logs_unavailable(world, tmp_path):
@@ -155,7 +153,7 @@ def test_I4_recovery_from_ipfs_alone_with_logs_unavailable(world, tmp_path):
     assert second.outcome == "published" and second.ipfs["snapshotCid"] != first.ipfs["snapshotCid"]
     cid = second.ipfs["snapshotCid"]
 
-    source = IpfsSource([a.api_url], cid)
+    source = IpfsSource([a.api_url])   # learns the snapshot from the contract, like any reader
     flaky = FlakyProvider(Web3.HTTPProvider(anvil.url), fail_methods={"eth_getLogs"}, fail_count=10**6)
     cfg = RecoveryConfig(rpc_url=anvil.url, contract=anvil.contract.address, data_dir=tmp_path / "rec-data", out_dir=tmp_path / "rec-out", sources=[source], manifest_sources=[ManifestSource(ipfs=source)], deployment_block=1, max_requests_per_second=1000, log=lambda s: None)
     recovery = Recovery(cfg, w3=Web3(flaky))
@@ -173,7 +171,8 @@ def test_I5_unreachable_ipfs_does_not_block_publishing_and_keeps_the_pointer(wor
     anvil = world["anvil"]
     first = uploader(world).run()
     assert first.outcome == "published"
-    pointer_before = bytes(anvil.contract.functions.appPointer().call())
+    pointer_before = anvil.contract.functions.appPointer().call()
+    assert pointer_before == first.ipfs["snapshotCid"]
     a, b = world["kubo"]
     text = world["cfg_path"].read_text().replace(f'endpoints = ["{a.api_url}", "{b.api_url}"]', 'endpoints = ["http://127.0.0.1:9", "http://127.0.0.1:10"]')
     world["cfg_path"].write_text(text)
@@ -181,7 +180,7 @@ def test_I5_unreachable_ipfs_does_not_block_publishing_and_keeps_the_pointer(wor
     second = uploader(world).run()
     assert second.outcome == "published", second.message
     assert second.ipfs["snapshotCid"] is None and all(e["snapshot"].startswith("error") for e in second.ipfs["endpoints"])
-    assert bytes(anvil.contract.functions.appPointer().call()) == pointer_before
+    assert anvil.contract.functions.appPointer().call() == pointer_before
     world["cfg_path"].write_text(text + "\n")
     required = text.replace("spec_path", "required = true\nspec_path")
     world["cfg_path"].write_text(required)
@@ -190,21 +189,39 @@ def test_I5_unreachable_ipfs_does_not_block_publishing_and_keeps_the_pointer(wor
     assert third.outcome == "refused" and "required" in third.message
 
 
-def test_I6_snapshot_that_does_not_match_the_pointer_is_refused(world):
+def test_I6_the_ipfs_source_reads_the_snapshot_the_contract_names_and_nothing_else(world):
     anvil = world["anvil"]
     a, _ = world["kubo"]
-    report = uploader(world).run()
-    assert report.outcome == "published"
-    impostor = a.add_directory("snapshot", {"manifest.json": a.cat(f"{report.ipfs['snapshotCid']}/manifest.json"), "container-spec.md": b"tampered\n"})
-    source = IpfsSource([a.api_url], impostor)
-    source.set_app_pointer(bytes(anvil.contract.functions.appPointer().call()))
-    with pytest.raises(SourceError, match="appPointer"):
+    source = IpfsSource([a.api_url])
+    # Before any batch is committed the contract names nothing, and the source says so
+    # rather than guessing; the same when it has not been given the pointer at all.
+    with pytest.raises(SourceError, match="names no IPFS snapshot"):
+        source.blob_refs()
+    source.set_app_pointer(anvil.contract.functions.appPointer().call())
+    with pytest.raises(SourceError, match="names no IPFS snapshot"):
         source.blob_refs()
     result = SourceChain([source]).acquire(BlobContext(1, 1), [bytes(32)])
-    assert result.attempts[0].outcome == "error" and "appPointer" in result.attempts[0].detail
-    genuine = IpfsSource([a.api_url], report.ipfs["snapshotCid"])
-    genuine.set_app_pointer(bytes(anvil.contract.functions.appPointer().call()))
-    assert len(genuine.blob_refs()) == report.batch["blobCountAfter"]
+    assert result.attempts[0].outcome == "error" and "names no IPFS snapshot" in result.attempts[0].detail
+
+    first = uploader(world).run()
+    assert first.outcome == "published"
+    source.set_app_pointer(anvil.contract.functions.appPointer().call())
+    assert source.snapshot_cid == first.ipfs["snapshotCid"]
+    assert len(source.blob_refs()) == first.batch["blobCountAfter"]
+
+    # The next batch moves the pointer; the source follows it and drops the old manifest.
+    world["backend"].add("zika", released_line("zika", "PP_1", 2))
+    second = uploader(world).run()
+    assert second.outcome == "published" and second.ipfs["snapshotCid"] != first.ipfs["snapshotCid"]
+    source.set_app_pointer(anvil.contract.functions.appPointer().call())
+    assert source.snapshot_cid == second.ipfs["snapshotCid"]
+    assert len(source.blob_refs()) == second.batch["blobCountAfter"] > first.batch["blobCountAfter"]
+
+    # A directory without a manifest is not a snapshot, whatever the contract says.
+    not_a_snapshot = a.add_directory("snapshot", {"container-spec.md": b"tampered\n"})
+    source.set_app_pointer(not_a_snapshot)
+    with pytest.raises(SourceError, match="cannot read the snapshot manifest"):
+        source.blob_refs()
 
 
 def test_I7_previous_snapshot_is_unpinned_once_the_new_batch_is_final(world):
@@ -248,7 +265,7 @@ def test_I8_refused_batch_takes_its_snapshot_and_blob_objects_back(world):
     assert all(not a.is_pinned(entry["cid"]) for entry in manifest["blobs"][1:])
     # Blob 0 holds the stream header, which the next genesis attempt relies on: it stays pinned.
     assert a.is_pinned(manifest["blobs"][0]["cid"]) and b.is_pinned(manifest["blobs"][0]["cid"])
-    assert not (world["tmp"] / "upload-data" / "snapshot-cid.txt").exists()
+    assert anvil.contract.functions.appPointer().call() == "", "a refused batch leaves the contract naming no snapshot"
     # And a fee refusal happens before any IPFS work at all.
     world["cfg_path"].write_text(world["cfg_path"].read_text().replace("[ipfs]", "[upload.extra]\n[ipfs]").replace("inclusion_timeout_blocks = 3", "inclusion_timeout_blocks = 3\nmax_blob_fee_gwei = 0"))
     cheap = uploader(world).run()
@@ -302,9 +319,10 @@ def test_I10_required_without_endpoints_is_a_configuration_error(world):
         configuration.load(cfg)
 
 
-def test_I11_upload_ipfs_source_follows_the_latest_snapshot(world, tmp_path):
-    """An [[sources]] ipfs entry without a snapshot CID uses this machine's latest snapshot,
-    and the published view checks it against the chain's pointer before trusting it."""
+def test_I11_upload_ipfs_source_follows_the_snapshot_the_contract_names(world, tmp_path):
+    """An [[sources]] ipfs entry in the upload configuration reads the snapshot the contract
+    names at the start of the run, so the upload command can take its own blobs back from
+    IPFS without any CID in its configuration."""
     a, _ = world["kubo"]
     cfg = world["cfg_path"]
     cfg.write_text(cfg.read_text() + f'\n[[sources]]\ntype = "ipfs"\nendpoints = ["{a.api_url}"]\n')

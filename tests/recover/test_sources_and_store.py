@@ -62,23 +62,22 @@ def test_R4_withholding_source_yields_nothing_and_everything_is_reported(stub):
 
 
 def test_R4_ipfs_manifest_failure_is_remembered_within_a_run_and_forgotten_at_the_next(tmp_path):
-    from loculus_eternal.ipfs import app_pointer
     from loculus_eternal.sources import IpfsSource
     from loculus_eternal.sources.base import BlobContext, SourceError
 
     cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-    src = IpfsSource(["http://127.0.0.1:1"], cid, timeout=2)   # nothing listens there
-    src.set_app_pointer(app_pointer(cid))
+    src = IpfsSource(["http://127.0.0.1:1"], timeout=2)   # nothing listens there
+    src.set_app_pointer(cid)
     with pytest.raises(SourceError, match="cannot read the snapshot manifest"):
         src.fetch(BlobContext(1, 1), [b"\x01" * 32])
     assert src._manifest_error, "the failure is kept so later block groups do not retry the node"
     with pytest.raises(SourceError, match="cannot read the snapshot manifest"):
         src.fetch(BlobContext(2, 2), [b"\x02" * 32])
-    src.set_app_pointer(app_pointer(cid))   # the next run starts here
+    src.set_app_pointer(cid)   # the next run starts here
     assert src._manifest_error is None
     # A different pointer means a different snapshot: a cached manifest is dropped.
     src.manifest = {"blobs": []}
-    src.set_app_pointer(b"\x01" * 32)
+    src.set_app_pointer("bafy-another-snapshot")
     assert src.manifest is None
 
 
@@ -179,3 +178,39 @@ def test_R6_store_lock_is_exclusive(tmp_path):
     with BlobStore(tmp_path / "s"):
         with pytest.raises(StoreError, match="another process"):
             BlobStore(tmp_path / "s")
+
+
+def test_R1_every_configured_ipfs_source_is_a_manifest_source_in_order(tmp_path):
+    from loculus_eternal import config as configuration
+    from loculus_eternal.cli import recovery_config
+    from loculus_eternal.sources import IpfsSource
+
+    cfg_path = tmp_path / "loculus-eternal.toml"
+    cfg_path.write_text(
+        """
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[[sources]]
+type = "ipfs"
+endpoints = ["http://127.0.0.1:5001"]
+
+[[sources]]
+type = "ipfs"
+endpoints = ["http://127.0.0.1:5002"]
+
+[recover]
+manifest_sources = ["logs", "ipfs"]
+"""
+    )
+    cfg = configuration.load(cfg_path)
+    rc = recovery_config(cfg, skip_decode=True)
+    # One manifest source per IPFS source, the very objects that fetch the blobs, in the
+    # configured order: with the first node down the second still yields the manifest.
+    assert rc.manifest_sources[0].logs
+    ipfs_sources = [m.ipfs for m in rc.manifest_sources[1:]]
+    assert ipfs_sources == [s for s in cfg.sources if isinstance(s, IpfsSource)] and len(ipfs_sources) == 2
+    assert [s.endpoints for s in ipfs_sources] == [["http://127.0.0.1:5001"], ["http://127.0.0.1:5002"]]

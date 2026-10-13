@@ -16,7 +16,6 @@ from pathlib import Path
 
 from loculus_eternal.config import Config
 from loculus_eternal.health import HealthCheck, Report, public_url, redact_all, source_endpoints, source_kind
-from loculus_eternal.sources import IpfsSource
 
 PAGE = Path(__file__).with_name("health_page.html")
 REPOSITORY = "https://github.com/JossDuff/loculus-eternal"
@@ -29,10 +28,7 @@ def public_config(config: Config) -> dict:
     name, explorer = NETWORKS.get(config.chain.chain_id or 0, (f"chain {config.chain.chain_id}" if config.chain.chain_id else "unknown chain", None))
     sources = []
     for src in config.sources:
-        entry = {"type": source_kind(src), "endpoints": [public_url(e) for e in source_endpoints(src)]}
-        if isinstance(src, IpfsSource):
-            entry["snapshotCid"] = src.snapshot_cid
-        sources.append(entry)
+        sources.append({"type": source_kind(src), "endpoints": [public_url(e) for e in source_endpoints(src)]})
     return {
         "contract": config.chain.contract,
         "chainId": config.chain.chain_id,

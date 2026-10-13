@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 from loculus_eternal.chain import BlobRef, ChainReader, ManifestMismatch, verify_manifest
 from loculus_eternal.config import Config
 from loculus_eternal.format.structure import read_structure
-from loculus_eternal.ipfs import app_pointer
 from loculus_eternal.rpc import connect
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.base import BlobContext, verify_candidates
@@ -94,6 +93,11 @@ class Report:
         return dict(self.__dict__)
 
 
+def _empty_counts(asked: int = 0) -> dict:
+    """One source's row before anything is fetched from it."""
+    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": asked}
+
+
 class HealthCheck:
     def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, progress: Callable[[dict], None] | None = None, w3=None):
         self.cfg = config
@@ -154,7 +158,7 @@ class HealthCheck:
         there? It cannot when the contract cannot be read, when the blob list does not
         reproduce the chain's head, when a blob a reader needs is unavailable from every
         source, when the blobs do not parse as a stream, or when the check itself broke.
-        A dead archive, a stopped IPFS node or a stale snapshot CID are listed as problems
+        A dead archive, a stopped IPFS node or an unreadable snapshot are listed as problems
         but do not change the answer: the other sources still recover the dataset."""
         if "error" in report.chain:
             return True
@@ -186,19 +190,15 @@ class HealthCheck:
             "publisher": state.publisher,
             "blobCount": state.blob_count,
             "head": "0x" + state.head.hex(),
-            "appPointer": "0x" + state.app_pointer.hex(),
+            "snapshotCid": state.app_pointer or None,
             "successor": state.successor,
         }
         if int(state.successor, 16) != 0:
             report.notes.append(f"a successor contract is set: {state.successor}; this deployment may have been replaced")
-        # The configured snapshot CID is the publisher's only if its hash is the contract's
-        # pointer; that costs no request. The blob check then uses the snapshot as a source.
-        cid = next((s.snapshot_cid for s in self.cfg.sources if isinstance(s, IpfsSource) and s.snapshot_cid), None)
-        if cid:
-            report.chain["snapshotCid"] = cid
-            report.chain["snapshotMatchesPointer"] = app_pointer(cid) == state.app_pointer
-            if not report.chain["snapshotMatchesPointer"]:
-                report.problems.append("the configured snapshot CID does not match the contract's appPointer: the snapshot is stale or not the publisher's")
+        # The snapshot CID comes from the contract, so there is nothing to compare it with;
+        # the blob check reads that snapshot through the IPFS source and shows what it finds.
+        if not state.app_pointer and any(isinstance(s, IpfsSource) for s in self.cfg.sources):
+            report.notes.append("the contract names no IPFS snapshot yet: the IPFS source has nothing to read until a batch is committed")
         log(f"contract holds {state.blob_count} blobs, head 0x{state.head.hex()[:16]}…")
 
         self._step(report, "contract check", "rebuilding the blob list from event logs")
@@ -246,13 +246,25 @@ class HealthCheck:
             name = public_source(src)
             if name in matrix:   # two sources of one kind on one host keep separate rows
                 name = f"{name} #{sum(1 for k in matrix if k.startswith(name)) + 1}"
+            # A source that has nothing to be asked for is neither reachable nor unreachable;
+            # its row says why it was not asked. That is every source before the first blob
+            # is published, and the IPFS source until the first batch commits a snapshot.
+            skipped = None
+            if state.blob_count == 0:
+                skipped = "no blobs published yet"
+            elif isinstance(src, IpfsSource) and not state.app_pointer:
+                skipped = "the contract names no IPFS snapshot yet"
+            if skipped:
+                matrix[name] = {**_empty_counts(), "skipped": skipped}
+                log(f"{name}: not asked, {skipped}")
+                continue
             # Re-read the structure only when something new arrived since the last walk.
             have = sum(1 for b in blobs if b is not None)
             if have and have != in_hand:
                 dead = read_structure(blobs).dead_blobs()
                 in_hand = have
             to_ask = [r for r in refs if r.seq not in dead]
-            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": len(to_ask)}
+            counts = _empty_counts(asked=len(to_ask))
             log(f"fetching {len(to_ask)} blob(s) from {name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
             groups: dict[tuple, list[BlobRef]] = {}
             for r in to_ask:

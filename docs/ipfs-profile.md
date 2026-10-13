@@ -54,30 +54,34 @@ plain files (gigabytes), so that pinners carry little per upload.
 
 ## The on-chain pointer
 
-The contract's `appPointer` is the SHA-256 of the snapshot CID's **binary** form (the bytes
-the base32 string encodes: version, codec, multihash), not of the string. A reader who is
-handed a snapshot CID checks `sha256(cid_bytes) == appPointer` before using its manifest.
-The pointer is written by the batch-end transaction, so it always names the snapshot of the
-batch that transaction completed.
+The contract's `appPointer` is the snapshot's CID itself, as the base32 CIDv1 string Kubo
+prints and a gateway accepts (`bafybei…`). It is written by the batch-end transaction, so it
+always names the snapshot of the batch that transaction completed, and it is empty until the
+first batch is committed. A reader obtains it with one call to the contract and needs
+nothing from anywhere else to find the snapshot; a stale CID cannot be configured, because
+no CID is configured.
 
-Hashing the CID rather than storing it keeps the on-chain word fixed at 32 bytes whatever
-the CID's length, at the cost that the CID itself must be learned off-chain: the upload
-command writes it to its run report, and the publisher is expected to publish it on a
-public page. The chain then verifies it.
+The pointer is a claim, not a proof: the contract stores whatever string the publisher
+sends. What makes the snapshot trustworthy is its content, checked against the chain: the
+manifest's blob list must reproduce `head`, and every blob object must verify against its
+versioned hash. The CID only locates the snapshot. Storing the CID whole rather than a
+digest of it costs a few storage slots per batch end and keeps the contract legible on its
+own: a future reader with the address and an Ethereum node has everything.
 
 ## Recovering from IPFS alone
 
-1. Obtain the current snapshot CID from the publisher's page or from anyone, and the
-   contract's `appPointer`, `blobCount` and `head` from any Ethereum node.
-2. Check the CID against the pointer. Fetch `manifest.json` and check the blob list against
-   `head` as for any manifest.
+1. Read the contract's `appPointer` (the snapshot CID), `blobCount` and `head` from any
+   Ethereum node at a finalized block.
+2. Fetch `manifest.json` from the snapshot and check the blob list against `head` as for any
+   manifest.
 3. Fetch each blob object by its CID, verify it against its versioned hash, store it. The
    recovery command also fills in missing block numbers from event logs when a node still
    serves them, so beacon-style sources can help with blobs the IPFS nodes have lost.
 4. Decode. The `.ndjson.zst` files are a shortcut: decompress and compare their SHA-256 with
    the stream's own cumulative digests before trusting them.
 
-The recovery command does this when an `ipfs` source with a `snapshot_cid` is configured.
+The recovery command does this when an `ipfs` source is configured and `ipfs` is among its
+manifest sources; it reads the CID from the contract at the start of every run.
 Every read it makes through a Kubo node carries a sixty-second deadline on the node's side,
 so an object the node has to find on the public network either arrives within it or the
 next source is tried, instead of a lost object stalling the recovery for minutes.

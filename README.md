@@ -70,12 +70,13 @@ type = "local"                   # a directory of <versioned hash>.blob files, e
 path = "/mnt/blobs"
 
 [[sources]]
-type = "ipfs"                    # blob objects located through a published snapshot
+type = "ipfs"                    # blob objects located through the snapshot the contract names
 endpoints = ["http://127.0.0.1:5001"]
-snapshot_cid = "bafybei…"        # the publisher's announced snapshot; checked against the chain's pointer
 ```
 
-To recover with nothing but IPFS, add `"ipfs:bafybei…"` to `manifest_sources` as well.
+The snapshot's CID is read from the contract at the start of every run, never configured.
+To recover with nothing but IPFS, add `"ipfs"` to `manifest_sources` as well; every
+configured `ipfs` source is tried in turn.
 
 Then:
 

@@ -48,7 +48,7 @@ def test_K5_real_blob_transaction_records_the_right_versioned_hashes(anvil):
     off-chain from the blob bytes."""
     enc = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:]))
     batch = enc.encode_batch(genesis_entries(), tooling=tooling(), codec=CODEC_RAW)
-    results = publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True, app_pointer=b"\x11" * 32)
+    results = publish_blobs(anvil, batch.blobs, last_blob_chunk_count=batch.last_blob_chunk_count, is_batch_end=True, app_pointer="bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy")
     assert len(results) == 1
     receipt, hashes = results[0]
     assert receipt["status"] == 1 and receipt["type"] == 3
@@ -61,7 +61,8 @@ def test_K5_real_blob_transaction_records_the_right_versioned_hashes(anvil):
     assert len(commits) == 1 and commits[0]["args"]["lastBlobChunkCount"] == batch.last_blob_chunk_count
     assert anvil.contract.functions.blobCount().call() == 1
     assert bytes(anvil.contract.functions.head().call()) == chain_head(hashes)
-    assert bytes(anvil.contract.functions.appPointer().call()) == b"\x11" * 32
+    assert anvil.contract.functions.appPointer().call() == "bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy"
+    assert commits[0]["args"]["appPointer"] == "bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy"
 
 
 def test_K5_multi_blob_batch_spans_transactions_and_keeps_order():

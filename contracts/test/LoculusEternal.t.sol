@@ -12,8 +12,8 @@ contract LoculusEternalTest is Test {
     address internal stranger = address(0xB0B);
 
     event BlobPublished(uint64 indexed seq, bytes32 versionedHash);
-    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, bytes32 appPointer);
-    event AppPointerSet(bytes32 appPointer);
+    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, string appPointer);
+    event AppPointerSet(string appPointer);
     event SuccessorSet(address successor);
     event PublisherChanged(address indexed previous, address indexed current);
 
@@ -50,7 +50,7 @@ contract LoculusEternalTest is Test {
             vm.expectEmit(true, false, false, true);
             emit BlobPublished(i, hs[i]);
         }
-        record.publish(0, 4096, false, bytes32(0));
+        record.publish(0, 4096, false, "");
         assertEq(record.blobCount(), 3);
 
         bytes32[] memory more = hashes(2, 3);
@@ -60,7 +60,7 @@ contract LoculusEternalTest is Test {
         emit BlobPublished(3, more[0]);
         vm.expectEmit(true, false, false, true);
         emit BlobPublished(4, more[1]);
-        record.publish(3, 100, true, bytes32(uint256(7)));
+        record.publish(3, 100, true, "bafy-seven");
         assertEq(record.blobCount(), 5);
     }
 
@@ -70,13 +70,13 @@ contract LoculusEternalTest is Test {
         bytes32[] memory a = hashes(4, 0);
         vm.blobhashes(a);
         vm.prank(publisher);
-        record.publish(0, 4096, false, bytes32(0));
+        record.publish(0, 4096, false, "");
         assertEq(record.head(), chain(bytes32(0), a));
 
         bytes32[] memory b = hashes(2, 4);
         vm.blobhashes(b);
         vm.prank(publisher);
-        record.publish(4, 1, true, bytes32(0));
+        record.publish(4, 1, true, "");
         assertEq(record.head(), chain(chain(bytes32(0), a), b));
     }
 
@@ -87,10 +87,10 @@ contract LoculusEternalTest is Test {
         bytes32[] memory b = hashes(c2, c1);
         vm.blobhashes(a);
         vm.prank(publisher);
-        record.publish(0, 4096, false, bytes32(0));
+        record.publish(0, 4096, false, "");
         vm.blobhashes(b);
         vm.prank(publisher);
-        record.publish(uint64(c1), 4096, true, bytes32(0));
+        record.publish(uint64(c1), 4096, true, "");
         assertEq(record.head(), chain(chain(bytes32(0), a), b));
         assertEq(record.blobCount(), c1 + c2);
     }
@@ -101,7 +101,7 @@ contract LoculusEternalTest is Test {
         vm.blobhashes(new bytes32[](0));
         vm.prank(publisher);
         vm.expectRevert(LoculusEternal.NoBlobs.selector);
-        record.publish(0, 4096, false, bytes32(0));
+        record.publish(0, 4096, false, "");
         assertEq(record.blobCount(), 0);
         assertEq(record.head(), bytes32(0));
     }
@@ -112,19 +112,19 @@ contract LoculusEternalTest is Test {
         vm.blobhashes(hashes(1, 0));
         vm.prank(publisher);
         vm.expectRevert(abi.encodeWithSelector(LoculusEternal.BadChunkCount.selector, uint32(0)));
-        record.publish(0, 0, true, bytes32(0));
+        record.publish(0, 0, true, "");
         vm.prank(publisher);
         vm.expectRevert(abi.encodeWithSelector(LoculusEternal.BadChunkCount.selector, uint32(4097)));
-        record.publish(0, 4097, true, bytes32(0));
+        record.publish(0, 4097, true, "");
     }
 
     function test_C4_chunk_count_1_and_4096_are_accepted() public {
         vm.blobhashes(hashes(1, 0));
         vm.prank(publisher);
-        record.publish(0, 1, true, bytes32(0));
+        record.publish(0, 1, true, "");
         vm.blobhashes(hashes(1, 1));
         vm.prank(publisher);
-        record.publish(1, 4096, true, bytes32(0));
+        record.publish(1, 4096, true, "");
         assertEq(record.blobCount(), 2);
     }
 
@@ -133,14 +133,14 @@ contract LoculusEternalTest is Test {
     function test_C5_wrong_expected_sequence_reverts_and_changes_nothing() public {
         vm.blobhashes(hashes(2, 0));
         vm.prank(publisher);
-        record.publish(0, 4096, true, bytes32(0));
+        record.publish(0, 4096, true, "");
         vm.blobhashes(hashes(1, 2));
         vm.prank(publisher);
         vm.expectRevert(abi.encodeWithSelector(LoculusEternal.SequenceMismatch.selector, uint64(2), uint64(1)));
-        record.publish(1, 4096, true, bytes32(0));
+        record.publish(1, 4096, true, "");
         vm.prank(publisher);
         vm.expectRevert(abi.encodeWithSelector(LoculusEternal.SequenceMismatch.selector, uint64(2), uint64(3)));
-        record.publish(3, 4096, true, bytes32(0));
+        record.publish(3, 4096, true, "");
         assertEq(record.blobCount(), 2);
     }
 
@@ -150,9 +150,9 @@ contract LoculusEternalTest is Test {
         vm.blobhashes(hashes(1, 0));
         vm.startPrank(stranger);
         vm.expectRevert(LoculusEternal.NotPublisher.selector);
-        record.publish(0, 4096, true, bytes32(0));
+        record.publish(0, 4096, true, "");
         vm.expectRevert(LoculusEternal.NotPublisher.selector);
-        record.setAppPointer(bytes32(uint256(1)));
+        record.setAppPointer("bafy-stranger");
         vm.expectRevert(LoculusEternal.NotPublisher.selector);
         record.setSuccessor(stranger);
         vm.expectRevert(LoculusEternal.NotPublisher.selector);
@@ -182,15 +182,15 @@ contract LoculusEternalTest is Test {
     function test_C8_batch_end_emits_commit_and_sets_pointer_while_mid_batch_does_not() public {
         vm.blobhashes(hashes(6, 0));
         vm.prank(publisher);
-        record.publish(0, 4096, false, bytes32(uint256(0xBAD)));
-        assertEq(record.appPointer(), bytes32(0), "mid-batch call must not touch the pointer");
+        record.publish(0, 4096, false, "bafy-ignored");
+        assertEq(record.appPointer(), "", "mid-batch call must not touch the pointer");
 
         vm.blobhashes(hashes(3, 6));
         vm.prank(publisher);
         vm.expectEmit(false, false, false, true);
-        emit BatchCommitted(6, 8, 1234, bytes32(uint256(0xF00D)));
-        record.publish(6, 1234, true, bytes32(uint256(0xF00D)));
-        assertEq(record.appPointer(), bytes32(uint256(0xF00D)));
+        emit BatchCommitted(6, 8, 1234, "bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy");
+        record.publish(6, 1234, true, "bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy");
+        assertEq(record.appPointer(), "bafybeih2argl7mmixa6gxsuy5753yrmo2mly3fglkz7ehc7u2uhesmeziy");
     }
 
     // --- C9 publisher rotation --------------------------------------------------------------
@@ -209,9 +209,9 @@ contract LoculusEternalTest is Test {
         vm.blobhashes(hashes(1, 0));
         vm.prank(publisher);
         vm.expectRevert(LoculusEternal.NotPublisher.selector);
-        record.publish(0, 4096, true, bytes32(0));
+        record.publish(0, 4096, true, "");
         vm.prank(stranger);
-        record.publish(0, 4096, true, bytes32(0));
+        record.publish(0, 4096, true, "");
         assertEq(record.blobCount(), 1);
     }
 
@@ -220,9 +220,13 @@ contract LoculusEternalTest is Test {
     function test_C10_set_app_pointer_standalone() public {
         vm.prank(publisher);
         vm.expectEmit(false, false, false, true);
-        emit AppPointerSet(bytes32(uint256(42)));
-        record.setAppPointer(bytes32(uint256(42)));
-        assertEq(record.appPointer(), bytes32(uint256(42)));
+        emit AppPointerSet("bafy-by-hand");
+        record.setAppPointer("bafy-by-hand");
+        assertEq(record.appPointer(), "bafy-by-hand");
+        // The pointer is replaced whole, so a shorter CID leaves nothing of a longer one behind.
+        vm.prank(publisher);
+        record.setAppPointer("x");
+        assertEq(record.appPointer(), "x");
         assertEq(record.blobCount(), 0);
     }
 
@@ -237,6 +241,7 @@ contract LoculusEternalTest is Test {
         assertEq(fresh.publisher(), publisher);
         assertEq(fresh.blobCount(), 0);
         assertEq(fresh.head(), bytes32(0));
+        assertEq(fresh.appPointer(), "");
     }
 
     // --- C13 size and gas, recorded in docs/contract.md ----------------------------------------

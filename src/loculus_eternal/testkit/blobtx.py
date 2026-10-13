@@ -42,7 +42,7 @@ def send_blob_transaction(w3, account, to: str, data: bytes, blobs: list[bytes],
     return receipt, versioned_hashes
 
 
-def publish_blobs(anvil, blobs: list[bytes], *, last_blob_chunk_count: int, is_batch_end: bool, app_pointer: bytes = b"\x00" * 32):
+def publish_blobs(anvil, blobs: list[bytes], *, last_blob_chunk_count: int, is_batch_end: bool, app_pointer: str = ""):
     """Publish a batch's blobs through the contract in transactions of at most six blobs.
 
     Returns the list of (receipt, versioned_hashes) per transaction. Only the final
@@ -60,7 +60,7 @@ def publish_blobs(anvil, blobs: list[bytes], *, last_blob_chunk_count: int, is_b
                     expected_seq,
                     last_blob_chunk_count if last else 4096,
                     is_batch_end and last,
-                    app_pointer if (is_batch_end and last) else b"\x00" * 32,
+                    app_pointer if (is_batch_end and last) else "",
                 ],
             )[2:]
         )

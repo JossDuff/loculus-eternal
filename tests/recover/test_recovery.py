@@ -374,3 +374,28 @@ def test_R14_withdrawn_entries_are_excluded_and_cannot_be_asked_for(published, t
     helptext = run_cli("recover", "--help")
     assert helptext.returncode == 0 and "--skip-decode" in helptext.stdout
     assert "withdrawn" not in helptext.stdout
+
+
+def test_R16_a_pointer_that_is_not_valid_utf8_does_not_make_the_record_unreadable(published):
+    """The contract accepts any bytes as the pointer. A publisher that stores garbage must
+    not take the event logs and the other sources down with it."""
+    from eth_abi import encode
+    from eth_utils import function_signature_to_4byte_selector
+
+    anvil = published["anvil"]
+    selector = function_signature_to_4byte_selector("setAppPointer(string)")
+
+    def set_pointer_raw(encoded: bytes) -> None:
+        tx = {"to": anvil.contract.address, "data": selector + encoded, "nonce": anvil.w3.eth.get_transaction_count(anvil.publisher.address), "chainId": anvil.chain_id, "gas": 200_000, "maxFeePerGas": 10**10, "maxPriorityFeePerGas": 10**9}
+        anvil.w3.eth.wait_for_transaction_receipt(anvil.w3.eth.send_raw_transaction(anvil.publisher.sign_transaction(tx).raw_transaction))
+        anvil.mine(3)
+
+    set_pointer_raw(encode(["bytes"], [b"bafy\xff\xfe-not-utf8"]))   # bytes and string share an encoding
+    try:
+        with pytest.raises(UnicodeDecodeError):
+            anvil.contract.functions.appPointer().call()   # the strict read the ABI codec does
+        state = ChainReader(anvil.w3, anvil.contract.address).state_at_finalized()
+        assert state.app_pointer.startswith("bafy") and "\ufffd" in state.app_pointer and state.app_pointer.endswith("-not-utf8")
+        assert state.blob_count > 0, "the rest of the chain state reads as before"
+    finally:
+        set_pointer_raw(encode(["string"], [""]))

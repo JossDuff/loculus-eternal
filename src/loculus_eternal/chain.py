@@ -21,7 +21,7 @@ ABI = [
     {"type": "function", "name": "blobCount", "inputs": [], "outputs": [{"type": "uint64"}], "stateMutability": "view"},
     {"type": "function", "name": "head", "inputs": [], "outputs": [{"type": "bytes32"}], "stateMutability": "view"},
     {"type": "function", "name": "publisher", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
-    {"type": "function", "name": "appPointer", "inputs": [], "outputs": [{"type": "bytes32"}], "stateMutability": "view"},
+    {"type": "function", "name": "appPointer", "inputs": [], "outputs": [{"type": "string"}], "stateMutability": "view"},
     {"type": "function", "name": "successor", "inputs": [], "outputs": [{"type": "address"}], "stateMutability": "view"},
     {
         "type": "event",
@@ -40,7 +40,7 @@ ABI = [
             {"name": "firstSeq", "type": "uint64", "indexed": False},
             {"name": "lastSeq", "type": "uint64", "indexed": False},
             {"name": "lastBlobChunkCount", "type": "uint32", "indexed": False},
-            {"name": "appPointer", "type": "bytes32", "indexed": False},
+            {"name": "appPointer", "type": "string", "indexed": False},
         ],
     },
 ]
@@ -67,7 +67,7 @@ class ChainState:
     block_number: int
     blob_count: int
     head: bytes
-    app_pointer: bytes
+    app_pointer: str      # the current IPFS snapshot's CID; empty until the first batch is committed
     publisher: str
     successor: str
 
@@ -131,6 +131,8 @@ class ChainReader:
         for attempt in range(self.retries):
             try:
                 return fn()
+            except ChainError:
+                raise   # a verdict about the contract, not a transport error
             except Exception as e:  # any transport or node error: back off and try again
                 last = e
                 self.sleep(self.backoff * (2**attempt))
@@ -147,10 +149,26 @@ class ChainReader:
             block_number=n,
             blob_count=self._retry("reading blobCount", lambda: f.blobCount().call(block_identifier=n)),
             head=bytes(self._retry("reading head", lambda: f.head().call(block_identifier=n))),
-            app_pointer=bytes(self._retry("reading appPointer", lambda: f.appPointer().call(block_identifier=n))),
+            app_pointer=self._retry("reading appPointer", lambda: self._read_pointer(n)),
             publisher=self._retry("reading publisher", lambda: f.publisher().call(block_identifier=n)),
             successor=self._retry("reading successor", lambda: f.successor().call(block_identifier=n)),
         )
+
+    def _read_pointer(self, block_number: int) -> str:
+        """The snapshot pointer as the contract stores it. The contract accepts any bytes for
+        it, so a pointer that is not valid UTF-8 is read with replacement characters rather
+        than making the whole record unreadable: the IPFS source then fails to read that
+        snapshot and says so, while the event logs and every other source carry on."""
+        function = self.contract.functions.appPointer()
+        try:
+            pointer = function.call(block_identifier=block_number)
+        except UnicodeDecodeError:
+            raw = bytes(self.w3.eth.call({"to": self.contract.address, "data": function.selector}, block_identifier=block_number))
+            length = int.from_bytes(raw[32:64], "big")   # ABI: offset word, length word, bytes
+            return raw[64:64 + length].decode("utf-8", errors="replace")
+        if not isinstance(pointer, str):
+            raise ChainError(f"the contract at {self.contract.address} returned {type(pointer).__name__} for appPointer, not a string: it does not match this ABI")
+        return pointer
 
     def block_timestamp(self, block_number: int) -> int:
         if block_number not in self._block_timestamps:

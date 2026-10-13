@@ -152,6 +152,10 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       ["Contract", `${addr(cfg.contract || c.contract)}${cfg.explorer ? ` <a href="${esc(cfg.explorer)}" target="_blank" rel="noopener">explorer</a>` : ""}`],
       ["Owner", has ? addr(c.publisher) : pending],
       ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
+      // The snapshot's CID is read from the contract, never from the config, so it can only
+      // be shown once the contract check is done; whether the snapshot is readable shows in
+      // the IPFS row of the blob check.
+      ["IPFS snapshot", has ? (c.snapshotCid ? `${addr(c.snapshotCid)} <a href="https://ipfs.io/ipfs/${esc(c.snapshotCid)}" target="_blank" rel="noopener">gateway</a>` : "none yet") : pending],
       ["Last update", `<span id="ago-upload">${lastUpload}</span>`],
       ["Last health check", `<span id="ago-check">${lastCheck}</span>`],
     ]), "");
@@ -173,7 +177,9 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     const total = s.needed ?? s.blobs;
     const rows = Object.entries(s.matrix).map(([name, m]) => {
       const confirmed = m.neededVerified ?? m.verified;
-      return `<tr><td><span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span></td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
+      const label = `<span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span>`;
+      if (m.skipped) return `<tr><td>${label}</td><td colspan="3" class="sub">not asked: ${esc(m.skipped)}</td></tr>`;
+      return `<tr><td>${label}</td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
     }).join("");
     const missing = (s.neededUnavailable || []).length;
     put("sources", `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
