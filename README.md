@@ -100,17 +100,33 @@ contract = "0x…"                  # the dataset's LoculusEternal contract, fro
 chain_id = 1                      # 1 for Ethereum mainnet, 11155111 for the Sepolia test network
 
 [[sources]]                       # tried in order, add as many as you like
-type = "beacon"                   # Beacon endpoints only hold recent blobs, about 18 days
-endpoints = ["https://beacon.example"]
+type = "beacon"                   # a beacon node only holds recent blobs, about 18 days
+endpoints = ["https://ethereum-beacon-api.publicnode.com"]
 
 [[sources]]
-type = "blobscan"                 # public archive of older blobs
-url = "https://api.blobscan.com"  # Blobscan's real mainnet API (api.sepolia.blobscan.com for Sepolia)
+type = "beacon"                   # Pinax: beacon-shaped archive with every blob since blobs began
+endpoints = ["https://eth.blobs.pinax.network"]
+
+[[sources]]
+type = "blob-archiver"            # BNB Greenfield Blob Hub: another archive back to the start, mainnet only
+url = "https://gnfd-blobhub.bnbchain.org"
+
+[[sources]]
+type = "blockscout"               # Blockscout's explorer archives every blob (eth-sepolia.blockscout.com for Sepolia)
+url = "https://eth.blockscout.com"
+
+[[sources]]
+type = "blobscan"                 # Blobscan's archive, pinned on IPFS (api.sepolia.blobscan.com for Sepolia)
+url = "https://api.blobscan.com"
 
 [[sources]]
 type = "ipfs"                     # copies pinned on IPFS, found through the contract; needs a Kubo node
 endpoints = ["http://127.0.0.1:5001"]
 ```
+
+Every source is public and needs no key. Each one is an independent operator, and every byte
+from any of them is checked against the contract, so a wrong or missing answer from one just
+means the next is asked.
 
 The IPFS source talks to a [Kubo](https://docs.ipfs.tech/install/command-line/) node over its
 RPC API, so it needs a node you run or are allowed to use. The node fetches the blobs from
