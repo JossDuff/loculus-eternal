@@ -157,11 +157,12 @@ means old logs may one day not be served by default nodes, but contract storage 
 always will be, and a hash list obtained from an IPFS snapshot or a friend can be checked
 against `head`.
 
-**The application pointer** is one 32-byte value the publisher sets to the digest of the
-current IPFS snapshot's address. The contract never interprets it. It is a claim, not a proof:
-it tells a consumer what the publisher says the current view is, and lets them notice a stale
-or tampered snapshot served by an intermediary. The verifying path is always to recover the
-stream and decode it locally. **The successor** is a write-once address left as a breadcrumb
+**The application pointer** is the address (the CID) of the current IPFS snapshot, stored
+whole as a string so that the contract alone tells a consumer where the snapshot is. The
+contract never interprets it. It is a claim, not a proof: it tells a consumer what the
+publisher says the current view is, and the snapshot it names is trusted only once its
+blob list reproduces `head`. The verifying path is always to recover the stream and decode
+it locally. **The successor** is a write-once address left as a breadcrumb
 if the contract ever has to be replaced.
 
 ### The container format
@@ -234,7 +235,7 @@ feed, and checks them against the manifest digests.
 Every pinner must derive the same address from the same bytes, so the profile is fixed: each
 blob is one raw IPFS block, and each snapshot is a directory holding the manifest, the
 materialised files, and the container spec, built with fixed chunking parameters. The
-application pointer on-chain is the digest of the snapshot's address. Which nodes pin is
+application pointer on-chain is the snapshot's address itself. Which nodes pin is
 configuration, never code; the runbook recommends two team-operated nodes plus one pinning
 service so that neither a single machine nor the team's infrastructure is a single point of
 failure.

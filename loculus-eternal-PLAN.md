@@ -167,11 +167,11 @@ contract LoculusEternal {
     address public publisher;             // rotatable by the current publisher
     uint64  public blobCount;             // blobs ever published
     bytes32 public head;                  // hash chain: keccak256(head ‖ versionedHash), starting from 0
-    bytes32 public appPointer;            // digest of the current IPFS snapshot CID; never interpreted
+    string  public appPointer;            // the current IPFS snapshot's CID, whole; never interpreted
     address public successor;             // write-once migration breadcrumb
 
     event BlobPublished(uint64 indexed seq, bytes32 versionedHash);
-    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, bytes32 appPointer);
+    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, string appPointer);
     event SuccessorSet(address successor);
     event PublisherChanged(address previous, address current);
 
@@ -181,8 +181,8 @@ contract LoculusEternal {
     /// blob. `lastBlobChunkCount` says how many 31-byte chunks of the final blob are data (a
     /// partially filled final blob is otherwise ambiguous). `isBatchEnd` + `newAppPointer` mark
     /// batch completion on-chain so a consumer can know the stream is coherent without parsing it.
-    function publish(uint64 expectedFirstSeq, uint32 lastBlobChunkCount, bool isBatchEnd, bytes32 newAppPointer) external;
-    function setAppPointer(bytes32 p) external;       // publisher only; standalone re-point
+    function publish(uint64 expectedFirstSeq, uint32 lastBlobChunkCount, bool isBatchEnd, string calldata newAppPointer) external;
+    function setAppPointer(string calldata p) external; // publisher only; standalone re-point
     function setSuccessor(address s) external;        // publisher only; write-once
     function setPublisher(address p) external;        // publisher only; nonzero; emits PublisherChanged
 }
@@ -334,10 +334,11 @@ Every pinner must derive identical CIDs from identical bytes, so the profile is 
   files **compressed with zstd** (decided 2026-10-05: the plain files are 14 GB and share
   almost nothing between snapshots, so pinners would carry 14 GB per upload; compressed they
   are about 40 MB), and the container spec. Chunker `size-262144`, CIDv1, raw leaves,
-  sha2-256. The `appPointer` on-chain is the sha256 of the snapshot CID's bytes. The current
-  snapshot CID is announced off-chain (run report, public page) and verified against the
-  pointer; the per-blob CIDs cannot be derived from versioned hashes, so IPFS-only recovery
-  starts from the snapshot. Decided 2026-10-05: once the batch carrying a new pointer is
+  sha2-256. The `appPointer` on-chain is the snapshot CID itself, as a string (decided
+  2026-10-12; it was the sha256 of the CID's bytes before, which meant the CID had to be
+  announced off-chain and configured by every reader, and went stale at every publish). The
+  per-blob CIDs cannot be derived from versioned hashes, so IPFS-only recovery starts from
+  the snapshot the contract names. Decided 2026-10-05: once the batch carrying a new pointer is
   final, the previous snapshot is unpinned on every endpoint that holds the new one, so a
   node carries every blob object and one snapshot.
 - Implementation: Kubo RPC API. Pinning targets are configuration.
@@ -602,6 +603,16 @@ its inputs from the config file. A full materialisation stays the recovery comma
 Backend counts were shown at first and removed the same day: the page judges the record on
 its own, independent of the live database, and leads with the contract and publisher
 addresses, the last upload, blob and IPFS verification, and the time of the last check.
+
+**Snapshot pointer — DECIDED 2026-10-12: the contract stores the snapshot CID whole, as a
+string.** Until then `appPointer` was the sha256 of the CID's bytes, so the CID had to be
+learned off-chain and was hard-coded in every reader's configuration, where it went stale at
+every publish. Storing the string costs a few storage slots per batch end (cents) and a
+larger contract, and means the pointer is not readable from a fixed storage slot without an
+ABI; in return the contract alone says where the snapshot is, with no derivation rule for a
+future reader to know. No configuration carries a CID any more: the upload, recovery and
+health commands read it from the contract at the start of every run. Redeployed on Sepolia
+for this; the contract is still draft until the campaign ends.
 
 **Hosting — DEFERRED 2026-09-30 to before mainnet genesis.** The upload command is a plain
 CLI with file and environment configuration so it can run anywhere. Likely answer: a
