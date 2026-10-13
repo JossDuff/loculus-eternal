@@ -155,7 +155,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       // The snapshot's CID is read from the contract, never from the config, so it can only
       // be shown once the contract check is done; whether the snapshot is readable shows in
       // the IPFS row of the blob check.
-      ["IPFS snapshot", has ? (c.snapshotCid ? `${mono(c.snapshotCid)} <a href="https://ipfs.io/ipfs/${esc(c.snapshotCid)}" target="_blank" rel="noopener">gateway</a>` : "none yet") : pending],
+      ["IPFS snapshot", has ? (c.snapshotCid ? `${addr(c.snapshotCid)} <a href="https://ipfs.io/ipfs/${esc(c.snapshotCid)}" target="_blank" rel="noopener">gateway</a>` : "none yet") : pending],
       ["Last update", `<span id="ago-upload">${lastUpload}</span>`],
       ["Last health check", `<span id="ago-check">${lastCheck}</span>`],
     ]), "");
