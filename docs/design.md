@@ -2,8 +2,8 @@
 
 This document is the *why*. It explains what problem Loculus Eternal solves for Pathoplexus,
 what it promises, what it deliberately does not promise, and why each design choice was made.
-The normative *what* lives in `docs/container-spec.md`, `docs/contract.md` and
-`docs/ipfs-profile.md`; the roadmap and the dated record of every decision live in
+The normative *what* lives in `spec/container-spec.md`, `spec/contract.md` and
+`spec/ipfs-profile.md`; the roadmap and the dated record of every decision live in
 `loculus-eternal-PLAN.md`.
 
 ## The problem
@@ -110,7 +110,7 @@ nucleotide sequences, insertions, and aligned amino-acid sequences. Four metadat
 removed because they change over time without a new version and are derivable: the entry's
 status relative to later versions, and the three data-use-terms fields, which are always the
 open-data values for anything we publish. The exact schema is pinned in
-`docs/container-spec.md`.
+`spec/container-spec.md`.
 
 Why publish the pipeline-produced fields at all, when only the submitted material is
 immutable? Because the point of a backup is that someone can use it. A copy that already

@@ -1,32 +1,38 @@
-# Loculus Eternal configuration for the Sepolia campaign. Copy to loculus-eternal.toml in the
+# Example Loculus Eternal configuration for Sepolia test network. Copy to loculus-eternal.toml in the
 # repository checkout (tooling_paths and spec_path are relative to this file) and fill in the
 # four marked lines. The publisher private key is never in this file: export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY.
 
 [chain]
-rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"   # ${NAME} is read from the environment, so no key lives in this file
-contract = "0x0000000000000000000000000000000000000000"   # CHANGE: after deployment
+rpc_url = "https://sepolia.infura.io/v3/${RPC_API}"     # ${NAME} is read from the environment, so no key lives in this file
+contract = "0x0000000000000000000000000000000000000000" # CHANGE: after deployment
 chain_id = 11155111
-max_requests_per_second = 5                    # Infura's free tier meters requests; spaced and retried
-deployment_block = 0                           # CHANGE: the block the contract was deployed in
+max_requests_per_second = 5                             # Infura's free tier meters requests; spaced and retried
+deployment_block = 0                                    # CHANGE: the block the contract was deployed in
 
 [backend]
 url = "https://backend.pathoplexus.org"
-organisms = "all"                              # every organism the backend serves, asked each run; or a list of names
+organisms = "all"                       # every organism the backend serves, asked each run; or a list of names
 
 [upload]
 data_dir = "upload-data"
-tooling_paths = ["docs/container-spec.md", "docs/contract.md", "docs/ipfs-profile.md",
-                 "src/loculus_eternal/**/*.py", "pyproject.toml", "uv.lock"]
-max_blob_fee_gwei = 50                         # Sepolia blob fees are noisy; the campaign measures them
+tooling_paths = [
+    "docs/container-spec.md",
+    "docs/contract.md",
+    "docs/ipfs-profile.md",
+    "src/loculus_eternal/**/*.py",
+    "pyproject.toml",
+    "uv.lock",
+]
+max_blob_fee_gwei = 50 # Sepolia blob fees are noisy; the campaign measures them
 max_priority_fee_gwei = 1
 inclusion_timeout_blocks = 6
 escalation_attempts = 8
-max_in_flight = 8                              # transactions sent before the first is included
-max_blobs_per_transaction = 6                  # the protocol's cap since Fusaka; re-check at each fork
+max_in_flight = 8 # transactions sent before the first is included
+max_blobs_per_transaction = 6 # the protocol's cap since Fusaka; re-check at each fork
 finality_timeout_seconds = 1800
 
 [ipfs]
-endpoints = ["http://127.0.0.1:5001"]          # CHANGE: the team Kubo nodes
+endpoints = ["http://127.0.0.1:5001"] # CHANGE: the team Kubo nodes
 spec_path = "docs/container-spec.md"
 required = false
 
@@ -39,7 +45,9 @@ manifest_sources = ["logs"]
 # so order is about speed and cost, not trust.
 [[sources]]
 type = "beacon"
-endpoints = ["https://ethereum-sepolia-beacon-api.publicnode.com"]   # recent blobs; Blobscan below has the history
+endpoints = [
+    "https://ethereum-sepolia-beacon-api.publicnode.com",
+] # recent blobs; Blobscan below has the history
 
 [[sources]]
 type = "blobscan"
@@ -47,4 +55,6 @@ url = "https://api.sepolia.blobscan.com"
 
 [[sources]]
 type = "ipfs"
-endpoints = ["http://127.0.0.1:5001"]          # reads the snapshot the contract names; no CID is ever configured
+endpoints = [
+    "http://127.0.0.1:5001",
+] # reads the snapshot the contract names; no CID is ever configured

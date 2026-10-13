@@ -58,7 +58,7 @@ IPFS profile are frozen.
 8. **Write it up.** Fill in `docs/testnet-report.md`: costs, timings, every operational
    surprise, and what should change before mainnet.
 
-9. **Freeze.** Mark `docs/container-spec.md`, `docs/contract.md` and `docs/ipfs-profile.md`
+9. **Freeze.** Mark `spec/container-spec.md`, `spec/contract.md` and `spec/ipfs-profile.md`
    as frozen, bump the package version, and tag the release. The tooling records in the
    mainnet genesis will carry that version.
 

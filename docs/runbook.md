@@ -46,14 +46,14 @@ One run does, in order:
 
    [upload]
    data_dir = "upload-data"                      # local state; keep it, but losing it is survivable
-   tooling_paths = ["docs/container-spec.md", "docs/contract.md", "docs/ipfs-profile.md",
+   tooling_paths = ["spec/container-spec.md", "spec/contract.md", "spec/ipfs-profile.md",
                     "src/loculus_eternal/**/*.py", "pyproject.toml", "uv.lock"]
    max_blob_fee_gwei = 5                         # refuse to publish when blob space is pricier than this
    max_priority_fee_gwei = 1
 
    [ipfs]                                        # optional: Kubo RPC endpoints that pin every blob and snapshot
    endpoints = ["http://kubo-1:5001", "http://kubo-2:5001"]
-   spec_path = "docs/container-spec.md"          # included in every snapshot
+   spec_path = "spec/container-spec.md"          # included in every snapshot
    required = false                              # true: refuse to publish when no endpoint takes the snapshot
 
    [[sources]]                                   # where the command gets the published stream back from
@@ -111,7 +111,7 @@ between, from another machine or by someone else with the key. Just run again; t
 will see what they published and publish only the rest.
 
 **"released line has an unexpected shape"**: the backend's data format changed. Do not
-publish until someone has reviewed the pinned schema in `docs/container-spec.md` and updated
+publish until someone has reviewed the pinned schema in `spec/container-spec.md` and updated
 the code. This check exists so that a format change is caught here and not in the permanent
 record.
 

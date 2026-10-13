@@ -71,7 +71,7 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **C10 — standalone re-point.** `setAppPointer` replaces the pointer whole, so a shorter CID leaves nothing of a longer one behind, and emits `AppPointerSet` without touching the record.
 - **C11 — constructor.** Deployment rejects a zero publisher and emits `PublisherChanged(0, publisher)`; the record starts empty with `head` zero and no pointer.
 - **C12 — invariant.** Under random publishes, rotations and rejected calls, `head` always equals the chain over the blobs the contract accepted and `blobCount` equals their number (handler-based invariant test).
-- **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `docs/contract.md`.
+- **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `spec/contract.md`.
 - **C14 — real blob transactions.** On anvil, `publish` called from a real type-3 transaction records the blobs' versioned hashes exactly as computed off-chain from the blob bytes (covered in the anvil harness phase).
 
 ### K — KZG and harness
