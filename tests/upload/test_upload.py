@@ -26,12 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def bulky_line(organism: str, accession: str) -> dict:
-    """A released line whose sequence is pseudo-random, so it stays large after zstd: nine of
-    these make a batch of more than six blobs, which is what the multi-transaction tests need."""
+    """A released line whose sequence is pseudo-random, so it stays large after zstd: about
+    0.8 of a blob each, so four of them make a batch of more than two blobs, which with the
+    world's cap of two blobs per transaction is what the multi-transaction tests need."""
     import random
 
     rng = random.Random(accession)
-    seq = "".join(rng.choice("ACGT") for _ in range(400_000))
+    seq = "".join(rng.choices("ACGT", k=400_000))
     line = released_line(organism, accession, 1)
     line["unalignedNucleotideSequences"] = {"main": seq}
     line["alignedNucleotideSequences"] = {"main": seq}
@@ -93,6 +94,7 @@ max_blob_fee_gwei = 5
 inclusion_timeout_blocks = 3
 escalation_attempts = 4
 finality_timeout_seconds = 60
+max_blobs_per_transaction = 2   # so a few hundred kilobytes make a multi-transaction batch
 
 [recover]
 data_dir = "{tmp_path / 'recovery-data'}"
@@ -200,7 +202,7 @@ def test_U4_dry_run_refuses_wrong_key_low_balance_and_high_blob_fee(world):
 
 def test_U5_interrupted_multi_transaction_batch_resumes_from_the_journal(world, tmp_path):
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(9)])  # more than six blobs: two transactions
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(4)])  # more than two blobs: two transactions
     up = uploader(world)
 
     def crash_after_first(tx):
@@ -214,17 +216,17 @@ def test_U5_interrupted_multi_transaction_batch_resumes_from_the_journal(world, 
     journal = json.loads((data_dir / "journal.json").read_text())
     assert [t["status"] for t in journal["txs"]] == ["sent", "planned"]
     time.sleep(0.5)
-    assert anvil.contract.functions.blobCount().call() == 6, "the first transaction landed before the crash"
+    assert anvil.contract.functions.blobCount().call() == 2, "the first transaction landed before the crash"
 
     resumed = uploader(world).run()
     assert resumed.outcome in ("resumed", "nothing-to-publish") and len(resumed.transactions) == 2
     assert [t["attempts"] for t in resumed.transactions] == [1, 1]
-    assert anvil.contract.functions.blobCount().call() == resumed.chain["blobCount"] and anvil.contract.functions.blobCount().call() > 6
+    assert anvil.contract.functions.blobCount().call() == resumed.chain["blobCount"] and anvil.contract.functions.blobCount().call() > 2
     assert not (data_dir / "journal.json").exists() and list((data_dir / "done").glob("*.json"))
     register_in_archive(world, resumed)
     report = recover(world, tmp_path)
     assert report.missing == [] and report.decode["allArtifactsMatch"] and report.decode["torn"] == []
-    assert report.decode["files"]["mpox"]["entries"] == 9
+    assert report.decode["files"]["mpox"]["entries"] == 4
 
 
 def test_U6_unincluded_transaction_is_replaced_with_higher_fees(world):
@@ -262,7 +264,7 @@ def test_U7_blobs_enter_the_local_store_only_after_finality(world):
 
 def test_U8_torn_batch_with_lost_journal_is_skipped_and_the_stream_stays_decodable(world, tmp_path):
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_T{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_T{i}") for i in range(4)])
     up = uploader(world)
 
     def crash(tx):
@@ -273,7 +275,7 @@ def test_U8_torn_batch_with_lost_journal_is_skipped_and_the_stream_stays_decodab
     with pytest.raises(KeyboardInterrupt):
         up.run()
     time.sleep(0.5)
-    assert anvil.contract.functions.blobCount().call() == 6
+    assert anvil.contract.functions.blobCount().call() == 2
     # The journal and pending blobs are lost (new machine, wiped directory).
     lost = tmp_path / "lost"
     world["cfg_path"].write_text(world["cfg_path"].read_text().replace(str(tmp_path / "upload-data"), str(lost)))
@@ -286,23 +288,23 @@ def test_U8_torn_batch_with_lost_journal_is_skipped_and_the_stream_stays_decodab
     world["archive"].add(slot, pairs)
 
     fresh = uploader(world).run()
-    assert fresh.outcome == "published" and fresh.chain["tornBlobs"] == 6
-    assert fresh.batch["batch"] == 0 and fresh.batch["firstBlobSeq"] == 6
-    assert anvil.contract.functions.blobCount().call() == 6 + fresh.batch["blobs"]
-    assert "6 of them from an abandoned upload" in fresh.message
+    assert fresh.outcome == "published" and fresh.chain["tornBlobs"] == 2
+    assert fresh.batch["batch"] == 0 and fresh.batch["firstBlobSeq"] == 2
+    assert anvil.contract.functions.blobCount().call() == 2 + fresh.batch["blobs"]
+    assert "2 of them from an abandoned upload" in fresh.message
     register_in_archive(world, fresh)
     report = recover(world, tmp_path)
     assert report.missing == []
-    assert [t["first_blob"] for t in report.decode["torn"]] == [0] and report.decode["torn"][0]["last_blob"] == 5
-    assert report.decode["allArtifactsMatch"] and report.decode["files"]["mpox"]["entries"] == 9
+    assert [t["first_blob"] for t in report.decode["torn"]] == [0] and report.decode["torn"][0]["last_blob"] == 1
+    assert report.decode["allArtifactsMatch"] and report.decode["files"]["mpox"]["entries"] == 4
 
     # The network forgets the torn blobs, all but blob 0 which holds the stream header.
     with world["archive"]._lock:
         for vh, _ in pairs[1:]:
             del world["archive"].blobs[vh]
     again = recover(world, tmp_path / "second")
-    assert sorted(m["seq"] for m in again.missing) == [1, 2, 3, 4, 5] and all(m["needed"] is False for m in again.missing)
-    assert again.missing_needed == [] and again.decode["allArtifactsMatch"] and again.decode["files"]["mpox"]["entries"] == 9
+    assert sorted(m["seq"] for m in again.missing) == [1] and all(m["needed"] is False for m in again.missing)
+    assert again.missing_needed == [] and again.decode["allArtifactsMatch"] and again.decode["files"]["mpox"]["entries"] == 4
     # A later upload from yet another machine still learns the published set.
     world["cfg_path"].write_text(world["cfg_path"].read_text().replace(str(lost), str(tmp_path / "third")))
     world["backend"].add("mpox", released_line("mpox", "PP_T_LATE", 1))
@@ -373,7 +375,7 @@ def test_U12_batch_end_carries_the_existing_pointer_forward(world):
 
 
 def test_U3_check_refuses_while_an_interrupted_batch_is_waiting(world):
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_C{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_C{i}") for i in range(4)])
     up = uploader(world)
 
     def crash(tx):
@@ -431,7 +433,7 @@ def test_U5_finished_journal_left_by_a_crash_is_completed_not_an_error(world):
 
 def test_U9_another_upload_mid_batch_sets_the_batch_aside(world):
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_R{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_R{i}") for i in range(4)])
     up = uploader(world)
 
     def race_after_first(tx):
@@ -477,7 +479,7 @@ def test_U9_another_upload_mid_batch_sets_the_batch_aside(world):
         s_receipt, s_hashes = results[0]
         s_slot = anvil.w3.eth.get_block(s_receipt["blockNumber"])["timestamp"]
         world["archive"].add(s_slot, list(zip(s_hashes, blobs)))
-    # Our own six blobs are gone with the pending files; regenerate them deterministically
+    # Our own two blobs are gone with the pending files; regenerate them deterministically
     # from the same inputs, exactly as the encoder did.
     from loculus_eternal.format.encode import StreamEncoder
     from loculus_eternal.format.records import CODEC_ZSTD
@@ -491,13 +493,13 @@ def test_U9_another_upload_mid_batch_sets_the_batch_aside(world):
     cfg = configuration.load(world["cfg_path"])
     tooling_files = [(p.relative_to(cfg.path.parent).as_posix(), p.read_bytes()) for pat in cfg.upload.tooling_paths for p in sorted(cfg.path.parent.glob(pat))]
     regenerated = StreamEncoder(anvil.chain_id, bytes.fromhex(anvil.contract.address[2:])).encode_batch(entries, tooling=tooling_files, codec=CODEC_ZSTD)
-    ours = [(_kzg.blob_to_versioned_hash(b), b) for b in regenerated.blobs[:6]]
+    ours = [(_kzg.blob_to_versioned_hash(b), b) for b in regenerated.blobs[:2]]
     assert ["0x" + vh.hex() for vh, _ in ours] == first["versioned_hashes"], "regenerated blobs match what was published"
     world["archive"].add(slot, ours)
 
     fresh = uploader(world).run()
     assert fresh.outcome == "published", fresh.message
-    assert fresh.chain["tornBlobs"] == 7 and fresh.batch["firstBlobSeq"] == 7
+    assert fresh.chain["tornBlobs"] == 3 and fresh.batch["firstBlobSeq"] == 3
 
 
 def test_U13_chain_id_mismatch_is_a_configuration_error(world):
@@ -536,7 +538,7 @@ def test_U14_vanished_entries_are_reported_and_withdrawn_only_on_confirmation(wo
 
 def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_P{i}") for i in range(14)])  # more than twelve blobs: three transactions
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_P{i}") for i in range(6)])  # more than four blobs: three transactions
     up = uploader(world)
     up.submitter.policy.max_in_flight = 2
     sent_at = []
@@ -597,7 +599,7 @@ def test_U16_an_organism_left_out_of_a_configured_list_is_not_reported_vanished(
 
 
 def test_U18_batch_end_transaction_waits_for_its_predecessors_and_gets_its_own_estimate(world, tmp_path):
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_E{i}") for i in range(9)])  # two transactions
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_E{i}") for i in range(4)])  # two transactions
     up = uploader(world)
     simulated = []
     original = up.submitter.simulate
@@ -620,7 +622,7 @@ def test_U19_a_revert_that_moved_nothing_is_resent_not_abandoned(world, tmp_path
     """The batch-end transaction is sent with too little gas on purpose: it reverts on chain
     without touching the contract, and the submitter sends it again with a fresh estimate."""
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_G{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_G{i}") for i in range(4)])
     up = uploader(world)
     starved = []
 
@@ -649,9 +651,9 @@ def test_U19_a_mid_batch_revert_does_not_take_the_transactions_behind_it_down(wo
     already in flight, reverts on the sequence guard behind it (the fourth is the batch end
     and waits). The contract never moved, so both are sent again and the batch completes."""
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_M{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_M{i}") for i in range(5)])
     up = uploader(world)
-    up.submitter.policy.max_blobs_per_transaction = 2  # eight or so blobs: four transactions
+    up.submitter.policy.max_blobs_per_transaction = 1  # four or more blobs: four or more transactions
     starved = []
 
     def starve_second_once(tx):
@@ -676,7 +678,7 @@ def test_U20_an_abandoned_batch_ends_the_run_and_keeps_its_blobs(world):
     """Another upload with the same key breaks the batch mid-way: the run reports failure,
     keeps the journal and blob files under abandoned/, and plans nothing more."""
     anvil = world["anvil"]
-    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_K{i}") for i in range(9)])
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_K{i}") for i in range(4)])
     up = uploader(world)
 
     def race(tx):
