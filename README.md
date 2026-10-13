@@ -49,6 +49,15 @@ gas schedule.
 
 ### 2. Upload data (repeatable)
 
+> **Where the data comes from.** `upload` reads it live from the Loculus backend named in
+the config's `[backend]` section: the `url` of the backend and the `organisms` to publish,
+either `"all"` or a list of names. For each organism it downloads the backend's released-data
+feed, the same feed the Loculus website serves its downloads from. The feed is cached in the upload data directory by ETag, so an
+organism that has not changed since the last run is not downloaded again. From the feed it
+keeps only entries whose data use terms are OPEN, drops the four bookkeeping fields about
+version status and data use terms, and publishes every entry that is not on the chain yet. A
+restricted entry is published only when it turns open.
+
 Copy the example config into the repository directory and fill in the lines marked CHANGE,
 including the contract address and deployment block from the step above:
 
