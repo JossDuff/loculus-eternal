@@ -24,9 +24,11 @@ contract LoculusEternal {
     /// keccak256(head ‖ versionedHash) for each blob appended.
     bytes32 public head;
 
-    /// @notice The publisher's claim of where the current IPFS snapshot lives, as the
-    /// SHA-256 of the snapshot CID's bytes. Never interpreted by the contract.
-    bytes32 public appPointer;
+    /// @notice The publisher's claim of where the current IPFS snapshot lives: the snapshot's
+    /// CID, as a reader would paste it into a gateway. Stored whole so that nothing but this
+    /// contract is needed to find the snapshot. Empty until the first batch is committed.
+    /// Never interpreted by the contract.
+    string public appPointer;
 
     /// @notice A write-once breadcrumb to a replacement deployment, if one is ever needed.
     address public successor;
@@ -36,9 +38,9 @@ contract LoculusEternal {
 
     /// @notice Emitted by the transaction that completes a batch. `lastBlobChunkCount` says
     /// how many 31-byte chunks of blob `lastSeq` carry data.
-    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, bytes32 appPointer);
+    event BatchCommitted(uint64 firstSeq, uint64 lastSeq, uint32 lastBlobChunkCount, string appPointer);
 
-    event AppPointerSet(bytes32 appPointer);
+    event AppPointerSet(string appPointer);
     event SuccessorSet(address successor);
     event PublisherChanged(address indexed previous, address indexed current);
 
@@ -70,8 +72,9 @@ contract LoculusEternal {
     ///        1 to 4096. Blobs that are not the last of their batch are always full (4096).
     /// @param isBatchEnd True when this transaction completes a batch; the stream is then
     ///        coherent up to and including these blobs.
-    /// @param newAppPointer The new snapshot pointer, applied only when `isBatchEnd` is true.
-    function publish(uint64 expectedFirstSeq, uint32 lastBlobChunkCount, bool isBatchEnd, bytes32 newAppPointer)
+    /// @param newAppPointer The CID of the snapshot built for this batch, applied only when
+    ///        `isBatchEnd` is true.
+    function publish(uint64 expectedFirstSeq, uint32 lastBlobChunkCount, bool isBatchEnd, string calldata newAppPointer)
         external
         onlyPublisher
     {
@@ -100,7 +103,7 @@ contract LoculusEternal {
     }
 
     /// @notice Re-point the snapshot claim without publishing anything.
-    function setAppPointer(bytes32 newAppPointer) external onlyPublisher {
+    function setAppPointer(string calldata newAppPointer) external onlyPublisher {
         appPointer = newAppPointer;
         emit AppPointerSet(newAppPointer);
     }

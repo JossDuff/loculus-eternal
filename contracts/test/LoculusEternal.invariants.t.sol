@@ -19,7 +19,7 @@ contract Handler is Test {
         publisher = publisher_;
     }
 
-    function publish(uint8 count, uint64 wrongSeq, bool useWrongSeq, uint32 chunks, bool batchEnd, bytes32 pointer) external {
+    function publish(uint8 count, uint64 wrongSeq, bool useWrongSeq, uint32 chunks, bool batchEnd, string calldata pointer) external {
         uint256 n = bound(count, 0, 7);
         bytes32[] memory hs = new bytes32[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -54,7 +54,7 @@ contract Handler is Test {
         hs[0] = bytes32(uint256(0x01) << 248 | uint256(1));
         vm.blobhashes(hs);
         vm.prank(who);
-        try record.publish(record.blobCount(), chunks, true, bytes32(0)) {
+        try record.publish(record.blobCount(), chunks, true, "") {
             revert("a stranger published");
         } catch {
             rejected++;

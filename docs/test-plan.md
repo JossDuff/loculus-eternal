@@ -66,9 +66,9 @@ Each family's tests fall into these layers, listed from cheapest to most expensi
 - **C5 — sequence guard.** A call whose `expectedFirstSeq` differs from `blobCount` reverts and changes nothing.
 - **C6 — authorization.** Only the current publisher can call `publish`, `setAppPointer`, `setSuccessor` or `setPublisher`.
 - **C7 — write-once successor.** `setSuccessor` rejects the zero address, succeeds once, and reverts forever after.
-- **C8 — batch end.** With `isBatchEnd` true the call sets `appPointer` and emits `BatchCommitted(firstSeq, lastSeq, lastBlobChunkCount, appPointer)`; with it false the pointer is untouched and no commit event is emitted.
+- **C8 — batch end.** With `isBatchEnd` true the call stores the snapshot CID whole as `appPointer` and emits `BatchCommitted(firstSeq, lastSeq, lastBlobChunkCount, appPointer)`; with it false the pointer is untouched and no commit event is emitted.
 - **C9 — publisher rotation.** `setPublisher` rejects the zero address, emits `PublisherChanged(previous, current)`, and the previous key loses access immediately.
-- **C10 — standalone re-point.** `setAppPointer` updates the pointer and emits `AppPointerSet` without touching the record.
+- **C10 — standalone re-point.** `setAppPointer` replaces the pointer whole, so a shorter CID leaves nothing of a longer one behind, and emits `AppPointerSet` without touching the record.
 - **C11 — constructor.** Deployment rejects a zero publisher and emits `PublisherChanged(0, publisher)`; the record starts empty with `head` zero.
 - **C12 — invariant.** Under random publishes, rotations and rejected calls, `head` always equals the chain over the blobs the contract accepted and `blobCount` equals their number (handler-based invariant test).
 - **C13 — size.** Runtime bytecode stays well under the contract size limit; the number is recorded in `docs/contract.md`.
