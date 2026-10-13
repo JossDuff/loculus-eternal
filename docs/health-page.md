@@ -15,8 +15,9 @@ check over today's stream takes well under a minute. To rebuild the files, run
 ## What one check does
 
 The page has two boxes. **Overview**: the contract, the owner (the publisher, the only
-key that can publish), the network, how long ago the last upload landed and how long ago
-this check ran; the addresses copy with one click, and nothing on the page links out, so
+key that can publish), the network, the size of the dataset raw and compressed (from the
+batch headers; nothing is materialised for it), how long ago the last upload landed and how
+long ago this check ran; the addresses copy with one click, and nothing on the page links out, so
 a reader looks an address up where they choose. **Blob check**: one row per configured blob
 source with a check or a cross for whether the dataset is recoverable from it, a check or a
 cross for whether it was reachable, and how many of the blobs a reader needs it served and
