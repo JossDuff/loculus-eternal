@@ -122,6 +122,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const n = v => v === null || v === undefined ? "—" : Number(v).toLocaleString();
+  const size = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b >= 1e3 ? `${Math.round(b / 1e3)} kB` : `${b} bytes`;
   const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;
@@ -148,10 +149,14 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
     // state; until then, during a run, it is still pending rather than "none yet".
     const lastUpload = c.lastPublishTimestamp ? ago(now() - c.lastPublishTimestamp) : c.lastPublishBlock ? `block ${n(c.lastPublishBlock)}` : has && !r.running ? "none yet" : pending;
     const lastCheck = r.finished_at ? ago(now() - r.finished_at) : r.running ? "running now" : "never";
+    // The size comes from the batch headers, read when the blob check walks the structure.
+    const st = r.stream || {};
+    const sizeRow = st.rawBytes !== undefined ? `${size(st.rawBytes)}, ${size(st.compressedBytes)} compressed` : st.batches === 0 ? "nothing published yet" : pending;
     put("overview", dl([
       ["Contract", addr(cfg.contract || c.contract)],
       ["Owner", has ? addr(c.publisher) : pending],
       ["Network", `${esc(cfg.network || "")}${cfg.chainId ? ` <span class="sub">(chain id ${esc(cfg.chainId)})</span>` : ""}`],
+      ["Size", sizeRow],
       ["Last update", `<span id="ago-upload">${lastUpload}</span>`],
       ["Last health check", `<span id="ago-check">${lastCheck}</span>`],
     ]), "");

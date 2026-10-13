@@ -119,6 +119,7 @@ def test_H1_a_sound_deployment_is_recoverable(world):
     assert r.sources["verifiedFromAnySource"] == r.sources["blobs"] and r.sources["unavailable"] == []
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
     assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
+    assert r.stream["rawBytes"] == sum(b["uncompressedBytes"] for b in r.stream["batchList"]) > r.stream["compressedBytes"] > 0, "the size comes from the batch headers"
     assert not hasattr(r, "ipfs"), "IPFS is checked as a blob source, not separately"
     assert r.chain["snapshotCid"] == world["snapshot"], "the snapshot CID comes from the contract"
     assert r.sources["needed"] == r.sources["blobs"] and all(m["complete"] and m["reachable"] for m in r.sources["matrix"].values())
