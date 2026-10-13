@@ -13,10 +13,11 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
 
 For the Loculus dataset maintainer. You'll need:
 
-- [uv](https://docs.astral.sh/uv/) and, for the one-time deployment, [Foundry](https://getfoundry.sh/)
+- [uv](https://docs.astral.sh/uv/)
+- for the one-time deployment, [Foundry](https://getfoundry.sh/)
 - an Ethereum RPC endpoint ([dRPC](https://drpc.org/chainlist/ethereum-mainnet-rpc), [Alchemy](https://www.alchemy.com/), [Infura](https://www.infura.io/), etc)
-- a wallet that holds some Ether on the network you publish to; its private key is the publisher private key below
-- optional: a [Kubo](https://docs.ipfs.tech/install/command-line/) IPFS node you control, reachable over its RPC API (`http://127.0.0.1:5001` by default). The upload then adds and pins every blob and a snapshot of the dataset there as well. Without it the blobs live only where Ethereum and the public archives keep them.
+- a wallet that holds some Ether on the network you publish to.  Its private key is the publisher private key below
+- optional: a [Kubo](https://docs.ipfs.tech/install/command-line/) IPFS node you control, reachable over its RPC API (`http://127.0.0.1:5001` by default). The `upload` then adds and pins every blob and a snapshot of the dataset there as well. Without it the blobs live only where Ethereum and the public archives keep them.
 
 Start by cloning the repository:
 
@@ -27,13 +28,13 @@ cd loculus-eternal
 
 ### 1. Deploy the contract (once)
 
-Each dataset gets one `LoculusEternal` contract, deployed once and never changed. The wallet
+Each dataset gets one `LoculusEternal` contract, deployed once onto Ethereum and never changed. The wallet
 you name as the publisher is the only one that can ever publish to it.
 
 ```
 export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
 cd contracts
-PUBLISHER=0x…your wallet address… forge script script/Deploy.s.sol \
+LOCULUS_ETERNAL_PUBLISHER_PUBLIC_KEY=0x…your wallet address… forge script script/Deploy.s.sol \
   --rpc-url "https://your-ethereum-rpc" \
   --private-key "$LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY" \
   --broadcast
@@ -166,8 +167,7 @@ Use the [health check](#health-check)!
 
 ### How much does this cost?
 
-For the Pathoplexus dataset, measured in 2026: about 15 GB of released data compresses to
-under 50 MB, which is about 375 blobs in 63 transactions.
+For the [Pathoplexus](https://pathoplexus.org/) dataset, measured in 2026: about 15 GB of released data compresses to under 50 MB, which is about 375 blobs in 63 transactions.
 
 - **As blobs**, at the usual blob price of well under 0.1 gwei, the whole thing costs a few
   hundredths of an ETH, mostly ordinary transaction fees: tens of dollars. At 1 gwei, a busy
@@ -188,7 +188,7 @@ blobs. No compression dictionary is used; each batch stands on its own, so a rea
 nothing but the blobs. Batches are self-describing: every batch carries a header, a manifest
 with the digest of every file it produces, and now and then an index so a reader need not
 replay the whole stream. Nothing is ever deleted. An entry that Loculus later withdraws stays
-in the blobs forever, but a withdrawal record tells every reader to leave it out of the
+in the blobs forever, but a withdrawal record tells every `recover` to leave it out of the
 files it produces.
 
 ## License
