@@ -93,6 +93,11 @@ class Report:
         return dict(self.__dict__)
 
 
+def _empty_counts(asked: int = 0) -> dict:
+    """One source's row before anything is fetched from it."""
+    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": asked}
+
+
 class HealthCheck:
     def __init__(self, config: Config, *, log: Callable[[str], None] | None = None, progress: Callable[[dict], None] | None = None, w3=None):
         self.cfg = config
@@ -250,7 +255,7 @@ class HealthCheck:
             elif isinstance(src, IpfsSource) and not state.app_pointer:
                 skipped = "the contract names no IPFS snapshot yet"
             if skipped:
-                matrix[name] = {"skipped": skipped, "verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": 0}
+                matrix[name] = {**_empty_counts(), "skipped": skipped}
                 log(f"{name}: not asked, {skipped}")
                 continue
             # Re-read the structure only when something new arrived since the last walk.
@@ -259,7 +264,7 @@ class HealthCheck:
                 dead = read_structure(blobs).dead_blobs()
                 in_hand = have
             to_ask = [r for r in refs if r.seq not in dead]
-            counts = {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": len(to_ask)}
+            counts = _empty_counts(asked=len(to_ask))
             log(f"fetching {len(to_ask)} blob(s) from {name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
             groups: dict[tuple, list[BlobRef]] = {}
             for r in to_ask:
