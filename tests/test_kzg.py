@@ -94,3 +94,16 @@ def test_K3_non_canonical_blob_raises_kzg_error_everywhere(mainnet_blob):
         kzg.compute_opening(bytes(bad), 0)
     with pytest.raises(kzg.KzgError):
         kzg.cells_and_proofs(bytes(bad))
+
+
+def test_K8_the_signer_loads_the_trusted_setup_once_per_process():
+    import eth_account.typed_transactions.base as signer_internals
+    from eth_account import Account
+
+    account = Account.create()
+    blob = pack_blobs(b"\x07" * 100)[0]
+    tx = {"type": 3, "chainId": 1, "to": "0x" + "11" * 20, "value": 0, "data": b"", "gas": 100_000, "maxFeePerGas": 10**9, "maxPriorityFeePerGas": 1, "maxFeePerBlobGas": 1, "nonce": 0}
+    for _ in range(2):
+        account.sign_transaction(tx, blobs=[blob])
+    info = signer_internals.load_trusted_setup.cache_info()
+    assert info.misses == 1 and info.hits >= 3, "two signings compute two commitments and two proof sets from one load"

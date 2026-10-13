@@ -33,7 +33,9 @@ in plain language where the reader is. The one allowed identifier is a test-plan
 
 `docs/test-plan.md` lists every behaviour with an ID. A test that covers a behaviour carries
 that ID in its name. Any commit that adds a mechanism updates the test plan in the same
-commit. Run `uv run pytest` and, for the contract, `forge test` before committing.
+commit. Run `uv run pytest` and, for the contract, `forge test` before committing. The suite
+runs on every core; `uv run pytest -m "not slow"` is the quick tier for development, with
+nothing that needs anvil or Docker.
 
 ## Secrets
 
