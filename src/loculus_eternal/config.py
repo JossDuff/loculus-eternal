@@ -86,11 +86,26 @@ class Config:
     raw: dict = field(repr=False, default_factory=dict)
 
 
+# The keys each source type takes besides `type`. Anything else is refused rather than
+# ignored, so a misspelt key cannot silently leave a source on its defaults.
+SOURCE_KEYS = {"beacon": {"endpoints"}, "blobscan": {"url"}, "blob-archiver": {"url"}, "local": {"path"}, "ipfs": {"endpoints"}}
+
+
 def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) -> list:
     """Turn the `[[sources]]` entries into source objects, in the order given."""
     out = []
     for s in spec:
         kind = s.get("type")
+        if kind not in SOURCE_KEYS:
+            raise ConfigError(f"unknown source type {kind!r} (known: {', '.join(SOURCE_KEYS)})")
+        if kind == "ipfs" and "snapshot_cid" in s:
+            # The snapshot is never configured: its CID is read from the contract at the start
+            # of every run, so it cannot go stale. The retired key gets its own message, so
+            # that nobody believes it still does something.
+            raise ConfigError("snapshot_cid is no longer configured: the snapshot CID is read from the contract's appPointer; remove the key")
+        unknown = sorted(set(s) - {"type"} - SOURCE_KEYS[kind])
+        if unknown:
+            raise ConfigError(f"a source of type {kind!r} has unknown key(s) {', '.join(unknown)}; it takes {', '.join(sorted(SOURCE_KEYS[kind]))}")
         if kind == "beacon":
             out.append(BeaconSource(s["endpoints"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "blobscan":
@@ -100,14 +115,7 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         elif kind == "local":
             out.append(LocalDirectorySource(s["path"]))
         elif kind == "ipfs":
-            # The snapshot is never configured: its CID is read from the contract at the start
-            # of every run, so it cannot go stale. A leftover key is refused rather than
-            # ignored, so that nobody believes it still does something.
-            if "snapshot_cid" in s:
-                raise ConfigError("snapshot_cid is no longer configured: the snapshot CID is read from the contract's appPointer; remove the key")
             out.append(IpfsSource(s["endpoints"]))
-        else:
-            raise ConfigError(f"unknown source type {kind!r} (known: beacon, blobscan, blob-archiver, local, ipfs)")
     return out
 
 

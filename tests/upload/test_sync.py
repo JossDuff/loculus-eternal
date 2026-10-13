@@ -130,3 +130,24 @@ def test_U22_progress_counts_the_line_just_read(backend, tmp_path, monkeypatch):
     entries = list(sync.iter_new_entries("zika", feed, lambda acc, ver: False, stats, lambda read, total: seen.append((read, total, stats.new))))
     # Every line is open and unpublished, so the new count keeps pace with the lines read.
     assert len(entries) == 4 and seen == [(2, 4, 2), (4, 4, 4)]
+
+
+def test_U23_an_unknown_key_in_a_source_table_is_a_configuration_error(tmp_path):
+    from loculus_eternal import config as configuration
+
+    cfg = tmp_path / "loculus-eternal.toml"
+    cfg.write_text(
+        """
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[[sources]]
+type = "beacon"
+endpoint = ["http://127.0.0.1:2"]
+"""
+    )
+    with pytest.raises(configuration.ConfigError, match="unknown key.*endpoint.*takes endpoints"):
+        configuration.load(cfg)
