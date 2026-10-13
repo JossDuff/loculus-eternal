@@ -65,8 +65,9 @@ including the contract address and deployment block from the step above:
 cp config/sepolia.example.toml loculus-eternal.toml
 ```
 
-The example is written for the Sepolia test network. For mainnet, set `chain_id = 1` and
-use mainnet URLs for the RPC endpoint, the beacon node and Blobscan (`https://api.blobscan.com`).
+The example is written for the Sepolia test network. For mainnet, set `chain_id = 1` and give
+the RPC endpoint and every source its mainnet URL; the [recovery config](#recovering) below
+lists them. A source left on its Sepolia URL answers nothing for mainnet blobs.
 
 Then, with the publisher private key in the environment:
 
@@ -112,7 +113,7 @@ type = "blob-archiver"            # BNB Greenfield Blob Hub: another archive bac
 url = "https://gnfd-blobhub.bnbchain.org"
 
 [[sources]]
-type = "blockscout"               # Blockscout's explorer archives every blob (eth-sepolia.blockscout.com for Sepolia)
+type = "blockscout"               # Blockscout archives every blob, a week or two after inclusion (eth-sepolia.blockscout.com for Sepolia)
 url = "https://eth.blockscout.com"
 
 [[sources]]
