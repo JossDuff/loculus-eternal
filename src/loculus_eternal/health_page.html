@@ -172,7 +172,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   function renderSources(r) {
     const s = r.sources || {};
     if (!s.matrix) {
-      put("sources", esc(r.running ? "Checking every source…" : "No check yet."), "empty");
+      put("sources", esc(r.running ? "waiting on contract check" : "No check yet."), "empty");
       return;
     }
     const total = s.needed ?? s.blobs;
