@@ -202,7 +202,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   }
 
   function render(r) {
-    const verdict = r.running ? "running" : (r.verdict || "idle");
+    const verdict = r.running ? (r.verdict === "recoverable" ? "recoverable" : "running") : (r.verdict || "idle");
     $("badge").className = `badge ${verdict.replace(" ", "-")}`;
     $("verdict").textContent = verdict;
     $("run").disabled = !!r.running;

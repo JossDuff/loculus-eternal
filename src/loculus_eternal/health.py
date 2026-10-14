@@ -11,7 +11,9 @@ confirm, without trusting anyone, that the data is still there and still right.
 
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlsplit
@@ -112,7 +114,9 @@ class HealthCheck:
         self._progress = progress or (lambda p: None)
 
     def _step(self, report: Report, step: str, detail: str | None = None) -> None:
-        """Where the check is, for a page that shows progress: the step and a line of detail."""
+        """Where the check is, for a page that shows progress: the step and a line of detail.
+        Called from the source threads as well; it replaces the progress object whole and
+        hands the caller's callback a copy of its own."""
         report.progress = {"steps": STEPS, "step": step, "detail": detail}
         self._progress(report.progress)
 
@@ -148,8 +152,9 @@ class HealthCheck:
         report.progress = {}
         for row in report.sources.get("matrix", {}).values():
             row.pop("status", None)   # a check that failed midway still ends with no row in progress
-        if report.verdict == "running":
-            report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
+        # Judged here in every case: a verdict announced while the sources were still being
+        # asked was provisional, and is confirmed or overturned on the whole picture.
+        report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
         # Nothing that quotes a URL leaves with a key in it, whichever step produced it.
         clean = lambda t: redact_all(t, self.cfg)
         report.problems = [clean(p) for p in report.problems]
@@ -233,76 +238,64 @@ class HealthCheck:
         return state, refs
 
     def _sources(self, report: Report, refs: list[BlobRef], state, log) -> list[bytes | None]:
-        """Ask every source for every blob a reader needs; keep the first verified copy of each.
+        """Ask every source for every blob, all sources at once; keep the first verified copy
+        of each blob, in configuration order.
 
-        Which blobs are dead (an abandoned upload a later batch skips) is learned from the
-        record's own structure, which lives in the blobs. So the first source is asked for
-        everything; from then on the structure of what is in hand is read before each source,
-        and blobs already known to be dead are not asked for again. When too little is in
-        hand to read the structure, nothing is known to be dead and everything is asked for,
-        which is the safe direction."""
-        blobs: list[bytes | None] = [None] * len(refs)
+        The sources are independent operators, so they are asked in parallel and the check
+        takes as long as the slowest of them. Each source works on its own row of counts and
+        its own verified blobs; nothing is shared between the threads but the published
+        copies of the rows, written under one lock because the server serialises the report
+        from yet another thread while a check runs. The dead blobs of an abandoned upload are
+        asked for like any other; the stream walk at the end leaves them out when each source
+        is judged, so they cost a few requests and change no answer."""
         now = time.time()
         retention_seconds = RETENTION_SLOTS * self.cfg.chain.seconds_per_slot
         in_retention = {r.seq for r in refs if r.block_timestamp and now - r.block_timestamp < retention_seconds}
-        order: list[tuple] = []
-        for src in self.cfg.sources:
-            name = public_source(src)
-            taken = [n for _, n in order]
-            if name in taken:   # two sources of one kind on one host keep separate rows
-                name = f"{name} #{sum(1 for k in taken if k.startswith(name)) + 1}"
-            order.append((src, name))
-        # While the check runs the page shows every source with where it stands: queued, in
-        # progress or done. The rows are published as copies, since the server serialises the
-        # report from another thread while these counts are still being changed.
-        matrix: dict[str, dict] = {name: {"status": "queued"} for _, name in order}
-
-        def publish() -> None:
-            report.sources = {"matrix": {k: _row_copy(v) for k, v in matrix.items()}, "blobs": len(refs)}
-
-        publish()
-        dead: set[int] = set()
-        in_hand = 0
-        for src, name in order:
+        groups: dict[tuple, list[BlobRef]] = {}
+        for r in refs:
+            groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
+        named = self._named_sources()
+        for src, _ in named:
             if hasattr(src, "set_app_pointer"):
                 src.set_app_pointer(state.app_pointer)
-            # A source that has nothing to be asked for is neither reachable nor unreachable;
-            # its row says why it was not asked. That is every source before the first blob
-            # is published, and the IPFS source until the first batch commits a snapshot.
-            skipped = None
-            if state.blob_count == 0:
-                skipped = "no blobs published yet"
-            elif isinstance(src, IpfsSource) and not state.app_pointer:
-                skipped = "the contract names no IPFS snapshot yet"
+
+        # What the page sees while the check runs: every source with where it stands, as
+        # copies that are never changed after they are published.
+        lock = threading.Lock()
+        live: dict[str, dict] = {name: {"status": "queued"} for _, name in named}
+
+        def publish(name: str, row: dict) -> None:
+            with lock:
+                live[name] = _row_copy(row)
+                answered = sum(1 for m in live.values() if m.get("status") == "done" or "skipped" in m)
+                report.sources = {"matrix": dict(live), "blobs": len(refs)}
+                # One source holding every blob settles the question before the rest answer.
+                # The verdict is judged again, on what a reader needs, once everything is in.
+                if report.verdict == "running" and any(m.get("status") == "done" and m.get("complete") for m in live.values()):
+                    report.verdict = "recoverable"
+                self._step(report, "blob check", f"{answered} of {len(named)} sources answered")
+
+        def ask(src, name: str) -> tuple[dict, dict[int, bytes]]:
+            """One source's whole pass: its row of counts and the blobs it verified, by sequence."""
+            found: dict[int, bytes] = {}
+            skipped = self._not_asked(src, state)
             if skipped:
-                matrix[name] = {**_empty_counts(), "skipped": skipped}
+                row = {**_empty_counts(), "skipped": skipped}
                 log(f"{name}: not asked, {skipped}")
-                publish()
-                continue
-            # Re-read the structure only when something new arrived since the last walk.
-            have = sum(1 for b in blobs if b is not None)
-            if have and have != in_hand:
-                dead = read_structure(blobs).dead_blobs()
-                in_hand = have
-            to_ask = [r for r in refs if r.seq not in dead]
-            counts = _empty_counts(asked=len(to_ask))
+                publish(name, row)
+                return row, found
+            counts = _empty_counts(asked=len(refs))
             counts["status"] = "in progress"
-            matrix[name] = counts
-            log(f"fetching {len(to_ask)} blob(s) from {name}" + (f" ({len(dead)} dead blobs of an abandoned upload not asked for)" if dead else ""))
-            groups: dict[tuple, list[BlobRef]] = {}
-            for r in to_ask:
-                groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
-            asked = 0
+            publish(name, counts)
+            log(f"fetching {len(refs)} blob(s) from {name}")
             for (bn, bt), group in groups.items():
-                publish()
-                self._step(report, "blob check", f"{name}: {asked:,} of {len(to_ask):,} blobs asked for")
-                asked += len(group)
                 wanted = [r.versioned_hash for r in group]
                 try:
                     candidates = src.fetch(BlobContext(bn, bt), wanted)
                 except Exception as e:
                     counts["error"] += len(group)
                     counts.setdefault("lastError", redact(str(e), src)[:200])
+                    publish(name, counts)
                     continue
                 accepted, rejected = verify_candidates(candidates, set(wanted))
                 counts["corrupt"] += rejected
@@ -313,8 +306,7 @@ class HealthCheck:
                     if r.versioned_hash in accepted:
                         counts["verified"] += 1
                         counts["verifiedSeqs"].append(r.seq)
-                        if blobs[r.seq] is None:
-                            blobs[r.seq] = accepted[r.versioned_hash]
+                        found.setdefault(r.seq, accepted[r.versioned_hash])
                     elif r.versioned_hash in failed:
                         counts["error"] += 1
                         counts.setdefault("lastError", redact(failed[r.versioned_hash], src)[:200])
@@ -322,16 +314,28 @@ class HealthCheck:
                         counts["missing"] += 1
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
-            counts["reachable"] = not to_ask or counts["error"] < len(to_ask)   # some request got an answer
+                publish(name, counts)
+            counts["reachable"] = not refs or counts["error"] < len(refs)   # some request got an answer
             # Provisional, so a finished row reads like a result while the others are still
-            # asked: complete means every blob asked for was verified. The stream walk at the
-            # end judges every row again on the blobs a reader needs.
-            counts["complete"] = counts["verified"] == len(to_ask)
+            # asked: complete means every blob was verified. The stream walk at the end
+            # judges every row again on the blobs a reader needs.
+            counts["complete"] = counts["verified"] == len(refs)
             counts["status"] = "done"
             log(f"{name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
-            publish()
-        for row in matrix.values():
+            publish(name, counts)
+            return counts, found
+
+        with ThreadPoolExecutor(max_workers=max(1, len(named)), thread_name_prefix="source") as pool:
+            results = list(pool.map(lambda pair: ask(*pair), named))
+
+        blobs: list[bytes | None] = [None] * len(refs)
+        matrix: dict[str, dict] = {}
+        for (_, name), (row, found) in zip(named, results):
             row.pop("status", None)   # the finished report carries results, not progress
+            matrix[name] = row
+            for seq, blob in found.items():
+                if blobs[seq] is None:
+                    blobs[seq] = blob
         unavailable = [i for i, b in enumerate(blobs) if b is None]
         report.sources = {"matrix": matrix, "blobs": len(refs), "verifiedFromAnySource": len(refs) - len(unavailable), "unavailable": unavailable, "withinRetention": len(in_retention)}
         if refs and not self.cfg.sources:
@@ -342,6 +346,30 @@ class HealthCheck:
             if c["corrupt"]:
                 report.notes.append(f"{name} served {c['corrupt']} corrupt or wrong blob(s); they were rejected")
         return blobs
+
+    def _named_sources(self) -> list[tuple]:
+        """The configured sources with the name each goes by on the page, in order. Two
+        sources of one kind on one host keep separate rows."""
+        named: list[tuple] = []
+        for src in self.cfg.sources:
+            name = public_source(src)
+            taken = [n for _, n in named]
+            if name in taken:
+                name = f"{name} #{sum(1 for k in taken if k.startswith(name)) + 1}"
+            named.append((src, name))
+        return named
+
+    @staticmethod
+    def _not_asked(src, state) -> str | None:
+        """Why a source has nothing to be asked for, or None. Such a source is neither
+        reachable nor unreachable; its row says why it was not asked. That is every source
+        before the first blob is published, and the IPFS source until the first batch
+        commits a snapshot."""
+        if state.blob_count == 0:
+            return "no blobs published yet"
+        if isinstance(src, IpfsSource) and not state.app_pointer:
+            return "the contract names no IPFS snapshot yet"
+        return None
 
     def _stream(self, report: Report, blobs: list[bytes | None], state, log) -> None:
         if not blobs:

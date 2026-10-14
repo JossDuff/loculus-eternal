@@ -284,24 +284,25 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
     live = Report(started_at=time.time())
-    statuses = []    # the sources box at each step: every source with where it stands
+    snapshots = []    # at each step: every source's standing in the sources box, and the verdict
 
     def on_progress(p):
         seen.append((p["step"], p["detail"]))
-        statuses.append([m.get("status") for m in live.sources.get("matrix", {}).values()])
+        snapshots.append(([m.get("status") or ("skipped" if "skipped" in m else "done") for m in live.sources.get("matrix", {}).values()], live.verdict))
 
     HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=on_progress).run(live)
     steps = [st for st, _ in seen]
     assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check"]
-    assert any(d and "blobs asked for" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
-    # While sources are asked, every row is done, in progress or queued, in that order, with
-    # one in progress at a time; the finished report carries results and no status at all.
-    asked = [s for s in statuses if "in progress" in s]
-    assert asked and any("queued" in s for s in asked)
-    for s in asked:
-        i = s.index("in progress")
-        assert all(x == "done" for x in s[:i]) and all(x == "queued" for x in s[i + 1:])
+    assert any(d and "sources answered" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
+    # The sources are asked all at once: while they are, every row is queued, in progress or
+    # done; the finished report carries results and no status at all.
+    asked = [s for s, _ in snapshots if "in progress" in s]
+    assert asked and all(set(s) <= {"queued", "in progress", "done", "skipped"} for s in asked)
     assert all("status" not in m for m in live.sources["matrix"].values())
+    # The verdict is announced as soon as one source has every blob, before the rest answer,
+    # and stands at the end.
+    announced = [s for s, v in snapshots if v == "recoverable" and "in progress" in s]
+    assert announced and all("done" in s for s in announced) and live.verdict == "recoverable"
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):
