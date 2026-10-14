@@ -1,6 +1,7 @@
 """Blob sources against misbehaving servers, and the verify-before-write store."""
 
 import json
+import time
 
 import pytest
 
@@ -192,19 +193,45 @@ def test_R11_the_wait_a_throttling_server_names_is_read_in_its_unit_and_capped()
 
 
 @pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
-def test_R11_a_source_that_keeps_throttling_costs_one_call_a_bounded_wait(stub, make):
+def test_R11_a_source_that_keeps_throttling_costs_one_call_one_wait(stub, make):
     pairs = make_blobs(3)
     stub.add(1700, pairs)
     stub.throttle_next = 10
     stub.throttle_reset_ms = 40_000
     waits: list[float] = []
-    source = make(stub.url, sleep=waits.append, concurrency=1)
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock[0] += seconds
+
+    source = make(stub.url, sleep=sleep, clock=lambda: clock[0], concurrency=1)
     before = len(stub.requests)
     result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
-    # Two blobs each wait once, the second only for what is left of the minute; the third is
-    # not asked for at all. Four requests, a minute of waiting, and every blob an error.
-    assert waits == [40.0, 20.0] and len(stub.requests) - before == 4
-    assert result.attempts[0].outcome == "error" and "rate limited" in result.attempts[0].detail
+    # The first blob waits for the reset and is throttled again after it: the call gives up.
+    # The second blob is asked once more and throttled at once; the third is not asked at
+    # all. One wait, three requests, every blob an error.
+    assert waits == [40.0] and len(stub.requests) - before == 3
+    assert result.attempts[0].outcome == "error" and "kept throttling" in result.attempts[0].detail
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_requests_throttled_together_wait_for_the_one_reset_together(stub, make):
+    pairs = make_blobs(4)
+    stub.add(1700, pairs)
+    stub.throttle_next = 4    # the first burst, one request per blob, is throttled
+    stub.throttle_reset_ms = 1_000
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:   # really waits, so the retries come after the reset
+        waits.append(seconds)
+        time.sleep(seconds)
+
+    source = make(stub.url, sleep=sleep)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # Every request waits for the same reset, not four resets in a row, and all are retried.
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    assert len(waits) == 4 and all(0 < w <= 1.0 for w in waits), waits
 
 
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):

@@ -177,3 +177,6 @@ type = "blockscout"
     cfg.write_text(body.replace("CHAIN", "31337"))
     with pytest.raises(configuration.ConfigError, match="needs a url"):
         configuration.load(cfg)
+    cfg.write_text(body.replace("CHAIN", "1").replace('type = "blockscout"', 'type = "blockscout"\nurl = ""'))
+    with pytest.raises(configuration.ConfigError, match="empty url"):
+        configuration.load(cfg)

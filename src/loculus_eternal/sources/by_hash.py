@@ -5,16 +5,17 @@ so they need no slot or block information. What differs between them is the URL 
 the hex sits in the JSON; everything else lives here once: the loop, how an absent blob is
 told from a failing server, and the pacing that public explorers demand.
 
+A public explorer answers in a second or two, so the blobs of one call are requested a few
+at a time rather than one after another. The concurrency is small enough to stay under the
+explorers' limits, and a caller that wants the speed-up asks for a few dozen blobs per call.
+
 Public explorers meter clients and answer a burst with HTTP 429, naming the wait either as
 `Retry-After` (seconds, or an HTTP date) or as `x-ratelimit-reset` (milliseconds until the
-window resets, as Blockscout sends it). A throttled request waits that long and is sent once
-more; a second 429 is an error like any other. One call may spend at most a minute waiting
-in total: once that is spent, the blobs not yet asked for are errors without a request, so
-a source that keeps throttling slows a run by a bounded amount per call and never parks it.
-
-A public explorer answers in a second or two, so the blobs of one call are requested a few
-at a time rather than one after another: a few hundred blobs then take minutes, not a
-quarter of an hour. The concurrency is small enough to stay under the explorers' limits.
+window resets, as Blockscout sends it). The requests of one call wait together for that one
+reset, capped at a minute, and are sent once more. A 429 after the reset they waited for
+means the window is not opening for this client: the call gives up, and the blobs not yet
+asked for are errors without a request. So a throttling archive costs a call at most one
+wait, and never parks a run.
 
 A request that fails is told apart from a blob the archive does not have: the failures of
 the last call are kept per hash in `last_errors`, so a caller can count that blob as an
@@ -34,40 +35,47 @@ import httpx
 
 from loculus_eternal.sources.base import BlobContext, SourceError
 
-MAX_THROTTLE_WAIT = 60.0        # seconds one call may spend waiting on 429s, in total
+MAX_THROTTLE_WAIT = 60.0        # the longest a call waits for a window to reset
 DEFAULT_THROTTLE_WAIT = 5.0     # when a 429 names no wait
 CONCURRENCY = 4                 # requests in flight per call; Blockscout allows 180 per half minute
 
 
-class _WaitBudget:
-    """The waiting time one call may still spend on 429s, shared by its requests."""
+class _Throttle:
+    """What one call knows about the archive's rate limit: the reset it is waiting for, shared
+    by the call's requests, and whether the call has given up."""
 
-    def __init__(self, seconds: float):
-        self._left = seconds
+    def __init__(self, sleep: Callable[[float], None], clock: Callable[[], float]):
+        self._sleep = sleep
+        self._clock = clock
         self._lock = threading.Lock()
+        self._reset_at: float | None = None
+        self.gave_up = False
 
-    @property
-    def spent(self) -> bool:
+    def wait_for_reset(self, headers) -> bool:
+        """Called on a 429. Waits until the reset the archive named, together with every other
+        request of the call that was throttled, and returns True to retry. Returns False, and
+        the call has given up, when the 429 came after a reset this call already waited for."""
         with self._lock:
-            return self._left <= 0
-
-    def take(self, wanted: float) -> float | None:
-        """The wait granted, at most what is left, or None when nothing is left."""
-        with self._lock:
-            if self._left <= 0:
-                return None
-            granted = min(wanted, self._left)
-            self._left -= granted
-            return granted
+            now = self._clock()
+            if self._reset_at is None:
+                self._reset_at = now + throttle_wait(headers, now=time.time)
+            elif now >= self._reset_at:
+                self.gave_up = True
+                return False
+            delay = self._reset_at - now
+        if delay > 0:
+            self._sleep(delay)
+        return True
 
 
 class HashLookupSource:
     kind = "archive"
 
-    def __init__(self, base_url: str, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep, concurrency: int = CONCURRENCY):
+    def __init__(self, base_url: str, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic, concurrency: int = CONCURRENCY):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)   # httpx clients are safe to share between threads
         self.sleep = sleep
+        self.clock = clock
         self.concurrency = max(1, concurrency)
         self.name = f"{self.kind}({self.base_url})"
         self.last_errors: dict[bytes, str] = {}    # versioned hash -> why its request failed, last call
@@ -84,9 +92,10 @@ class HashLookupSource:
         return self.client.get(url, headers={"Accept": "application/json"})
 
     def fetch(self, ctx: BlobContext, wanted: list[bytes]) -> list[bytes]:
-        budget = _WaitBudget(MAX_THROTTLE_WAIT)
+        self.last_errors = {}
+        throttle = _Throttle(self.sleep, self.clock)
         with ThreadPoolExecutor(max_workers=min(self.concurrency, max(1, len(wanted))), thread_name_prefix=self.kind) as pool:
-            answers = list(pool.map(lambda vh: self._fetch_one(vh, budget), wanted))
+            answers = list(pool.map(lambda vh: self._fetch_one(vh, throttle), wanted))
         out: list[bytes] = []
         errors: dict[bytes, str] = {}
         for vh, (blob, error) in zip(wanted, answers):
@@ -99,19 +108,17 @@ class HashLookupSource:
             raise SourceError("; ".join(f"0x{vh.hex()[:10]}…: {msg}" for vh, msg in errors.items()))
         return out
 
-    def _fetch_one(self, vh: bytes, budget: _WaitBudget) -> tuple[bytes | None, str | None]:
+    def _fetch_one(self, vh: bytes, throttle: _Throttle) -> tuple[bytes | None, str | None]:
         """One blob's request: the blob, or why there is none. Neither when the archive
         simply lacks it."""
-        if budget.spent:
-            return None, "rate limited: this call's waiting time is spent"
+        if throttle.gave_up:
+            return None, "rate limited: the archive kept throttling after its window reset"
         url = self.url_for(vh)
         try:
             r = self._get(url)
             if r.status_code == 429:
-                wait = budget.take(throttle_wait(r.headers))
-                if wait is None:
-                    return None, "rate limited: this call's waiting time is spent"
-                self.sleep(wait)
+                if not throttle.wait_for_reset(r.headers):
+                    return None, "rate limited: the archive kept throttling after its window reset"
                 r = self._get(url)
         except httpx.HTTPError as e:
             return None, str(e)

@@ -101,6 +101,8 @@ ARCHIVE_URLS = {
 
 def _archive_url(s: dict, chain_id: int | None) -> str:
     kind = s["type"]
+    if "url" in s and not s["url"]:
+        raise ConfigError(f"a source of type {kind!r} has an empty url; give one or leave the key out")
     url = s.get("url") or ARCHIVE_URLS[kind].get(chain_id)
     if not url:
         raise ConfigError(f"a source of type {kind!r} needs a url: no public instance is known for chain id {chain_id} (mainnet and Sepolia have one)")
