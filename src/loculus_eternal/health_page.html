@@ -133,7 +133,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   const shown = {};
   const put = (id, html, cls) => { const el = $(id); if (shown[id] !== html) { el.innerHTML = html; shown[id] = html; } if (cls !== undefined && el.className !== cls) el.className = cls; };
   const mark = ok => ok ? `<span class="mark ok" title="yes">✓</span>` : `<span class="mark bad" title="no">✗</span>`;
-  const kind = name => name.replace(/\(.*$/, "");
+  const kind = name => name.replace(/\(.*?\)/, "");   // "beacon(https://a) #2" -> "beacon #2"
   const endpointsOf = name => { const m = name.match(/\((.*)\)( #\d+)?$/); return m ? m[1].replace(/^[^;]*…;\s*/, "") : ""; };
   let timer = null;
   const now = () => Date.now() / 1000;

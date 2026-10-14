@@ -191,6 +191,17 @@ def test_H3_a_request_that_fails_for_one_blob_is_an_error_for_that_blob_not_a_mi
     assert row["verified"] == row["asked"] - 1
 
 
+def test_H4_without_a_verified_blob_list_no_source_is_asked():
+    from types import SimpleNamespace
+
+    from loculus_eternal.sources import BlobscanSource
+
+    src = BlobscanSource("http://127.0.0.1:1")
+    assert HealthCheck._not_asked(src, SimpleNamespace(blob_count=0, app_pointer=""), []) == "no blobs published yet"
+    assert "could not be verified" in HealthCheck._not_asked(src, SimpleNamespace(blob_count=5, app_pointer=""), [])
+    assert HealthCheck._not_asked(src, SimpleNamespace(blob_count=5, app_pointer=""), [object()]) is None
+
+
 def test_H4_a_snapshot_the_contract_names_but_that_cannot_be_read_is_a_problem(world):
     from loculus_eternal.ipfs import KuboClient
 

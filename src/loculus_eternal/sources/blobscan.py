@@ -8,12 +8,9 @@ from __future__ import annotations
 
 from loculus_eternal.sources.by_hash import HashLookupSource
 
-PUBLIC_API = "https://api.blobscan.com"
-
 
 class BlobscanSource(HashLookupSource):
     kind = "blobscan"
-    default_url = PUBLIC_API
 
     def url_for(self, vh: bytes) -> str:
         return f"{self.base_url}/blobs/0x{vh.hex()}/data"

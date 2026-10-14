@@ -90,8 +90,9 @@ class Config:
 SOURCE_KEYS = {"beacon": {"endpoints"}, "blobscan": {"url"}, "blockscout": {"url"}, "blob-archiver": {"url"}, "local": {"path"}, "ipfs": {"endpoints"}}
 
 
-# The public instance of each hash-keyed archive per network. A source of these types may
-# leave `url` out on mainnet and Sepolia; anywhere else it must name one.
+# The public instance of each hash-keyed archive per network, the one place these URLs are
+# kept. A source of these types may leave `url` out on mainnet and Sepolia; anywhere else it
+# must name one.
 ARCHIVE_URLS = {
     "blobscan": {1: "https://api.blobscan.com", 11155111: "https://api.sepolia.blobscan.com"},
     "blockscout": {1: "https://eth.blockscout.com", 11155111: "https://eth-sepolia.blockscout.com"},

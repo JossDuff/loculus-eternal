@@ -12,12 +12,9 @@ from __future__ import annotations
 
 from loculus_eternal.sources.by_hash import HashLookupSource
 
-PUBLIC_API = "https://eth.blockscout.com"
-
 
 class BlockscoutSource(HashLookupSource):
     kind = "blockscout"
-    default_url = PUBLIC_API
 
     def url_for(self, vh: bytes) -> str:
         return f"{self.base_url}/api/v2/blobs/0x{vh.hex()}"

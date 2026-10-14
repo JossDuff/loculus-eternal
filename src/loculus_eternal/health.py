@@ -95,15 +95,20 @@ class Report:
         return dict(self.__dict__)
 
 
+SEQ_LISTS = ("verifiedSeqs", "missingSeqs", "staleSeqs")    # per row, for the stream walk's judgement
+
+
 def _row_copy(row: dict) -> dict:
     """A source's row as the page sees it while the check runs: the counts, without the
-    growing list of verified sequence numbers the page never reads."""
-    return {k: v for k, v in row.items() if k != "verifiedSeqs"}
+    growing sequence lists the page never reads."""
+    return {k: v for k, v in row.items() if k not in SEQ_LISTS}
 
 
 def _empty_counts(asked: int = 0) -> dict:
-    """One source's row before anything is fetched from it."""
-    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "verifiedSeqs": [], "asked": asked}
+    """One source's row before anything is fetched from it. The sequence lists say which
+    blobs were verified, which were missing, and which of the missing are past retention,
+    so that the dead blobs of an abandoned upload can be left out once they are known."""
+    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "asked": asked, **{k: [] for k in SEQ_LISTS}}
 
 
 class HealthCheck:
@@ -150,8 +155,11 @@ class HealthCheck:
     def _finish(self, report: Report) -> Report:
         report.finished_at = time.time()
         report.progress = {}
-        for row in report.sources.get("matrix", {}).values():
-            row.pop("status", None)   # a check that failed midway still ends with no row in progress
+        if "matrix" in report.sources:
+            # A check that failed midway still ends with no row in progress. The published
+            # rows are never edited, so the section is replaced whole.
+            matrix = {k: {kk: v for kk, v in m.items() if kk != "status"} for k, m in report.sources["matrix"].items()}
+            report.sources = {**report.sources, "matrix": matrix}
         # Judged here in every case: a verdict announced while the sources were still being
         # asked was provisional, and is confirmed or overturned on the whole picture.
         report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
@@ -278,7 +286,7 @@ class HealthCheck:
         def ask(src, name: str) -> tuple[dict, dict[int, bytes]]:
             """One source's whole pass: its row of counts and the blobs it verified, by sequence."""
             found: dict[int, bytes] = {}
-            skipped = self._not_asked(src, state)
+            skipped = self._not_asked(src, state, refs)
             if skipped:
                 row = {**_empty_counts(), "skipped": skipped}
                 log(f"{name}: not asked, {skipped}")
@@ -312,8 +320,10 @@ class HealthCheck:
                         counts.setdefault("lastError", redact(failed[r.versioned_hash], src)[:200])
                     else:
                         counts["missing"] += 1
+                        counts["missingSeqs"].append(r.seq)
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
+                            counts["staleSeqs"].append(r.seq)
                 publish(name, counts)
             counts["reachable"] = not refs or counts["error"] < len(refs)   # some request got an answer
             # Provisional, so a finished row reads like a result while the others are still
@@ -360,13 +370,15 @@ class HealthCheck:
         return named
 
     @staticmethod
-    def _not_asked(src, state) -> str | None:
+    def _not_asked(src, state, refs: list[BlobRef]) -> str | None:
         """Why a source has nothing to be asked for, or None. Such a source is neither
         reachable nor unreachable; its row says why it was not asked. That is every source
-        before the first blob is published, and the IPFS source until the first batch
-        commits a snapshot."""
+        before the first blob is published or while the blob list could not be verified,
+        and the IPFS source until the first batch commits a snapshot."""
         if state.blob_count == 0:
             return "no blobs published yet"
+        if not refs:
+            return "the blob list could not be verified, so there is nothing to ask for"
         if isinstance(src, IpfsSource) and not state.app_pointer:
             return "the contract names no IPFS snapshot yet"
         return None
@@ -386,9 +398,16 @@ class HealthCheck:
         # are replaced whole rather than edited in place.
         needed_total = len(blobs) - len(dead)
         matrix = {}
-        for name, m in report.sources.get("matrix", {}).items():
-            m = {k: v for k, v in m.items() if k != "verifiedSeqs"}
-            m["neededVerified"] = sum(1 for i in report.sources["matrix"][name].get("verifiedSeqs", []) if i not in dead)
+        for name, row in report.sources.get("matrix", {}).items():
+            m = {k: v for k, v in row.items() if k not in SEQ_LISTS}
+            if "skipped" in row:
+                matrix[name] = m
+                continue
+            # Judged on the blobs a reader needs: a dead blob a source lacks is not missing.
+            alive = lambda key: [i for i in row.get(key, []) if i not in dead]
+            m["neededVerified"] = len(alive("verifiedSeqs"))
+            m["missing"] = len(alive("missingSeqs"))
+            m["missingOutsideRetention"] = len(alive("staleSeqs"))
             m["complete"] = m["neededVerified"] == needed_total
             matrix[name] = m
         report.sources = {**report.sources, "matrix": matrix, "needed": needed_total, "neededUnavailable": needed}

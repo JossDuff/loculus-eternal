@@ -6,9 +6,11 @@ the hex sits in the JSON; everything else lives here once: the loop, how an abse
 told from a failing server, and the pacing that public explorers demand.
 
 Public explorers meter clients and answer a burst with HTTP 429, naming the wait either as
-`Retry-After` (seconds) or as `x-ratelimit-reset` (milliseconds until the window resets). A
-throttled request waits that long, capped, and is sent once more; a second 429 is an error
-like any other. A run over a few hundred blobs is therefore slowed, not broken.
+`Retry-After` (seconds, or an HTTP date) or as `x-ratelimit-reset` (milliseconds until the
+window resets, as Blockscout sends it). A throttled request waits that long and is sent once
+more; a second 429 is an error like any other. One call may spend at most a minute waiting
+in total: once that is spent, the blobs not yet asked for are errors without a request, so
+a source that keeps throttling slows a run by a bounded amount per call and never parks it.
 
 A request that fails is told apart from a blob the archive does not have: the failures of
 the last call are kept per hash in `last_errors`, so a caller can count that blob as an
@@ -19,25 +21,21 @@ fail, since then nothing is known about any of the blobs.
 from __future__ import annotations
 
 import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 import httpx
 
 from loculus_eternal.sources.base import BlobContext, SourceError
 
-MAX_THROTTLE_WAIT = 60.0
-DEFAULT_THROTTLE_WAIT = 5.0
+MAX_THROTTLE_WAIT = 60.0        # seconds one call may spend waiting on 429s, in total
+DEFAULT_THROTTLE_WAIT = 5.0     # when a 429 names no wait
 
 
 class HashLookupSource:
     kind = "archive"
-    default_url: str | None = None    # the public mainnet instance, used when no URL is given
 
-    def __init__(self, base_url: str | None = None, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep):
-        if base_url is None:
-            if self.default_url is None:
-                raise ValueError(f"a {self.kind} source needs a URL")
-            base_url = self.default_url
+    def __init__(self, base_url: str, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)
         self.sleep = sleep
@@ -53,18 +51,24 @@ class HashLookupSource:
         raise NotImplementedError
 
     def _get(self, url: str) -> httpx.Response:
-        r = self.client.get(url, headers={"Accept": "application/json"})
-        if r.status_code != 429:
-            return r
-        self.sleep(throttle_wait(r.headers))
         return self.client.get(url, headers={"Accept": "application/json"})
 
     def fetch(self, ctx: BlobContext, wanted: list[bytes]) -> list[bytes]:
         out: list[bytes] = []
         errors: dict[bytes, str] = {}
+        budget = MAX_THROTTLE_WAIT
         for vh in wanted:
+            if budget <= 0:
+                errors[vh] = "rate limited: this call's waiting time is spent"
+                continue
+            url = self.url_for(vh)
             try:
-                r = self._get(self.url_for(vh))
+                r = self._get(url)
+                if r.status_code == 429:
+                    wait = min(throttle_wait(r.headers), budget)
+                    self.sleep(wait)
+                    budget -= wait
+                    r = self._get(url)
             except httpx.HTTPError as e:
                 errors[vh] = str(e)
                 continue
@@ -86,22 +90,21 @@ class HashLookupSource:
         return out
 
 
-def throttle_wait(headers) -> float:
+def throttle_wait(headers, now: Callable[[], float] = time.time) -> float:
     """How long a 429 asks us to wait, in seconds, capped so a misbehaving server cannot
-    park a run for an hour."""
+    park a run. `Retry-After` is the standard header, in seconds or as an HTTP date;
+    `x-ratelimit-reset` is Blockscout's, in milliseconds."""
     retry_after = headers.get("retry-after")
     reset = headers.get("x-ratelimit-reset")
+    wait = DEFAULT_THROTTLE_WAIT
     try:
         if retry_after is not None:
-            wait = float(retry_after)
+            try:
+                wait = float(retry_after)
+            except ValueError:
+                wait = parsedate_to_datetime(retry_after).timestamp() - now()
         elif reset is not None:
-            # Blockscout sends milliseconds until the window resets (tens of thousands); a
-            # server that sends seconds sends a small number. Nothing sensible is under a
-            # second in milliseconds.
-            value = float(reset)
-            wait = value if value < 1000 else value / 1000.0
-        else:
-            wait = DEFAULT_THROTTLE_WAIT
-    except ValueError:
-        wait = DEFAULT_THROTTLE_WAIT
+            wait = float(reset) / 1000.0
+    except (ValueError, TypeError):
+        pass
     return max(0.0, min(wait, MAX_THROTTLE_WAIT))

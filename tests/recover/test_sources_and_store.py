@@ -166,13 +166,32 @@ def test_R11_a_failed_request_is_told_apart_from_a_blob_the_archive_lacks(stub, 
 
 
 def test_R11_the_wait_a_throttling_server_names_is_read_in_its_unit_and_capped():
+    from email.utils import formatdate
+
     from loculus_eternal.sources.by_hash import throttle_wait
 
     assert throttle_wait({"retry-after": "3"}) == 3.0
+    assert throttle_wait({"retry-after": formatdate(1_000_000_003, usegmt=True)}, now=lambda: 1_000_000_000.0) == 3.0
     assert throttle_wait({"x-ratelimit-reset": "32063"}) == 32.063    # milliseconds, as Blockscout sends
-    assert throttle_wait({"x-ratelimit-reset": "2"}) == 2.0           # a small value is seconds
+    assert throttle_wait({"x-ratelimit-reset": "800"}) == 0.8
     assert throttle_wait({"retry-after": "900"}) == 60.0              # capped
     assert throttle_wait({}) == 5.0 and throttle_wait({"retry-after": "soon"}) == 5.0
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_source_that_keeps_throttling_costs_one_call_a_bounded_wait(stub, make):
+    pairs = make_blobs(3)
+    stub.add(1700, pairs)
+    stub.throttle_next = 10
+    stub.throttle_reset_ms = 40_000
+    waits: list[float] = []
+    source = make(stub.url, sleep=waits.append)
+    before = len(stub.requests)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # Two blobs each wait once, the second only for what is left of the minute; the third is
+    # not asked for at all. Four requests, a minute of waiting, and every blob an error.
+    assert waits == [40.0, 20.0] and len(stub.requests) - before == 4
+    assert result.attempts[0].outcome == "error" and "rate limited" in result.attempts[0].detail
 
 
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):
