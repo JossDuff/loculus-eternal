@@ -323,6 +323,10 @@ class HealthCheck:
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
             counts["reachable"] = not to_ask or counts["error"] < len(to_ask)   # some request got an answer
+            # Provisional, so a finished row reads like a result while the others are still
+            # asked: complete means every blob asked for was verified. The stream walk at the
+            # end judges every row again on the blobs a reader needs.
+            counts["complete"] = counts["verified"] == len(to_ask)
             counts["status"] = "done"
             log(f"{name}: {counts['verified']} verified, {counts['missing']} missing, {counts['corrupt']} corrupt")
             publish()

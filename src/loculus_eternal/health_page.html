@@ -182,7 +182,6 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       if (m.skipped) return `<tr><td>${label}</td><td colspan="3" class="sub">not asked: ${esc(m.skipped)}</td></tr>`;
       if (m.status === "queued") return `<tr><td>${label}</td><td colspan="3" class="sub">queued</td></tr>`;
       if (m.status === "in progress") return `<tr><td>${label}</td><td colspan="3" class="sub running"><span class="dot" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>in progress, ${n(m.verified)} of ${n(m.asked)} blobs confirmed</td></tr>`;
-      if (m.status === "done") return `<tr><td>${label}</td><td colspan="3" class="sub">done, ${n(m.verified)} of ${n(m.asked)} blobs confirmed</td></tr>`;
       return `<tr><td>${label}</td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
     }).join("");
     const missing = (s.neededUnavailable || []).length;
