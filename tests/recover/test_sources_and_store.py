@@ -147,13 +147,32 @@ def test_R11_an_empty_payload_is_absent_not_a_corrupt_blob(stub, make):
 
 
 @pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
-def test_R11_an_outage_behind_a_missing_blob_is_reported_not_hidden(stub, make):
-    pairs = make_blobs(2)
+def test_R11_a_failed_request_is_told_apart_from_a_blob_the_archive_lacks(stub, make):
+    pairs = make_blobs(3)
     stub.add(1700, pairs)
     stub.withhold.add(pairs[1][0])
-    stub.fail_next = 1    # the first request, for the blob the stub does hold, fails
-    result = SourceChain([make(stub.url)]).acquire(CTX, [vh for vh, _ in pairs])
+    stub.fail.add(pairs[2][0])
+    source = make(stub.url)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # One blob came, one is absent, one request failed: the call succeeds, names the failure,
+    # and remembers which blob it was for.
+    assert set(result.blobs) == {pairs[0][0]} and result.attempts[0].outcome == "partial"
+    assert "1 request(s) failed: HTTP 500" in result.attempts[0].detail
+    assert source.last_errors == {pairs[2][0]: "HTTP 500"}
+    # Every request failed: nothing is known, and the call itself is the error.
+    stub.fail.update({pairs[0][0], pairs[1][0]})
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
     assert result.blobs == {} and result.attempts[0].outcome == "error" and "HTTP 500" in result.attempts[0].detail
+
+
+def test_R11_the_wait_a_throttling_server_names_is_read_in_its_unit_and_capped():
+    from loculus_eternal.sources.by_hash import throttle_wait
+
+    assert throttle_wait({"retry-after": "3"}) == 3.0
+    assert throttle_wait({"x-ratelimit-reset": "32063"}) == 32.063    # milliseconds, as Blockscout sends
+    assert throttle_wait({"x-ratelimit-reset": "2"}) == 2.0           # a small value is seconds
+    assert throttle_wait({"retry-after": "900"}) == 60.0              # capped
+    assert throttle_wait({}) == 5.0 and throttle_wait({"retry-after": "soon"}) == 5.0
 
 
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):

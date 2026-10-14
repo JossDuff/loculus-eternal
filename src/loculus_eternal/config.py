@@ -15,8 +15,6 @@ from pathlib import Path
 
 from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, IpfsSource, LocalDirectorySource
 from loculus_eternal.sources.beacon import MAINNET_GENESIS_TIME, SECONDS_PER_SLOT, SEPOLIA_GENESIS_TIME
-from loculus_eternal.sources.blobscan import PUBLIC_API
-from loculus_eternal.sources.blockscout import PUBLIC_API as BLOCKSCOUT_PUBLIC_API
 from loculus_eternal.rpc import DEFAULT_MAX_REQUESTS_PER_SECOND
 
 PUBLISHER_KEY_ENV = "LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY"
@@ -92,7 +90,23 @@ class Config:
 SOURCE_KEYS = {"beacon": {"endpoints"}, "blobscan": {"url"}, "blockscout": {"url"}, "blob-archiver": {"url"}, "local": {"path"}, "ipfs": {"endpoints"}}
 
 
-def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) -> list:
+# The public instance of each hash-keyed archive per network. A source of these types may
+# leave `url` out on mainnet and Sepolia; anywhere else it must name one.
+ARCHIVE_URLS = {
+    "blobscan": {1: "https://api.blobscan.com", 11155111: "https://api.sepolia.blobscan.com"},
+    "blockscout": {1: "https://eth.blockscout.com", 11155111: "https://eth-sepolia.blockscout.com"},
+}
+
+
+def _archive_url(s: dict, chain_id: int | None) -> str:
+    kind = s["type"]
+    url = s.get("url") or ARCHIVE_URLS[kind].get(chain_id)
+    if not url:
+        raise ConfigError(f"a source of type {kind!r} needs a url: no public instance is known for chain id {chain_id} (mainnet and Sepolia have one)")
+    return url
+
+
+def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int, chain_id: int | None = None) -> list:
     """Turn the `[[sources]]` entries into source objects, in the order given."""
     out = []
     for s in spec:
@@ -110,9 +124,9 @@ def build_sources(spec: list[dict], genesis_time: int, seconds_per_slot: int) ->
         if kind == "beacon":
             out.append(BeaconSource(s["endpoints"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "blobscan":
-            out.append(BlobscanSource(s.get("url", PUBLIC_API)))
+            out.append(BlobscanSource(_archive_url(s, chain_id)))
         elif kind == "blockscout":
-            out.append(BlockscoutSource(s.get("url", BLOCKSCOUT_PUBLIC_API)))
+            out.append(BlockscoutSource(_archive_url(s, chain_id)))
         elif kind == "blob-archiver":
             out.append(BlobArchiverSource(s["url"], genesis_time=genesis_time, seconds_per_slot=seconds_per_slot))
         elif kind == "local":
@@ -165,7 +179,7 @@ def load(path: str | Path) -> Config:
             deployment_block=chain_raw.get("deployment_block", 0),
             max_requests_per_second=float(chain_raw.get("max_requests_per_second", DEFAULT_MAX_REQUESTS_PER_SECOND)),
         )
-        sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot)
+        sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot, chain.chain_id)
         backend = None
         if "backend" in raw:
             if "organisms" not in raw["backend"]:

@@ -12,7 +12,8 @@ blob, `corrupt` flips a byte, `swap` serves another blob's bytes under this hash
 makes the next N requests return HTTP 500 regardless, to imitate an outage; `throttle_next`
 answers the next N with HTTP 429 and a reset header, as a metered explorer does. `pending`
 lists hashes Blockscout has indexed but not yet archived: served with `blob_data` null.
-`empty` lists hashes served as an empty hex string by both hash-keyed shapes.
+`empty` lists hashes served as an empty hex string by both hash-keyed shapes, and `fail`
+lists hashes whose request on those shapes answers HTTP 500.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class ArchiveStub:
         self.swap: dict[bytes, bytes] = {}            # serve blobs[swap[vh]] under vh
         self.pending: set[bytes] = set()
         self.empty: set[bytes] = set()
+        self.fail: set[bytes] = set()
         self.fail_next = 0
         self.throttle_next = 0
         self.throttle_reset_ms = 1500
@@ -56,6 +58,8 @@ class ArchiveStub:
                 parts = url.path.strip("/").split("/")
                 if len(parts) == 3 and parts[0] == "blobs" and parts[2] == "data":
                     vh = bytes.fromhex(parts[1][2:])
+                    if vh in stub.fail:
+                        return self._reply(500, {"message": "simulated failure"})
                     if vh in stub.empty:
                         return self._reply(200, "")
                     blob = stub._serve(vh)
@@ -64,6 +68,8 @@ class ArchiveStub:
                     return self._reply(200, "0x" + blob.hex())
                 if len(parts) == 4 and parts[:3] == ["api", "v2", "blobs"]:
                     vh = bytes.fromhex(parts[3][2:])
+                    if vh in stub.fail:
+                        return self._reply(500, {"message": "simulated failure"})
                     if vh in stub.empty:
                         return self._reply(200, {"blob_data": "", "hash": parts[3]})
                     blob = None if vh in stub.pending else stub._serve(vh)

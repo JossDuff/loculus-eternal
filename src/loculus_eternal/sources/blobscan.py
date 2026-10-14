@@ -13,9 +13,7 @@ PUBLIC_API = "https://api.blobscan.com"
 
 class BlobscanSource(HashLookupSource):
     kind = "blobscan"
-
-    def __init__(self, base_url: str = PUBLIC_API, **kw):
-        super().__init__(base_url, **kw)
+    default_url = PUBLIC_API
 
     def url_for(self, vh: bytes) -> str:
         return f"{self.base_url}/blobs/0x{vh.hex()}/data"

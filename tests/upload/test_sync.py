@@ -153,16 +153,15 @@ endpoint = ["http://127.0.0.1:2"]
         configuration.load(cfg)
 
 
-def test_U23_a_hash_keyed_archive_without_a_url_uses_its_public_api(tmp_path):
+def test_U23_a_hash_keyed_archive_without_a_url_uses_the_public_instance_of_its_network(tmp_path):
     from loculus_eternal import config as configuration
 
     cfg = tmp_path / "loculus-eternal.toml"
-    cfg.write_text(
-        """
+    body = """
 [chain]
 rpc_url = "http://127.0.0.1:1"
 contract = "0x0000000000000000000000000000000000000001"
-chain_id = 31337
+chain_id = CHAIN
 beacon_genesis_time = 0
 
 [[sources]]
@@ -171,6 +170,10 @@ type = "blobscan"
 [[sources]]
 type = "blockscout"
 """
-    )
-    loaded = configuration.load(cfg)
-    assert [s.base_url for s in loaded.sources] == ["https://api.blobscan.com", "https://eth.blockscout.com"]
+    cfg.write_text(body.replace("CHAIN", "11155111"))
+    assert [s.base_url for s in configuration.load(cfg).sources] == ["https://api.sepolia.blobscan.com", "https://eth-sepolia.blockscout.com"]
+    cfg.write_text(body.replace("CHAIN", "1"))
+    assert [s.base_url for s in configuration.load(cfg).sources] == ["https://api.blobscan.com", "https://eth.blockscout.com"]
+    cfg.write_text(body.replace("CHAIN", "31337"))
+    with pytest.raises(configuration.ConfigError, match="needs a url"):
+        configuration.load(cfg)

@@ -17,9 +17,7 @@ PUBLIC_API = "https://eth.blockscout.com"
 
 class BlockscoutSource(HashLookupSource):
     kind = "blockscout"
-
-    def __init__(self, base_url: str = PUBLIC_API, **kw):
-        super().__init__(base_url, **kw)
+    default_url = PUBLIC_API
 
     def url_for(self, vh: bytes) -> str:
         return f"{self.base_url}/api/v2/blobs/0x{vh.hex()}"

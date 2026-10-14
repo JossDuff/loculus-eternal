@@ -88,7 +88,7 @@ endpoints = ["{kubo.api_url}"]
 """
             )
             backend.set_lines("zika", [released_line("zika", "PP_1", 1), released_line("zika", "PP_2", 1), released_line("zika", "PP_3", 1, open_terms=False)])
-            backend.set_lines("mpox", [released_line("mpox", "PP_4", 1)])
+            backend.set_lines("mpox", [released_line("mpox", "PP_4", 1), bulky_line("mpox", "PP_5")])   # two blobs, so one failed request is not every request
             report = Uploader(configuration.load(cfg_path), account=anvil.publisher, log=lambda s: None, poll_interval=0.1).run()
             assert report.outcome == "published", report.message
             # The archive now has the blobs, as the network would.
@@ -108,6 +108,19 @@ endpoints = ["{kubo.api_url}"]
             miner.stop.set()
 
 
+def bulky_line(organism: str, accession: str) -> dict:
+    """A released line whose sequence is pseudo-random, so it stays large after zstd: about
+    0.8 of a blob, which gives the world a second blob."""
+    import random
+
+    rng = random.Random(accession)
+    seq = "".join(rng.choices("ACGT", k=1_000_000))
+    line = released_line(organism, accession, 1)
+    line["unalignedNucleotideSequences"] = {"main": seq}
+    line["alignedNucleotideSequences"] = {"main": seq[::-1]}
+    return line
+
+
 def check(world, cfg_path=None):
     return HealthCheck(configuration.load(cfg_path or world["cfg"]), log=lambda s: None).run()
 
@@ -118,7 +131,7 @@ def test_H1_a_sound_deployment_is_recoverable(world):
     assert r.chain["blobCount"] == world["report"].batch["blobCountAfter"] and r.blob_list["verified"]
     assert r.sources["verifiedFromAnySource"] == r.sources["blobs"] and r.sources["unavailable"] == []
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
-    assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
+    assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 4 and set(r.stream["organisms"]) == {"mpox", "zika"}
     assert r.stream["rawBytes"] == sum(b["uncompressedBytes"] for b in r.stream["batchList"]) > r.stream["compressedBytes"] > 0, "the size comes from the batch headers"
     assert not hasattr(r, "ipfs"), "IPFS is checked as a blob source, not separately"
     assert r.chain["snapshotCid"] == world["snapshot"], "the snapshot CID comes from the contract"
@@ -162,6 +175,20 @@ def test_H3_a_corrupting_source_is_noted_but_does_not_fail_the_check(world):
     assert r.verdict == "recoverable"
     assert any("corrupt" in n for n in r.notes)
     assert sum(m["corrupt"] for m in r.sources["matrix"].values()) >= 1
+
+
+def test_H3_a_request_that_fails_for_one_blob_is_an_error_for_that_blob_not_a_missing_one(world):
+    archive = world["archive"]
+    vh = bytes.fromhex(world["report"].transactions[0]["versionedHashes"][0][2:])
+    archive.fail.add(vh)    # the hash-keyed route answers 500 for this one blob
+    try:
+        r = check(world)
+    finally:
+        archive.fail.discard(vh)
+    assert r.verdict == "recoverable"
+    row = next(m for k, m in r.sources["matrix"].items() if k.startswith("blobscan("))
+    assert row["error"] == 1 and row["missing"] == 0 and row["reachable"] and "HTTP 500" in row["lastError"], row
+    assert row["verified"] == row["asked"] - 1
 
 
 def test_H4_a_snapshot_the_contract_names_but_that_cannot_be_read_is_a_problem(world):
@@ -219,7 +246,7 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
                 break
             time.sleep(0.2)
         assert r["verdict"] == "recoverable", r.get("problems")
-        assert r["log"] and r["stream"]["entriesTotal"] == 3
+        assert r["log"] and r["stream"]["entriesTotal"] == 4
         assert r["progress"] == {}, "a finished report carries no progress"
         assert httpx.get(f"{server.url}/nothing").status_code == 404
     finally:

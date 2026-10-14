@@ -94,7 +94,9 @@ class Report:
 
 
 def _row_copy(row: dict) -> dict:
-    return {**row, "verifiedSeqs": list(row["verifiedSeqs"])} if "verifiedSeqs" in row else dict(row)
+    """A source's row as the page sees it while the check runs: the counts, without the
+    growing list of verified sequence numbers the page never reads."""
+    return {k: v for k, v in row.items() if k != "verifiedSeqs"}
 
 
 def _empty_counts(asked: int = 0) -> dict:
@@ -144,6 +146,8 @@ class HealthCheck:
     def _finish(self, report: Report) -> Report:
         report.finished_at = time.time()
         report.progress = {}
+        for row in report.sources.get("matrix", {}).values():
+            row.pop("status", None)   # a check that failed midway still ends with no row in progress
         if report.verdict == "running":
             report.verdict = "not recoverable" if self._unrecoverable(report) else "recoverable"
         # Nothing that quotes a URL leaves with a key in it, whichever step produced it.
@@ -302,12 +306,18 @@ class HealthCheck:
                     continue
                 accepted, rejected = verify_candidates(candidates, set(wanted))
                 counts["corrupt"] += rejected
+                # A source that is asked blob by blob says which requests failed; such a blob
+                # is an error for this source, not one the source is known to lack.
+                failed = getattr(src, "last_errors", None) or {}
                 for r in group:
                     if r.versioned_hash in accepted:
                         counts["verified"] += 1
                         counts["verifiedSeqs"].append(r.seq)
                         if blobs[r.seq] is None:
                             blobs[r.seq] = accepted[r.versioned_hash]
+                    elif r.versioned_hash in failed:
+                        counts["error"] += 1
+                        counts.setdefault("lastError", redact(failed[r.versioned_hash], src)[:200])
                     else:
                         counts["missing"] += 1
                         if r.seq not in in_retention:
