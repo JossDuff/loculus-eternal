@@ -108,7 +108,7 @@ def _empty_counts(asked: int = 0) -> dict:
     """One source's row before anything is fetched from it. The sequence lists say which
     blobs were verified, which were missing, and which of the missing are past retention,
     so that the dead blobs of an abandoned upload can be left out once they are known."""
-    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "asked": asked, **{k: [] for k in SEQ_LISTS}}
+    return {"verified": 0, "missing": 0, "corrupt": 0, "error": 0, "missingOutsideRetention": 0, "asked": asked, "answered": 0, **{k: [] for k in SEQ_LISTS}}
 
 
 class HealthCheck:
@@ -302,6 +302,7 @@ class HealthCheck:
                     candidates = src.fetch(BlobContext(bn, bt), wanted)
                 except Exception as e:
                     counts["error"] += len(group)
+                    counts["answered"] += len(group)
                     counts.setdefault("lastError", redact(str(e), src)[:200])
                     publish(name, counts)
                     continue
@@ -324,6 +325,7 @@ class HealthCheck:
                         if r.seq not in in_retention:
                             counts["missingOutsideRetention"] += 1
                             counts["staleSeqs"].append(r.seq)
+                counts["answered"] += len(group)
                 publish(name, counts)
             counts["reachable"] = not refs or counts["error"] < len(refs)   # some request got an answer
             # Provisional, so a finished row reads like a result while the others are still

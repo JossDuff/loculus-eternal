@@ -12,6 +12,10 @@ more; a second 429 is an error like any other. One call may spend at most a minu
 in total: once that is spent, the blobs not yet asked for are errors without a request, so
 a source that keeps throttling slows a run by a bounded amount per call and never parks it.
 
+A public explorer answers in a second or two, so the blobs of one call are requested a few
+at a time rather than one after another: a few hundred blobs then take minutes, not a
+quarter of an hour. The concurrency is small enough to stay under the explorers' limits.
+
 A request that fails is told apart from a blob the archive does not have: the failures of
 the last call are kept per hash in `last_errors`, so a caller can count that blob as an
 error rather than as missing. Only when every request of a call failed does the call itself
@@ -20,7 +24,9 @@ fail, since then nothing is known about any of the blobs.
 
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
@@ -30,15 +36,39 @@ from loculus_eternal.sources.base import BlobContext, SourceError
 
 MAX_THROTTLE_WAIT = 60.0        # seconds one call may spend waiting on 429s, in total
 DEFAULT_THROTTLE_WAIT = 5.0     # when a 429 names no wait
+CONCURRENCY = 4                 # requests in flight per call; Blockscout allows 180 per half minute
+
+
+class _WaitBudget:
+    """The waiting time one call may still spend on 429s, shared by its requests."""
+
+    def __init__(self, seconds: float):
+        self._left = seconds
+        self._lock = threading.Lock()
+
+    @property
+    def spent(self) -> bool:
+        with self._lock:
+            return self._left <= 0
+
+    def take(self, wanted: float) -> float | None:
+        """The wait granted, at most what is left, or None when nothing is left."""
+        with self._lock:
+            if self._left <= 0:
+                return None
+            granted = min(wanted, self._left)
+            self._left -= granted
+            return granted
 
 
 class HashLookupSource:
     kind = "archive"
 
-    def __init__(self, base_url: str, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep):
+    def __init__(self, base_url: str, *, timeout: float = 60.0, client: httpx.Client | None = None, sleep: Callable[[float], None] = time.sleep, concurrency: int = CONCURRENCY):
         self.base_url = base_url.rstrip("/")
-        self.client = client or httpx.Client(timeout=timeout)
+        self.client = client or httpx.Client(timeout=timeout)   # httpx clients are safe to share between threads
         self.sleep = sleep
+        self.concurrency = max(1, concurrency)
         self.name = f"{self.kind}({self.base_url})"
         self.last_errors: dict[bytes, str] = {}    # versioned hash -> why its request failed, last call
 
@@ -54,40 +84,48 @@ class HashLookupSource:
         return self.client.get(url, headers={"Accept": "application/json"})
 
     def fetch(self, ctx: BlobContext, wanted: list[bytes]) -> list[bytes]:
+        budget = _WaitBudget(MAX_THROTTLE_WAIT)
+        with ThreadPoolExecutor(max_workers=min(self.concurrency, max(1, len(wanted))), thread_name_prefix=self.kind) as pool:
+            answers = list(pool.map(lambda vh: self._fetch_one(vh, budget), wanted))
         out: list[bytes] = []
         errors: dict[bytes, str] = {}
-        budget = MAX_THROTTLE_WAIT
-        for vh in wanted:
-            if budget <= 0:
-                errors[vh] = "rate limited: this call's waiting time is spent"
-                continue
-            url = self.url_for(vh)
-            try:
-                r = self._get(url)
-                if r.status_code == 429:
-                    wait = min(throttle_wait(r.headers), budget)
-                    self.sleep(wait)
-                    budget -= wait
-                    r = self._get(url)
-            except httpx.HTTPError as e:
-                errors[vh] = str(e)
-                continue
-            if r.status_code == 404:
-                continue
-            if r.status_code != 200:
-                errors[vh] = f"HTTP {r.status_code}"
-                continue
-            try:
-                hexdata = self.extract(r.json())
-                if not hexdata or hexdata == "0x":
-                    continue    # the record exists, the bytes are not there (yet)
-                out.append(bytes.fromhex(hexdata[2:] if hexdata.startswith("0x") else hexdata))
-            except (ValueError, KeyError, TypeError, AttributeError) as e:
-                errors[vh] = f"malformed response ({e})"
+        for vh, (blob, error) in zip(wanted, answers):
+            if blob is not None:
+                out.append(blob)
+            elif error is not None:
+                errors[vh] = error
         self.last_errors = errors
         if errors and len(errors) == len(wanted):
             raise SourceError("; ".join(f"0x{vh.hex()[:10]}…: {msg}" for vh, msg in errors.items()))
         return out
+
+    def _fetch_one(self, vh: bytes, budget: _WaitBudget) -> tuple[bytes | None, str | None]:
+        """One blob's request: the blob, or why there is none. Neither when the archive
+        simply lacks it."""
+        if budget.spent:
+            return None, "rate limited: this call's waiting time is spent"
+        url = self.url_for(vh)
+        try:
+            r = self._get(url)
+            if r.status_code == 429:
+                wait = budget.take(throttle_wait(r.headers))
+                if wait is None:
+                    return None, "rate limited: this call's waiting time is spent"
+                self.sleep(wait)
+                r = self._get(url)
+        except httpx.HTTPError as e:
+            return None, str(e)
+        if r.status_code == 404:
+            return None, None
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}"
+        try:
+            hexdata = self.extract(r.json())
+            if not hexdata or hexdata == "0x":
+                return None, None    # the record exists, the bytes are not there (yet)
+            return bytes.fromhex(hexdata[2:] if hexdata.startswith("0x") else hexdata), None
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            return None, f"malformed response ({e})"
 
 
 def throttle_wait(headers, now: Callable[[], float] = time.time) -> float:

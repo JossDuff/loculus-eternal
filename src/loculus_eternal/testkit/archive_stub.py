@@ -13,13 +13,15 @@ makes the next N requests return HTTP 500 regardless, to imitate an outage; `thr
 answers the next N with HTTP 429 and a reset header, as a metered explorer does. `pending`
 lists hashes Blockscout has indexed but not yet archived: served with `blob_data` null.
 `empty` lists hashes served as an empty hex string by both hash-keyed shapes, and `fail`
-lists hashes whose request on those shapes answers HTTP 500.
+lists hashes whose request on those shapes answers HTTP 500. `delay` makes every request take
+that many seconds, and `max_in_flight` records how many requests overlapped at most.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -35,6 +37,9 @@ class ArchiveStub:
         self.pending: set[bytes] = set()
         self.empty: set[bytes] = set()
         self.fail: set[bytes] = set()
+        self.delay = 0.0
+        self.max_in_flight = 0
+        self._in_flight = 0
         self.fail_next = 0
         self.throttle_next = 0
         self.throttle_reset_ms = 1500
@@ -46,6 +51,18 @@ class ArchiveStub:
                 pass
 
             def do_GET(self):
+                with stub._lock:
+                    stub._in_flight += 1
+                    stub.max_in_flight = max(stub.max_in_flight, stub._in_flight)
+                try:
+                    self._serve_request()
+                finally:
+                    with stub._lock:
+                        stub._in_flight -= 1
+
+            def _serve_request(self):
+                if stub.delay:
+                    time.sleep(stub.delay)
                 with stub._lock:
                     stub.requests.append(self.path)
                     if stub.fail_next > 0:

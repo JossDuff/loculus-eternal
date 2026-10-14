@@ -127,7 +127,7 @@ def test_R11_a_throttled_archive_is_waited_for_and_asked_again(stub, make):
     stub.add(1700, pairs)
     stub.throttle_next = 1
     waits: list[float] = []
-    source = make(stub.url, sleep=waits.append)
+    source = make(stub.url, sleep=waits.append, concurrency=1)   # one request at a time, so the stub's count of 429s lands where the test says
     result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
     assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
     assert waits == [1.5]    # x-ratelimit-reset is in milliseconds
@@ -165,6 +165,19 @@ def test_R11_a_failed_request_is_told_apart_from_a_blob_the_archive_lacks(stub, 
     assert result.blobs == {} and result.attempts[0].outcome == "error" and "HTTP 500" in result.attempts[0].detail
 
 
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_hash_keyed_archive_is_asked_for_several_blobs_at_once(stub, make):
+    pairs = make_blobs(8)
+    stub.add(1700, pairs)
+    stub.delay = 0.3    # each request takes this long, as a public explorer's does
+    source = make(stub.url)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    # Requests of 0.3 s each, four at a time: the stub saw them overlap. (Wall-clock time is
+    # not asserted, since the suite runs on every core at once.)
+    assert stub.max_in_flight >= 2
+
+
 def test_R11_the_wait_a_throttling_server_names_is_read_in_its_unit_and_capped():
     from email.utils import formatdate
 
@@ -185,7 +198,7 @@ def test_R11_a_source_that_keeps_throttling_costs_one_call_a_bounded_wait(stub, 
     stub.throttle_next = 10
     stub.throttle_reset_ms = 40_000
     waits: list[float] = []
-    source = make(stub.url, sleep=waits.append)
+    source = make(stub.url, sleep=waits.append, concurrency=1)
     before = len(stub.requests)
     result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
     # Two blobs each wait once, the second only for what is left of the minute; the third is
