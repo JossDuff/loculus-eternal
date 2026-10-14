@@ -42,16 +42,27 @@ out_dir = "recovered"
 manifest_sources = ["logs"]
 
 # Sources are tried in order for reading the published stream back. Every byte is verified,
-# so order is about speed and cost, not trust.
+# so order is about speed and cost, not trust. The more independent operators, the better:
+# the data is lost only if every one of them loses the same bytes. Surveyed 2026-10-13.
 [[sources]]
 type = "beacon"
 endpoints = [
     "https://ethereum-sepolia-beacon-api.publicnode.com",
-] # recent blobs; Blobscan below has the history
+] # a plain beacon node: the last 18 days only
+
+[[sources]]
+type = "beacon"
+endpoints = [
+    "https://sepolia.blobs.pinax.network",
+] # Pinax: beacon-shaped archive, history back to at least mid-2026
+
+[[sources]]
+type = "blockscout"
+url = "https://eth-sepolia.blockscout.com" # archive since Dencun; a blob's bytes appear a week or two after inclusion
 
 [[sources]]
 type = "blobscan"
-url = "https://api.sepolia.blobscan.com"
+url = "https://api.sepolia.blobscan.com" # Blobscan no longer guarantees Sepolia blobs; still asked
 
 [[sources]]
 type = "ipfs"

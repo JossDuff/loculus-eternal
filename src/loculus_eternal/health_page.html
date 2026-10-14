@@ -44,6 +44,9 @@
   .addr { user-select: all; -webkit-user-select: all; }
   .copy { margin-left: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; vertical-align: middle; }
   .copy:hover { color: var(--text); border-color: var(--muted); }
+  .info { margin-left: 6px; width: 18px; height: 18px; padding: 0; font: italic 700 12px/16px Georgia, serif; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; vertical-align: middle; }
+  .info:hover, .info.open { color: var(--text); border-color: var(--muted); }
+  tr.note td { padding-top: 0; font-size: 13px; color: var(--muted); max-width: 60ch; }
   code, .mono { font-family: var(--mono); font-size: 13px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -133,8 +136,15 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   const shown = {};
   const put = (id, html, cls) => { const el = $(id); if (shown[id] !== html) { el.innerHTML = html; shown[id] = html; } if (cls !== undefined && el.className !== cls) el.className = cls; };
   const mark = ok => ok ? `<span class="mark ok" title="yes">✓</span>` : `<span class="mark bad" title="no">✗</span>`;
-  const kind = name => name.replace(/\(.*$/, "");
-  const endpointsOf = name => { const m = name.match(/\((.*)\)$/); return m ? m[1].replace(/^[^;]*…;\s*/, "") : ""; };
+  // Archives with rules of their own about when a blob is served. A reader who sees them
+  // report blobs missing should know it is the archive's timing, not a loss.
+  const NOTES = {
+    blockscout: "Blockscout indexes a blob the moment it lands but stores its bytes only a week or two later. Until then it reports the blob as missing here, even though the record exists. Older blobs are served back to the first blob on the network.",
+    blobscan: "Blobscan serves mainnet blobs back to the first one, pinned on IPFS. On the Sepolia test network it stopped guaranteeing blob storage in July 2026 and reports most blobs as missing. That is Blobscan's policy for the test network, not a loss of data.",
+  };
+  const openNotes = new Set();
+  const kind = name => name.replace(/\(.*?\)/, "");   // "beacon(https://a) #2" -> "beacon #2"
+  const endpointsOf = name => { const m = name.match(/\((.*)\)( #\d+)?$/); return m ? m[1].replace(/^[^;]*…;\s*/, "") : ""; };
   let timer = null;
   const now = () => Date.now() / 1000;
 
@@ -172,15 +182,20 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   function renderSources(r) {
     const s = r.sources || {};
     if (!s.matrix) {
-      put("sources", esc(r.running ? "Checking every source…" : "No check yet."), "empty");
+      put("sources", esc(r.running ? "waiting on contract check" : "No check yet."), "empty");
       return;
     }
     const total = s.needed ?? s.blobs;
     const rows = Object.entries(s.matrix).map(([name, m]) => {
       const confirmed = m.neededVerified ?? m.verified;
-      const label = `<span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span>`;
-      if (m.skipped) return `<tr><td>${label}</td><td colspan="3" class="sub">not asked: ${esc(m.skipped)}</td></tr>`;
-      return `<tr><td>${label}</td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>`;
+      const note = NOTES[kind(name).split(" ")[0]];
+      const info = note ? `<button type="button" class="info${openNotes.has(name) ? " open" : ""}" data-note="${esc(name)}" title="about this archive">i</button>` : "";
+      const label = `<span class="mono">${esc(kind(name))}</span> <span class="sub">${esc(endpointsOf(name))}</span>${info}`;
+      const noteRow = note && openNotes.has(name) ? `<tr class="note"><td colspan="4">${esc(note)}</td></tr>` : "";
+      if (m.skipped) return `<tr><td>${label}</td><td colspan="3" class="sub">not asked: ${esc(m.skipped)}</td></tr>${noteRow}`;
+      if (m.status === "queued") return `<tr><td>${label}</td><td colspan="3" class="sub">queued</td></tr>${noteRow}`;
+      if (m.status === "in progress") return `<tr><td>${label}</td><td colspan="3" class="sub running"><span class="dot" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>in progress, ${n(m.answered)} of ${n(m.asked)} blobs asked, ${n(m.verified)} confirmed</td></tr>${noteRow}`;
+      return `<tr><td>${label}</td><td>${mark(m.reachable !== false && m.complete)}</td><td>${mark(m.reachable !== false)}${m.lastError ? `<div class="sub">${esc(m.lastError)}</div>` : ""}</td><td class="num ${m.complete ? "ok" : "bad"}">${n(confirmed)}/${n(total)}</td></tr>${noteRow}`;
     }).join("");
     const missing = (s.neededUnavailable || []).length;
     put("sources", `<p style="margin:0 0 10px">${s.neededUnavailable === undefined ? "" : missing === 0 ? `<span class="ok">Recoverable: every needed blob is available from at least one source.</span>` : `<span class="bad">NOT recoverable: ${n(missing)} needed blob(s) are unavailable from every source.</span>`}</p>
@@ -200,7 +215,7 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   }
 
   function render(r) {
-    const verdict = r.running ? "running" : (r.verdict || "idle");
+    const verdict = r.running ? (r.verdict === "recoverable" ? "recoverable" : "running") : (r.verdict || "idle");
     $("badge").className = `badge ${verdict.replace(" ", "-")}`;
     $("verdict").textContent = verdict;
     $("run").disabled = !!r.running;
@@ -233,6 +248,12 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
   }
   $("run").addEventListener("click", start);
   setInterval(() => { if (last && !last.running) tickAges(last); }, 30000);
+  document.addEventListener("click", e => {
+    const i = e.target.closest("button.info");
+    if (!i) return;
+    if (openNotes.has(i.dataset.note)) openNotes.delete(i.dataset.note); else openNotes.add(i.dataset.note);
+    if (last) renderSources(last);
+  });
   document.addEventListener("click", async e => {
     const b = e.target.closest("button.copy");
     if (!b) return;

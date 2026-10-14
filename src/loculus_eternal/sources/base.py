@@ -102,5 +102,10 @@ class SourceChain:
             else:
                 outcome = "ok"
             detail = f"{len(accepted)} verified" + (f", {rejected} rejected" if rejected else "")
+            failed = getattr(source, "last_errors", None) or {}
+            if failed:
+                # Requests that failed for some of the blobs: those blobs are not known to be
+                # absent from this source, and the detail says so.
+                detail += f", {len(failed)} request(s) failed: " + next(iter(failed.values()))
             result.attempts.append(Attempt(source.name, outcome, detail))
         return result

@@ -68,8 +68,8 @@ def world(tmp_path):
     with Anvil() as anvil, ArchiveStub() as archive, BackendStub() as backend, Miner(anvil):
         anvil.mine(3)  # the deployment must be final before the first run reads the contract
         tooling_dir = tmp_path / "repo"
-        (tooling_dir / "docs").mkdir(parents=True)
-        (tooling_dir / "docs" / "container-spec.md").write_text("# spec\n")
+        (tooling_dir / "spec").mkdir(parents=True)
+        (tooling_dir / "spec" / "container-spec.md").write_text("# spec\n")
         (tooling_dir / "pyproject.toml").write_text('[project]\nname = "loculus-eternal"\nversion = "0.0.1"\n')
         cfg_path = tooling_dir / "loculus-eternal.toml"
         cfg_path.write_text(
@@ -161,7 +161,7 @@ def test_U2_genesis_then_noop_then_delta_published_from_chain_derived_set(world,
     assert report.missing == [] and report.decode["allArtifactsMatch"]
     zika = [json.loads(l) for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
     assert [m["metadata"]["accessionVersion"] for m in zika] == ["PP_1.1", "PP_1.2", "PP_2.1", "PP_3.1"]
-    assert report.decode["tooling"] == ["spec/container-spec.md", "pyproject.toml"]
+    assert report.decode["tooling"] == ["pyproject.toml", "spec/container-spec.md"]
     assert [b["batch"] for b in report.decode["batches"]] == [0, 1]
 
 

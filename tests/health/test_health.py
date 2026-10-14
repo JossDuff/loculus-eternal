@@ -13,7 +13,7 @@ import pytest
 
 from loculus_eternal import config as configuration
 from loculus_eternal import kzg
-from loculus_eternal.health import HealthCheck
+from loculus_eternal.health import HealthCheck, Report
 from loculus_eternal.health_server import HealthServer
 from loculus_eternal.testkit import Anvil, ArchiveStub, BackendStub, preconditions_met, released_line
 from loculus_eternal.testkit.kubo import Kubo, kubo_available
@@ -88,7 +88,7 @@ endpoints = ["{kubo.api_url}"]
 """
             )
             backend.set_lines("zika", [released_line("zika", "PP_1", 1), released_line("zika", "PP_2", 1), released_line("zika", "PP_3", 1, open_terms=False)])
-            backend.set_lines("mpox", [released_line("mpox", "PP_4", 1)])
+            backend.set_lines("mpox", [released_line("mpox", "PP_4", 1), bulky_line("mpox", "PP_5")])   # two blobs, so one failed request is not every request
             report = Uploader(configuration.load(cfg_path), account=anvil.publisher, log=lambda s: None, poll_interval=0.1).run()
             assert report.outcome == "published", report.message
             # The archive now has the blobs, as the network would.
@@ -108,6 +108,19 @@ endpoints = ["{kubo.api_url}"]
             miner.stop.set()
 
 
+def bulky_line(organism: str, accession: str) -> dict:
+    """A released line whose sequence is pseudo-random, so it stays large after zstd: about
+    0.8 of a blob, which gives the world a second blob."""
+    import random
+
+    rng = random.Random(accession)
+    seq = "".join(rng.choices("ACGT", k=1_000_000))
+    line = released_line(organism, accession, 1)
+    line["unalignedNucleotideSequences"] = {"main": seq}
+    line["alignedNucleotideSequences"] = {"main": seq[::-1]}
+    return line
+
+
 def check(world, cfg_path=None):
     return HealthCheck(configuration.load(cfg_path or world["cfg"]), log=lambda s: None).run()
 
@@ -118,7 +131,7 @@ def test_H1_a_sound_deployment_is_recoverable(world):
     assert r.chain["blobCount"] == world["report"].batch["blobCountAfter"] and r.blob_list["verified"]
     assert r.sources["verifiedFromAnySource"] == r.sources["blobs"] and r.sources["unavailable"] == []
     assert set(r.sources["matrix"]) and all(m["corrupt"] == 0 for m in r.sources["matrix"].values())
-    assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 3 and set(r.stream["organisms"]) == {"mpox", "zika"}
+    assert r.stream["batches"] == 1 and r.stream["entriesTotal"] == 4 and set(r.stream["organisms"]) == {"mpox", "zika"}
     assert r.stream["rawBytes"] == sum(b["uncompressedBytes"] for b in r.stream["batchList"]) > r.stream["compressedBytes"] > 0, "the size comes from the batch headers"
     assert not hasattr(r, "ipfs"), "IPFS is checked as a blob source, not separately"
     assert r.chain["snapshotCid"] == world["snapshot"], "the snapshot CID comes from the contract"
@@ -162,6 +175,31 @@ def test_H3_a_corrupting_source_is_noted_but_does_not_fail_the_check(world):
     assert r.verdict == "recoverable"
     assert any("corrupt" in n for n in r.notes)
     assert sum(m["corrupt"] for m in r.sources["matrix"].values()) >= 1
+
+
+def test_H3_a_request_that_fails_for_one_blob_is_an_error_for_that_blob_not_a_missing_one(world):
+    archive = world["archive"]
+    vh = bytes.fromhex(world["report"].transactions[0]["versionedHashes"][0][2:])
+    archive.fail.add(vh)    # the hash-keyed route answers 500 for this one blob
+    try:
+        r = check(world)
+    finally:
+        archive.fail.discard(vh)
+    assert r.verdict == "recoverable"
+    row = next(m for k, m in r.sources["matrix"].items() if k.startswith("blobscan("))
+    assert row["error"] == 1 and row["missing"] == 0 and row["reachable"] and "HTTP 500" in row["lastError"], row
+    assert row["verified"] == row["asked"] - 1
+
+
+def test_H4_without_a_verified_blob_list_no_source_is_asked():
+    from types import SimpleNamespace
+
+    from loculus_eternal.sources import BlobscanSource
+
+    src = BlobscanSource("http://127.0.0.1:1")
+    assert HealthCheck._not_asked(src, SimpleNamespace(blob_count=0, app_pointer=""), []) == "no blobs published yet"
+    assert "could not be verified" in HealthCheck._not_asked(src, SimpleNamespace(blob_count=5, app_pointer=""), [])
+    assert HealthCheck._not_asked(src, SimpleNamespace(blob_count=5, app_pointer=""), [object()]) is None
 
 
 def test_H4_a_snapshot_the_contract_names_but_that_cannot_be_read_is_a_problem(world):
@@ -209,6 +247,8 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
         page = httpx.get(f"{server.url}/")
         assert page.status_code == 200 and "Loculus Eternal health" in page.text and "<script>" in page.text
         assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "loculus-eternal recover --config" in page.text
+        # The archives with rules of their own about when a blob is served carry a note.
+        assert "stores its bytes only a week or two later" in page.text and "stopped guaranteeing blob storage" in page.text
         idle = httpx.get(f"{server.url}/api/report").json()
         assert idle["verdict"] == "idle" and idle["config"]["contract"] == world["anvil"].contract.address
         assert httpx.post(f"{server.url}/api/check").status_code == 202
@@ -219,7 +259,7 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
                 break
             time.sleep(0.2)
         assert r["verdict"] == "recoverable", r.get("problems")
-        assert r["log"] and r["stream"]["entriesTotal"] == 3
+        assert r["log"] and r["stream"]["entriesTotal"] == 4
         assert r["progress"] == {}, "a finished report carries no progress"
         assert httpx.get(f"{server.url}/nothing").status_code == 404
     finally:
@@ -256,10 +296,26 @@ def test_H7_the_page_never_shows_a_credential_from_a_url(world, tmp_path):
     assert "RPCSECRET" not in cleaned and "SECRETKEY" not in cleaned and "https://sepolia.infura.io" in cleaned
     # The check reports its steps in order while it runs, with detail during the long fetch.
     seen = []
-    HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=lambda p: seen.append((p["step"], p["detail"]))).run()
+    live = Report(started_at=time.time())
+    snapshots = []    # at each step: every source's standing in the sources box, and the verdict
+
+    def on_progress(p):
+        seen.append((p["step"], p["detail"]))
+        snapshots.append(([m.get("status") or ("skipped" if "skipped" in m else "done") for m in live.sources.get("matrix", {}).values()], live.verdict))
+
+    HealthCheck(configuration.load(world["cfg"]), log=lambda s: None, progress=on_progress).run(live)
     steps = [st for st, _ in seen]
     assert [st for i, st in enumerate(steps) if i == 0 or st != steps[i - 1]] == ["contract check", "blob check"]
-    assert any(d and "blobs asked for" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
+    assert any(d and "sources answered" in d for _, d in seen) and not any(d and "backend" in d for _, d in seen)
+    # The sources are asked all at once: while they are, every row is queued, in progress or
+    # done; the finished report carries results and no status at all.
+    asked = [s for s, _ in snapshots if "in progress" in s]
+    assert asked and all(set(s) <= {"queued", "in progress", "done", "skipped"} for s in asked)
+    assert all("status" not in m for m in live.sources["matrix"].values())
+    # The verdict is announced as soon as one source has every blob, before the rest answer,
+    # and stands at the end.
+    announced = [s for s, v in snapshots if v == "recoverable" and "in progress" in s]
+    assert announced and all("done" in s for s in announced) and live.verdict == "recoverable"
 
 
 def test_H6_once_prints_json_and_exits_by_verdict(world):

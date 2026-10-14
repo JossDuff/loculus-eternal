@@ -1,12 +1,13 @@
 """Blob sources against misbehaving servers, and the verify-before-write store."""
 
 import json
+import time
 
 import pytest
 
 from loculus_eternal import kzg
 from loculus_eternal.format.chunks import pack_blobs
-from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, LocalDirectorySource, SourceChain
+from loculus_eternal.sources import BeaconSource, BlobArchiverSource, BlobscanSource, BlockscoutSource, LocalDirectorySource, SourceChain
 from loculus_eternal.sources.base import BlobContext, SourceError
 from loculus_eternal.store import BlobStore, StoreError, VerificationFailed
 from loculus_eternal.testkit import ArchiveStub
@@ -100,12 +101,137 @@ def test_R11_every_adapter_shape_returns_the_same_verified_blob(stub, tmp_path):
         BeaconSource([stub.url], genesis_time=0, seconds_per_slot=1),
         BlobArchiverSource(stub.url, genesis_time=0, seconds_per_slot=1),
         BlobscanSource(stub.url),
+        BlockscoutSource(stub.url),
     ):
         result = SourceChain([source]).acquire(CTX, wanted)
         assert set(result.blobs) == set(wanted), source.name
         assert result.rejected == 0
     result = SourceChain([local]).acquire(CTX, wanted)
     assert set(result.blobs) == {pairs[0][0]}
+
+
+def test_R11_a_blob_blockscout_has_indexed_but_not_archived_yet_is_simply_not_there(stub, tmp_path):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.pending.add(pairs[0][0])
+    wanted = [vh for vh, _ in pairs]
+    result = SourceChain([BlockscoutSource(stub.url)]).acquire(CTX, wanted)
+    assert set(result.blobs) == {pairs[1][0]} and result.rejected == 0
+    # The next source fills the gap, as for any withheld blob.
+    result = SourceChain([BlockscoutSource(stub.url), _local_dir_with(pairs, tmp_path)]).acquire(CTX, wanted)
+    assert set(result.blobs) == set(wanted)
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_throttled_archive_is_waited_for_and_asked_again(stub, make):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.throttle_next = 1
+    waits: list[float] = []
+    source = make(stub.url, sleep=waits.append, concurrency=1)   # one request at a time, so the stub's count of 429s lands where the test says
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    assert waits == [1.5]    # x-ratelimit-reset is in milliseconds
+    # Throttled twice in a row for the same blob: an error for that blob, the other still comes.
+    stub.throttle_next = 2
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {pairs[1][0]}
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_an_empty_payload_is_absent_not_a_corrupt_blob(stub, make):
+    pairs = make_blobs(2)
+    stub.add(1700, pairs)
+    stub.empty.add(pairs[0][0])
+    result = SourceChain([make(stub.url)]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {pairs[1][0]} and result.rejected == 0
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_failed_request_is_told_apart_from_a_blob_the_archive_lacks(stub, make):
+    pairs = make_blobs(3)
+    stub.add(1700, pairs)
+    stub.withhold.add(pairs[1][0])
+    stub.fail.add(pairs[2][0])
+    source = make(stub.url)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # One blob came, one is absent, one request failed: the call succeeds, names the failure,
+    # and remembers which blob it was for.
+    assert set(result.blobs) == {pairs[0][0]} and result.attempts[0].outcome == "partial"
+    assert "1 request(s) failed: HTTP 500" in result.attempts[0].detail
+    assert source.last_errors == {pairs[2][0]: "HTTP 500"}
+    # Every request failed: nothing is known, and the call itself is the error.
+    stub.fail.update({pairs[0][0], pairs[1][0]})
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert result.blobs == {} and result.attempts[0].outcome == "error" and "HTTP 500" in result.attempts[0].detail
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_hash_keyed_archive_is_asked_for_several_blobs_at_once(stub, make):
+    pairs = make_blobs(8)
+    stub.add(1700, pairs)
+    stub.delay = 0.3    # each request takes this long, as a public explorer's does
+    source = make(stub.url)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    # Requests of 0.3 s each, four at a time: the stub saw them overlap. (Wall-clock time is
+    # not asserted, since the suite runs on every core at once.)
+    assert stub.max_in_flight >= 2
+
+
+def test_R11_the_wait_a_throttling_server_names_is_read_in_its_unit_and_capped():
+    from email.utils import formatdate
+
+    from loculus_eternal.sources.by_hash import throttle_wait
+
+    assert throttle_wait({"retry-after": "3"}) == 3.0
+    assert throttle_wait({"retry-after": formatdate(1_000_000_003, usegmt=True)}, now=lambda: 1_000_000_000.0) == 3.0
+    assert throttle_wait({"x-ratelimit-reset": "32063"}) == 32.063    # milliseconds, as Blockscout sends
+    assert throttle_wait({"x-ratelimit-reset": "800"}) == 0.8
+    assert throttle_wait({"retry-after": "900"}) == 60.0              # capped
+    assert throttle_wait({}) == 5.0 and throttle_wait({"retry-after": "soon"}) == 5.0
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_a_source_that_keeps_throttling_costs_one_call_one_wait(stub, make):
+    pairs = make_blobs(3)
+    stub.add(1700, pairs)
+    stub.throttle_next = 10
+    stub.throttle_reset_ms = 40_000
+    waits: list[float] = []
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock[0] += seconds
+
+    source = make(stub.url, sleep=sleep, clock=lambda: clock[0], concurrency=1)
+    before = len(stub.requests)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # The first blob waits for the reset and is throttled again after it: the call gives up.
+    # The second blob is asked once more and throttled at once; the third is not asked at
+    # all. One wait, three requests, every blob an error.
+    assert waits == [40.0] and len(stub.requests) - before == 3
+    assert result.attempts[0].outcome == "error" and "kept throttling" in result.attempts[0].detail
+
+
+@pytest.mark.parametrize("make", [BlobscanSource, BlockscoutSource])
+def test_R11_requests_throttled_together_wait_for_the_one_reset_together(stub, make):
+    pairs = make_blobs(4)
+    stub.add(1700, pairs)
+    stub.throttle_next = 4    # the first burst, one request per blob, is throttled
+    stub.throttle_reset_ms = 1_000
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:   # really waits, so the retries come after the reset
+        waits.append(seconds)
+        time.sleep(seconds)
+
+    source = make(stub.url, sleep=sleep)
+    result = SourceChain([source]).acquire(CTX, [vh for vh, _ in pairs])
+    # Every request waits for the same reset, not four resets in a row, and all are retried.
+    assert set(result.blobs) == {vh for vh, _ in pairs} and result.rejected == 0
+    assert len(waits) == 4 and all(0 < w <= 1.0 for w in waits), waits
 
 
 def test_R11_beacon_filter_is_sent_and_slot_is_derived_from_the_timestamp(stub):
