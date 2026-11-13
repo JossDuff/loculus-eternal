@@ -108,8 +108,10 @@ class DecodedStream:
 
     def records(self, organism: str, reinstated: set[tuple[str, int]] | None = None) -> Iterator[Record]:
         """(accession, version, payload) in materialisation order, streamed from disk,
-        withdrawn entries left out. `reinstated` names the withdrawn (accession, version)
-        pairs that the batch being encoded puts back, which its digests must count again."""
+        withdrawn entries left out. This is what an encoder is given as the previous entries:
+        `reinstated` names the withdrawn (accession, version) pairs that the batch being
+        encoded puts back, which its digests must count again. Leave it out to read the
+        dataset."""
         return self.store.iter_records(organism, reinstated)
 
     def is_withdrawn(self, organism: str, accession: str, version: int) -> bool:
@@ -466,11 +468,14 @@ class StreamDecoder:
             count += len(keys[org]) - len(duplicates)
             for acc, ver in duplicates:
                 warnings.append(f"batch {expected_batch}: duplicate entry {org} {acc}.{ver} ignored")
+        # Both counts are of what changed: a withdrawal of something already withdrawn, or
+        # a reinstatement of something that is not, has no effect and is not counted.
+        withdrawn_count = reinstated_count = 0
         for org, wkeys in withdrawals.items():
-            out.store.withdraw(org, sorted(wkeys), expected_batch)
-        reinstated_count = 0
+            taken = sorted(k for k in wkeys if not out.store.is_withdrawn(org, *k))
+            out.store.withdraw(org, taken, expected_batch)
+            withdrawn_count += len(taken)
         for org, rkeys in reinstatements.items():
-            # One that names an entry that is not withdrawn has no effect and is not counted.
             lifted = sorted(k for k in rkeys if out.store.is_withdrawn(org, *k))
             out.store.reinstate(org, lifted)
             reinstated_count += len(lifted)
@@ -488,7 +493,7 @@ class StreamDecoder:
             schemas=schemas,
             tooling=tooling,
             entry_count=count,
-            withdrawn_count=sum(len(v) for v in withdrawals.values()),
+            withdrawn_count=withdrawn_count,
             reinstated_count=reinstated_count,
         )
 

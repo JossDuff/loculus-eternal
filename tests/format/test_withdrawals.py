@@ -189,6 +189,21 @@ def test_F21_entry_withdrawn_before_it_was_published_can_be_published_once_reins
         assert dec.has("mpox", "PP_000006", 1) and not dec.is_withdrawn("mpox", "PP_000006", 1) and dec.count("mpox") == 2
 
 
+def test_F21_nothing_earlier_is_needed_to_publish_an_entry_withdrawn_in_advance():
+    # A stream whose only batch so far withdraws an entry that was never published: the batch
+    # that reinstates and publishes it has no earlier entries to read.
+    enc = StreamEncoder(CHAIN_ID, CONTRACT)
+    b0 = enc.encode_batch([], codec=CODEC_RAW, withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+    b1 = enc.encode_batch([sample_entry("zika", "PP_000001", 1)], codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec:
+        assert not dec.torn and all(dec.verify_artifacts().values()) and dec.count("zika") == 1
+        assert [b.withdrawn_count for b in dec.batches] == [1, 0] and [b.reinstated_count for b in dec.batches] == [0, 1]
+    # But an entry that is in the stream cannot be brought back without reading it.
+    enc2, g0, w1, _ = withdrawn_once()
+    with pytest.raises(FormatError, match="previous entries of .* are needed"):
+        enc2.encode_batch([], codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+
+
 def test_F21_an_organism_emptied_by_withdrawal_comes_back_whole():
     enc, b0 = genesis()
     with StreamDecoder(b0.blobs).decode() as dec0:

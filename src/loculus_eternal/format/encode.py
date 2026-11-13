@@ -170,10 +170,11 @@ class EncodedBatch:
     reinstated_count: int = 0
 
 
-# previous_entries(organism) yields (accession, version, payload) in materialisation order.
-# When a batch reinstates entries of the organism it is called with a second argument, the
-# set of (accession, version) pairs being reinstated, and must yield those as well.
-PreviousEntries = Callable[..., Iterable[Record]]
+# previous_entries(organism, reinstated) yields (accession, version, payload) in
+# materialisation order: every entry of the organism published so far that is not withdrawn,
+# and also the withdrawn ones whose (accession, version) is in `reinstated`, the set the
+# batch being encoded puts back (empty for most batches).
+PreviousEntries = Callable[[str, set], Iterable[Record]]
 
 
 class StreamEncoder:
@@ -198,12 +199,11 @@ class StreamEncoder:
     ) -> EncodedBatch:
         """Encode one batch from a stream of entries and advance the state.
 
-        `previous_entries(organism)` must yield `(accession, version, payload)` for every
-        entry of that organism published in earlier batches and not withdrawn, in
-        materialisation order; it is needed for the cumulative artifact digests and may be
-        omitted only when nothing has been published yet. For an organism with
-        reinstatements it is called as `previous_entries(organism, reinstated)` and must
-        also yield the withdrawn entries named in that set.
+        `previous_entries(organism, reinstated)` must yield `(accession, version, payload)`
+        for every entry of that organism published in earlier batches and not withdrawn, and
+        for the withdrawn ones named in the set `reinstated`, in materialisation order; it is
+        needed for the cumulative artifact digests and may be omitted only when nothing has
+        been published yet.
 
         `withdrawals` and `reinstatements` are `{"organism", "accessionVersions", "note"}`
         dicts; withdrawn entries leave the materialised output from this batch on, and
@@ -298,10 +298,13 @@ class StreamEncoder:
         artifacts: dict[str, dict] = {}
         for org in organisms:
             reinstated = {(acc, ver) for acc, vs in reinstate_now.get(org, {}).items() for ver in vs}
-            if st.entries_total.get(org, 0) > 0 or reinstated:
+            # Earlier batches matter when the output so far has lines, or when an entry this
+            # batch reinstates is in the stream. One withdrawn before it was ever published
+            # has nothing earlier to read.
+            if st.entries_total.get(org, 0) > 0 or any(st.is_published(org, acc, ver) for acc, ver in reinstated):
                 if previous_entries is None:
                     raise FormatError(f"previous entries of {org} are needed for the cumulative digest")
-                prev: Iterable[Record] = previous_entries(org, reinstated) if reinstated else previous_entries(org)
+                prev: Iterable[Record] = previous_entries(org, reinstated)
             else:
                 prev = ()
             new: Iterable[Record] = iter_run(runs[org]) if org in runs else ()

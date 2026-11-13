@@ -61,11 +61,13 @@ class EntryStore:
 
     def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None, extra_reinstated: set[EntryKey] | None = None) -> Iterator[tuple[int, Record]]:
         """(batch, (accession, version, payload)) in materialisation order, the earliest batch
-        winning a duplicate key, withdrawn entries left out. There is deliberately no way to
-        ask for the withdrawn ones: honouring a withdrawal is the whole point of the record.
-        The extras describe a batch that is not in the store yet (its run, the keys it
-        withdraws, the keys it reinstates), so the output can be computed as it will stand
-        once that batch is accepted."""
+        winning a duplicate key, withdrawn entries left out: honouring a withdrawal is the
+        whole point of the record, and nothing here lists or dumps the withdrawn ones. The
+        extras describe a batch that is not in the store yet (its run, the keys it withdraws,
+        the keys it reinstates), so the output can be computed as it will stand once that
+        batch is accepted. Naming a withdrawn key in `extra_reinstated` does yield its entry;
+        that is for computing the digests of the batch that reinstates it, and nothing that
+        writes output for a reader passes it."""
         runs = list(self.runs.get(organism, []))
         if extra_run is not None:
             runs.append(extra_run)
