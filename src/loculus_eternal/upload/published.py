@@ -39,8 +39,8 @@ class PublishedView:
     def is_published(self, organism: str, accession: str, version: int) -> bool:
         return self.decoded.has(organism, accession, version)
 
-    def previous_entries(self, organism: str):
-        return self.decoded.records(organism)
+    def previous_entries(self, organism: str, reinstated=None):
+        return self.decoded.records(organism, reinstated)
 
 
 def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: BlobStore, *, deployment_block: int = 0, spill_dir: Path | None = None, log=print) -> PublishedView:
