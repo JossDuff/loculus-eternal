@@ -77,19 +77,39 @@ uv run loculus-eternal upload --config loculus-eternal.toml --check   # Check wh
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```
 
-Before it publishes, the command names the database it is about to publish from and the
-contract it publishes to, and asks you to confirm:
+Once it has worked out what to send, and before it sends anything, the command names the
+database it read, the contract it publishes to and what the batch does, and asks you to
+confirm:
 
 ```
 You are publishing a copy of the Loculus database located at https://backend.pathoplexus.org
 to contract 0x… on chain 11155111.
+  new entries:  1,204
+  withdrawn:    3  (published, not in this copy)
+  reinstated:   0  (withdrawn, in this copy again)
 Continue? (Y/n)
 ```
 
-Enter or `y` goes ahead; `n` stops before anything is read or sent. Where there is no
-terminal to ask on, the command refuses unless `--yes` confirms in advance.
+Enter or `y` goes ahead; `n` stops with nothing sent. Where there is no terminal to ask on,
+the command refuses unless `--yes` confirms in advance.
 
-Run it whenever you want to update the dataset on Ethereum. The upload works out what is already published and won't ever double-upload any data. With nothing new it does nothing.  Feel free to run it as frequent or as rarely as you want. If it is interrupted, run it again.
+**The published record follows the database.** After an upload, `recover` produces exactly
+the entries that were eligible in the database that upload read: an entry that is new is
+published, a published entry that is no longer there is withdrawn, and a withdrawn entry
+that is there again is reinstated. Nothing is double-uploaded, and an entry that returns
+costs a short record, not its data again. An entry keeps the content it was first published
+with; later changes to it are not followed.
+
+To hold new submissions back for a while before they reach the permanent record, set a
+minimum age in the config. An entry is then eligible only once that version was submitted
+that many days ago:
+
+```toml
+[backend]
+min_age_days = 90
+```
+
+Run it whenever you want to update the dataset on Ethereum. With nothing to change it does nothing.  Feel free to run it as frequent or as rarely as you want. If it is interrupted, run it again.
 
 > The first upload of a dataset could take awhile.  It might take over an hour.
 
@@ -261,9 +281,9 @@ each other, so the compression ratio is over 300 to 1: 15 GB of feed becomes und
 blobs. No compression dictionary is used; each batch stands on its own, so a reader needs
 nothing but the blobs. Batches are self-describing: every batch carries a header, a manifest
 with the digest of every file it produces, and now and then an index so a reader need not
-replay the whole stream. Nothing is ever deleted. An entry that Loculus later withdraws stays
-in the blobs forever, but a withdrawal record tells every `recover` to leave it out of the
-files it produces.
+replay the whole stream. Nothing is ever deleted. An entry that leaves the database stays in
+the blobs forever, but a withdrawal record tells every `recover` to leave it out of the files
+it produces; if the entry comes back, a reinstatement record puts it in again.
 
 ## License
 

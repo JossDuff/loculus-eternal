@@ -95,9 +95,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
-    # A publish asks the maintainer to confirm the database it publishes from. With no
-    # terminal there is nobody to ask, and going ahead unasked would make the question
-    # worthless exactly where a mistake is least likely to be noticed, so it refuses.
+    # A publish asks the maintainer to confirm the batch it has planned. With no terminal
+    # there is nobody to ask, and going ahead unasked would make the question worthless
+    # exactly where a mistake is least likely to be noticed, so it refuses up front.
     confirm = None if args.yes or mode != "publish" else ask_to_continue
     if confirm is not None and not sys.stdin.isatty():
         print("refused: publishing asks for confirmation and there is no terminal to ask on; run it in a terminal, or pass --yes to confirm in advance", file=sys.stderr)
@@ -108,7 +108,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
             uploader = Uploader(cfg)
         else:
             uploader = Uploader.with_key(cfg, configuration.publisher_key())
-        report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished, confirm=confirm)
+        report = uploader.run(mode, confirm=confirm)
     except (RequestException, ChainError) as e:
         # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
         # in the journal; the next run resumes from it.
@@ -155,13 +155,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loculus-eternal", description="Permanent, verifiable backup of Pathoplexus released data in Ethereum blobs.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    up = sub.add_parser("upload", help="publish every newly eligible entry as one batch; a no-op when there is nothing new")
+    up = sub.add_parser("upload", help="make the published record hold exactly the eligible entries of the database, as one batch; a no-op when it already does")
     up.add_argument("--config", type=Path, required=True, help="TOML config file (see the README)")
     up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
-    up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
-    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks about the database it publishes from; needed when there is no terminal")
+    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks before it sends its batch (see --check first for what the batch would do); needed when there is no terminal")
     up.set_defaults(func=cmd_upload)
 
     health = sub.add_parser("health", help="serve a one-page health check of the published record for anyone to verify")

@@ -43,6 +43,7 @@ class ChainConfig:
 class BackendConfig:
     url: str
     organisms: list[str] | None   # None means every organism the backend serves, asked each run
+    min_age_days: int = 0         # an entry is eligible only this many days after that version was submitted; 0 is no delay
 
 
 @dataclass
@@ -194,7 +195,10 @@ def load(path: str | Path) -> Config:
                 organisms = None
             elif not isinstance(organisms, list) or not organisms or not all(isinstance(o, str) and o.strip() for o in organisms):
                 raise ConfigError('backend.organisms must be "all" or a non-empty list of non-empty organism names')
-            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms)
+            min_age_days = raw["backend"].get("min_age_days", 0)
+            if isinstance(min_age_days, bool) or not isinstance(min_age_days, int) or min_age_days < 0:
+                raise ConfigError("backend.min_age_days must be a whole number of days, 0 or more")
+            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms, min_age_days=min_age_days)
         upload = None
         if "upload" in raw:
             u = raw["upload"]

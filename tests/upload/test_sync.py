@@ -180,3 +180,77 @@ type = "blockscout"
     cfg.write_text(body.replace("CHAIN", "1").replace('type = "blockscout"', 'type = "blockscout"\nurl = ""'))
     with pytest.raises(configuration.ConfigError, match="empty url"):
         configuration.load(cfg)
+
+
+# --- the copy a run publishes: minimum age, and what leaves or returns ------------------------
+
+
+def aged(accession: str, submitted_at, version: int = 1, **kw) -> dict:
+    return released_line("zika", accession, version, extra={"submittedAtTimestamp": submitted_at}, **kw)
+
+
+def test_U26_only_entries_submitted_by_the_cutoff_are_eligible(backend, tmp_path):
+    cutoff = 1_700_000_000
+    backend.set_lines("zika", [aged("PP_1", cutoff - 1), aged("PP_2", cutoff), aged("PP_3", cutoff + 1), aged("PP_4", cutoff + 1, open_terms=False), aged("PP_1", cutoff + 5, version=2)])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    new, stats = select_new_entries("zika", feed, lambda acc, ver: False, submitted_cutoff=cutoff)
+    # The cutoff itself is old enough; each version is judged by its own submission time; a
+    # restricted entry is counted as restricted whatever its age.
+    assert [e["metadata"]["accessionVersion"] for e in new] == ["PP_1.1", "PP_2.1"]
+    assert (stats.total, stats.open, stats.restricted, stats.held_back, stats.new) == (5, 4, 1, 2, 2)
+    assert stats.eligible == {"PP_1.1", "PP_2.1"}
+    # Without a minimum age nothing is held back and the time is not even looked at.
+    new, stats = select_new_entries("zika", feed, lambda acc, ver: False)
+    assert len(new) == 4 and stats.held_back == 0
+
+
+@pytest.mark.parametrize("value", [None, "1700000000", 1.7e9, True])
+def test_U26_a_line_without_a_usable_submission_time_is_an_error_not_a_guess(backend, tmp_path, value):
+    backend.set_lines("zika", [aged("PP_1", value)])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    with pytest.raises(SyncError, match="PP_1.1.*submittedAtTimestamp"):
+        select_new_entries("zika", feed, lambda acc, ver: False, submitted_cutoff=1_700_000_000)
+
+
+def test_U25_what_to_withdraw_and_reinstate_follows_from_the_eligible_entries(backend, tmp_path):
+    from loculus_eternal.upload.sync import find_changes
+
+    backend.set_lines("zika", [released_line("zika", "PP_1", 1), released_line("zika", "PP_2", 1, open_terms=False), released_line("zika", "PP_3", 2), released_line("zika", "PP_5", 1)])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    published = {"PP_1": [[1, 0]], "PP_2": [[1, 0]], "PP_3": [[1, 0], [2, 1]], "PP_4": [[1, 0]], "PP_5": [[1, 0]]}
+    withdrawn = {"PP_3": [2], "PP_4": [1], "PP_5": [1]}
+    _, stats = select_new_entries("zika", feed, lambda acc, ver: [ver, 0] in published.get(acc, []) or [ver, 1] in published.get(acc, []))
+    gone, back = find_changes(stats, published, withdrawn)
+    # PP_2.1 is in the feed but restricted, PP_3.1 is not in it at all: both leave. PP_4.1 is
+    # gone and already withdrawn: nothing to do. PP_3.2 and PP_5.1 are withdrawn and back.
+    assert gone == ["PP_2.1", "PP_3.1"] and back == ["PP_3.2", "PP_5.1"]
+    assert (stats.to_withdraw, stats.to_reinstate) == (gone, back)
+
+
+@pytest.mark.parametrize("value,ok", [("90", True), ("0", True), ("-1", False), ("1.5", False), ('"90"', False), ("true", False)])
+def test_U26_min_age_days_is_a_whole_number_of_days(tmp_path, value, ok):
+    from loculus_eternal import config as configuration
+
+    cfg = tmp_path / "loculus-eternal.toml"
+    cfg.write_text(
+        f"""
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[backend]
+url = "http://127.0.0.1:2"
+organisms = "all"
+min_age_days = {value}
+"""
+    )
+    if ok:
+        assert configuration.load(cfg).backend.min_age_days == int(value)
+    else:
+        with pytest.raises(configuration.ConfigError, match="min_age_days"):
+            configuration.load(cfg)
+    # Left out, there is no delay.
+    cfg.write_text(cfg.read_text().replace(f"min_age_days = {value}\n", ""))
+    assert configuration.load(cfg).backend.min_age_days == 0

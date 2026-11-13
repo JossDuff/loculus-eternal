@@ -3,9 +3,14 @@
 `GET {backend}/{organism}/get-released-data?compression=zstd` streams every released
 accessionVersion as NDJSON. The response is cached on disk by ETag so that a rerun with an
 unchanged backend does not download again. Only entries whose data use terms are OPEN are
-eligible; a restricted entry becomes eligible the day it turns open. Each eligible line is
-projected to the published form, and the line's shape is checked against the pinned schema
-so that a backend change is caught before it reaches the stream.
+eligible; a restricted entry becomes eligible the day it turns open. With a minimum age
+configured, an entry is eligible only once that version was submitted long enough ago. Each
+eligible line is projected to the published form, and the line's shape is checked against the
+pinned schema so that a backend change is caught before it reaches the stream.
+
+The eligible entries of a feed are the copy of the database a run publishes. The record is
+made to hold exactly them: what is eligible and unpublished is published, what is published
+and no longer eligible is withdrawn, and what is withdrawn and eligible again is reinstated.
 """
 
 from __future__ import annotations
@@ -130,31 +135,44 @@ def is_eligible(line: dict) -> bool:
     return line["metadata"].get("dataUseTerms") == "OPEN"
 
 
+def submitted_by(organism: str, metadata: dict, cutoff: int) -> bool:
+    """Whether this version was submitted at or before the cutoff, a Unix time. Every version
+    of an accession carries its own submission time, so a revision waits its own term. A line
+    without a usable time is an error, never a guess in either direction."""
+    at = metadata.get("submittedAtTimestamp")
+    if isinstance(at, bool) or not isinstance(at, int):
+        raise SyncError(f"{organism} {metadata.get('accessionVersion')}: the minimum age rule needs metadata.submittedAtTimestamp as a whole number of seconds, and it is {at!r}")
+    return at <= cutoff
+
+
 @dataclass
 class SyncStats:
     organism: str
     total: int = 0
     open: int = 0
     restricted: int = 0
+    held_back: int = 0          # open, but submitted too recently for the minimum age
     already_published: int = 0
     new: int = 0
-    seen: set = field(default_factory=set)       # every accessionVersion the feed contained, any terms
-    vanished: list = field(default_factory=list)  # published, not withdrawn, and no longer in the feed
+    eligible: set = field(default_factory=set)        # every accessionVersion of the feed that is eligible: the copy
+    to_withdraw: list = field(default_factory=list)   # published, not withdrawn, and not in the copy
+    to_reinstate: list = field(default_factory=list)  # withdrawn, and in the copy again
 
 
 PROGRESS_EVERY = 10_000
 
 
-def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats, progress=None) -> Iterator[dict]:
+def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: SyncStats, progress=None, submitted_cutoff: int | None = None) -> Iterator[dict]:
     """Yield the projection of every eligible, not-yet-published line, filling `stats` as it
     goes. `is_published(accession, version)` is answered from the chain-derived set. Nothing
     is held: the caller consumes the entries as they are produced. `progress(read, total)` is
-    called every PROGRESS_EVERY lines so a long feed shows signs of life."""
+    called every PROGRESS_EVERY lines so a long feed shows signs of life. `submitted_cutoff`
+    is the latest submission time, as a Unix time, that is old enough to publish; None means
+    no minimum age."""
     for line in iter_lines(feed):
         stats.total += 1
         check_shape(organism, line)
-        stats.seen.add(line["metadata"]["accessionVersion"])
-        entry = _classify(organism, line, is_published, stats)
+        entry = _classify(organism, line, is_published, stats, submitted_cutoff)
         # Report after the line is classified, so the "new" count includes this line.
         if progress is not None and stats.total % PROGRESS_EVERY == 0:
             progress(stats.total, feed.total_records)
@@ -162,13 +180,18 @@ def iter_new_entries(organism: str, feed: OrganismFeed, is_published, stats: Syn
             yield entry
 
 
-def _classify(organism: str, line: dict, is_published, stats: SyncStats):
-    """Count the line as restricted, already published or new; return the entry if new."""
+def _classify(organism: str, line: dict, is_published, stats: SyncStats, submitted_cutoff: int | None):
+    """Count the line as restricted, held back, already published or new; return the entry
+    if new."""
     if not is_eligible(line):
         stats.restricted += 1
         return None
     stats.open += 1
     m = line["metadata"]
+    if submitted_cutoff is not None and not submitted_by(organism, m, submitted_cutoff):
+        stats.held_back += 1
+        return None
+    stats.eligible.add(m["accessionVersion"])
     if is_published(m["accession"], int(m["version"])):
         stats.already_published += 1
         return None
@@ -180,20 +203,24 @@ def _classify(organism: str, line: dict, is_published, stats: SyncStats):
     return entry
 
 
-def select_new_entries(organism: str, feed: OrganismFeed, is_published) -> tuple[list[dict], SyncStats]:
+def select_new_entries(organism: str, feed: OrganismFeed, is_published, submitted_cutoff: int | None = None) -> tuple[list[dict], SyncStats]:
     """The in-memory form of iter_new_entries, for tests and small feeds."""
     stats = SyncStats(organism)
-    return list(iter_new_entries(organism, feed, is_published, stats)), stats
+    return list(iter_new_entries(organism, feed, is_published, stats, submitted_cutoff=submitted_cutoff)), stats
 
 
-def find_vanished(organism: str, stats: SyncStats, published: dict[str, list[list[int]]], withdrawn: dict[str, list[int]]) -> list[str]:
-    """accessionVersions published for this organism, not withdrawn, that the feed no longer
-    contains. These are reported, never acted on without the maintainer's say-so."""
+def find_changes(stats: SyncStats, published: dict[str, list[list[int]]], withdrawn: dict[str, list[int]]) -> tuple[list[str], list[str]]:
+    """What it takes, beyond publishing the new entries, for the record to hold exactly the
+    eligible entries of the feed just read: the accessionVersions that are published, not
+    withdrawn and not eligible, to withdraw; and those that are withdrawn and eligible, to
+    reinstate. `published` and `withdrawn` are this organism's, as the stream has them. Call
+    it once the feed has been read to the end."""
     gone = []
     for accession, versions in published.items():
         for version, _ in versions:
             av = f"{accession}.{version}"
-            if av not in stats.seen and version not in withdrawn.get(accession, []):
+            if av not in stats.eligible and version not in withdrawn.get(accession, []):
                 gone.append(av)
-    stats.vanished = sorted(gone)
-    return stats.vanished
+    back = [f"{accession}.{version}" for accession, versions in withdrawn.items() for version in versions if f"{accession}.{version}" in stats.eligible]
+    stats.to_withdraw, stats.to_reinstate = sorted(gone), sorted(back)
+    return stats.to_withdraw, stats.to_reinstate
