@@ -38,7 +38,8 @@ class EntryStore:
         self.runs: dict[str, list[tuple[int, Path]]] = {}
         # organism -> (accession, version) -> batch
         self.index: dict[str, dict[EntryKey, int]] = {}
-        # organism -> (accession, version) -> batch of the withdrawal
+        # organism -> (accession, version) -> batch of the withdrawal, for the entries that
+        # are withdrawn now; a reinstatement takes its key out again
         self.withdrawn: dict[str, dict[EntryKey, int]] = {}
 
     # --- queries -------------------------------------------------------------------------------
@@ -58,27 +59,38 @@ class EntryStore:
         idx = self.index.get(organism, {})
         return sum(1 for k in idx if k not in self.withdrawn.get(organism, {}))
 
-    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None) -> Iterator[tuple[int, Record]]:
+    def iter_sorted(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None, extra_reinstated: set[EntryKey] | None = None) -> Iterator[tuple[int, Record]]:
         """(batch, (accession, version, payload)) in materialisation order, the earliest batch
         winning a duplicate key, withdrawn entries left out. There is deliberately no way to
-        ask for the withdrawn ones: honouring a withdrawal is the whole point of the record."""
+        ask for the withdrawn ones: honouring a withdrawal is the whole point of the record.
+        The extras describe a batch that is not in the store yet (its run, the keys it
+        withdraws, the keys it reinstates), so the output can be computed as it will stand
+        once that batch is accepted."""
         runs = list(self.runs.get(organism, []))
         if extra_run is not None:
             runs.append(extra_run)
-        excluded = set(self.withdrawn.get(organism, {})) | set(extra_withdrawn or ())
+        excluded = (set(self.withdrawn.get(organism, {})) | set(extra_withdrawn or ())) - set(extra_reinstated or ())
         for batch, rec in merge_runs(runs):
             if (rec[0], rec[1]) in excluded:
                 continue
             yield batch, rec
 
-    def iter_records(self, organism: str) -> Iterator[Record]:
-        for _, rec in self.iter_sorted(organism):
+    def iter_records(self, organism: str, reinstated: set[EntryKey] | None = None) -> Iterator[Record]:
+        for _, rec in self.iter_sorted(organism, extra_reinstated=reinstated):
             yield rec
 
     def withdraw(self, organism: str, keys: list[EntryKey], batch: int) -> None:
         bucket = self.withdrawn.setdefault(organism, {})
         for k in keys:
             bucket.setdefault(k, batch)
+
+    def reinstate(self, organism: str, keys: list[EntryKey]) -> None:
+        """Lift the withdrawal of these keys; one that is not withdrawn is left as it is. The
+        organism's bucket stays even when it empties, so an organism known only through a
+        withdrawal is still listed after the withdrawal is lifted."""
+        bucket = self.withdrawn.get(organism, {})
+        for k in keys:
+            bucket.pop(k, None)
 
     def payload(self, organism: str, accession: str, version: int) -> bytes | None:
         """One entry's payload; a linear scan of the winning run, meant for tests and tools.
@@ -93,12 +105,12 @@ class EntryStore:
                         return p
         return None
 
-    def materialise_to(self, organism: str, out: BinaryIO | None, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None) -> tuple[str, int]:
+    def materialise_to(self, organism: str, out: BinaryIO | None, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None, extra_reinstated: set[EntryKey] | None = None) -> tuple[str, int]:
         """Write the organism's output file (if `out` is given) while hashing it. Returns the
         SHA-256 hex digest and the number of lines. This is the one definition of the file."""
         h = hashlib.sha256()
         n = 0
-        for _, (_, _, payload) in self.iter_sorted(organism, extra_run, extra_withdrawn):
+        for _, (_, _, payload) in self.iter_sorted(organism, extra_run, extra_withdrawn, extra_reinstated):
             if out is not None:
                 out.write(payload)
                 out.write(b"\n")
@@ -107,8 +119,8 @@ class EntryStore:
             n += 1
         return h.hexdigest(), n
 
-    def digest(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None) -> tuple[str, int]:
-        return self.materialise_to(organism, None, extra_run, extra_withdrawn)
+    def digest(self, organism: str, extra_run: tuple[int, Path] | None = None, extra_withdrawn: set[EntryKey] | None = None, extra_reinstated: set[EntryKey] | None = None) -> tuple[str, int]:
+        return self.materialise_to(organism, None, extra_run, extra_withdrawn, extra_reinstated)
 
     def materialise(self, organism: str) -> bytes:
         import io

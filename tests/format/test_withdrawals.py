@@ -1,4 +1,5 @@
-"""Withdrawal records: the bytes stay, the output and digests leave them out."""
+"""Withdrawal records: the bytes stay, the output and digests leave them out. Reinstatement
+records: the entry returns to the output without being published again."""
 
 import hashlib
 
@@ -50,7 +51,7 @@ def test_F19_withdrawal_before_the_entry_also_applies():
     enc, b0 = genesis()
     with StreamDecoder(b0.blobs).decode() as dec0:
         b1 = enc.encode_batch([sample_entry("mpox", "PP_000005", 1)], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[{"organism": "mpox", "accessionVersions": ["PP_000006.1"], "note": None}])
-    # The entry withdrawn in advance can never be published.
+    # The entry withdrawn in advance cannot be published while the withdrawal stands.
     with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
         with pytest.raises(FormatError, match="withdrawn"):
             enc.encode_batch([sample_entry("mpox", "PP_000006", 1)], previous_entries=dec1.records, codec=CODEC_RAW)
@@ -99,3 +100,147 @@ def test_F19_vector(vectors):
         assert dec.withdrawn() == v["withdrawn"] and dec.published() == v["published"]
         for org, a in v["artifacts"].items():
             assert dec.materialise(org).decode("utf-8") == a["ndjson"]
+
+
+# --- reinstatement ----------------------------------------------------------------------------
+
+
+def withdrawn_once(avs=("PP_000001.1",)):
+    """Genesis, then a batch that withdraws the named zika entries."""
+    enc, b0 = genesis()
+    with StreamDecoder(b0.blobs).decode() as dec0:
+        original = dec0.materialise("zika")
+        b1 = enc.encode_batch([], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[{"organism": "zika", "accessionVersions": list(avs), "note": "gone"}])
+    return enc, b0, b1, original
+
+
+def test_F21_reinstated_entry_returns_to_the_output_without_being_published_again():
+    enc, b0, b1, original = withdrawn_once()
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
+        assert b"PP_000001.1" not in dec1.materialise("zika")
+        b2 = enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"], "note": "back"}], force_index=True)
+    assert b2.entry_count == 0 and b2.reinstated_count == 1 and b2.withdrawn_count == 0
+    # The output is byte for byte what it was before the withdrawal, and the batch that
+    # brings the entry back carries a record naming it, not the entry.
+    assert b2.manifest["organisms"]["zika"] == {"entriesInBatch": 0, "entriesTotal": 3, "withdrawnInBatch": 0, "withdrawnTotal": 0, "artifactSha256": hashlib.sha256(original).hexdigest()}
+    assert b2.index["withdrawn"] == {} and len(b2.stream.rstrip(b"\x00")) < 2000
+    with StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode() as dec:
+        assert not dec.torn and all(dec.verify_artifacts().values())
+        assert dec.materialise("zika") == original
+        assert dec.has("zika", "PP_000001", 1) and not dec.is_withdrawn("zika", "PP_000001", 1)
+        assert dec.count("zika") == 3 and dec.withdrawn() == {} and dec.batches[2].reinstated_count == 1
+        assert dec.payload("zika", "PP_000001", 1) is not None
+        # An encoder that starts from the decoded stream stands where the running one does.
+        state = dec.encoder_state()
+        assert state.withdrawn == enc.state.withdrawn == {} and state.entries_total == enc.state.entries_total
+        fresh = StreamEncoder(CHAIN_ID, CONTRACT, state=state).encode_batch([sample_entry("zika", "PP_000011", 1)], previous_entries=dec.records, codec=CODEC_RAW)
+        running = enc.encode_batch([sample_entry("zika", "PP_000011", 1)], previous_entries=dec.records, codec=CODEC_RAW)
+        assert fresh.stream == running.stream
+
+
+def test_F21_the_most_recent_batch_naming_an_entry_decides():
+    enc, b0, b1, original = withdrawn_once()
+    blobs = b0.blobs + b1.blobs
+    expected = []
+    for step in ("reinstatements", "withdrawals", "reinstatements"):
+        with StreamDecoder(blobs).decode() as dec:
+            b = enc.encode_batch([], previous_entries=dec.records, codec=CODEC_RAW, **{step: [{"organism": "zika", "accessionVersions": ["PP_000001.1"]}]})
+        blobs = blobs + b.blobs
+        expected.append(step == "withdrawals")
+        with StreamDecoder(blobs).decode() as dec:
+            assert not dec.torn and all(dec.verify_artifacts().values())
+            assert dec.is_withdrawn("zika", "PP_000001", 1) is expected[-1]
+            assert (b"PP_000001.1" in dec.materialise("zika")) is not expected[-1]
+    assert expected == [False, True, False]
+    with StreamDecoder(blobs).decode() as dec:
+        assert dec.materialise("zika") == original and [b.withdrawn_count for b in dec.batches] == [0, 1, 0, 1, 0] and [b.reinstated_count for b in dec.batches] == [0, 0, 1, 0, 1]
+
+
+def test_F21_one_batch_may_withdraw_some_entries_and_reinstate_others():
+    enc, b0, b1, _ = withdrawn_once(("PP_000001.1", "PP_000002.1"))
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
+        assert dec1.count("zika") == 1
+        b2 = enc.encode_batch(
+            [sample_entry("zika", "PP_000010", 1)],
+            previous_entries=dec1.records,
+            codec=CODEC_ZSTD,
+            withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000001.2"]}],
+            reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000002.1"]}],
+            force_index=True,
+        )
+    assert b2.manifest["organisms"]["zika"]["entriesTotal"] == 2 and b2.manifest["organisms"]["zika"]["withdrawnInBatch"] == 1 and b2.manifest["organisms"]["zika"]["withdrawnTotal"] == 2
+    assert b2.index["withdrawn"] == {"zika": {"PP_000001": [1, 2]}}
+    with StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode() as dec:
+        assert not dec.torn and all(dec.verify_artifacts().values())
+        assert [canonical.loads(p)["metadata"]["accessionVersion"] for p in dec.payloads("zika")] == ["PP_000002.1", "PP_000010.1"]
+
+
+def test_F21_entry_withdrawn_before_it_was_published_can_be_published_once_reinstated():
+    enc, b0 = genesis()
+    with StreamDecoder(b0.blobs).decode() as dec0:
+        b1 = enc.encode_batch([], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[{"organism": "mpox", "accessionVersions": ["PP_000006.1"]}])
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
+        with pytest.raises(FormatError, match="withdrawn and cannot be published"):
+            enc.encode_batch([sample_entry("mpox", "PP_000006", 1)], previous_entries=dec1.records, codec=CODEC_RAW)
+        # The reinstatement and the entry may travel in the same batch.
+        b2 = enc.encode_batch([sample_entry("mpox", "PP_000006", 1)], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "mpox", "accessionVersions": ["PP_000006.1"]}])
+    with StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode() as dec:
+        assert not dec.torn and all(dec.verify_artifacts().values())
+        assert dec.has("mpox", "PP_000006", 1) and not dec.is_withdrawn("mpox", "PP_000006", 1) and dec.count("mpox") == 2
+
+
+def test_F21_an_organism_emptied_by_withdrawal_comes_back_whole():
+    enc, b0 = genesis()
+    with StreamDecoder(b0.blobs).decode() as dec0:
+        original = dec0.materialise("mpox")
+        b1 = enc.encode_batch([], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[{"organism": "mpox", "accessionVersions": ["PP_000003.1"]}])
+    assert b1.manifest["organisms"]["mpox"]["entriesTotal"] == 0
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
+        b2 = enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "mpox", "accessionVersions": ["PP_000003.1"]}])
+    with StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode() as dec:
+        assert not dec.torn and all(dec.verify_artifacts().values()) and dec.materialise("mpox") == original
+
+
+def test_F21_encoder_refuses_bad_reinstatements():
+    enc, b0, b1, _ = withdrawn_once()
+    with StreamDecoder(b0.blobs + b1.blobs).decode() as dec1:
+        for bad in ({"organism": "zika", "accessionVersions": []}, {"organism": "", "accessionVersions": ["PP_000001.1"]}, {"organism": "zika", "accessionVersions": ["PP_000001"]}, {"organism": "zika", "accessionVersions": ["PP_000001.1"], "note": 5}):
+            with pytest.raises(FormatError, match="reinstatement"):
+                enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[bad])
+        # Only what is withdrawn can be reinstated: not a published entry, not an unknown one.
+        for av in ("PP_000002.1", "PP_000777.1"):
+            with pytest.raises(FormatError, match="not withdrawn"):
+                enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": [av]}])
+        # The same entry cannot be withdrawn and reinstated by one batch, whichever it is now.
+        with pytest.raises(FormatError, match="already withdrawn"):
+            enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}], reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+        with pytest.raises(FormatError, match="not withdrawn"):
+            enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, withdrawals=[{"organism": "zika", "accessionVersions": ["PP_000002.1"]}], reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000002.1"]}])
+        with pytest.raises(FormatError, match="more than one reinstatement"):
+            enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}, {"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+        # A refused batch leaves the encoder where it was.
+        b2 = enc.encode_batch([], previous_entries=dec1.records, codec=CODEC_RAW, reinstatements=[{"organism": "zika", "accessionVersions": ["PP_000001.1"]}])
+    assert b2.batch == 2 and b2.reinstated_count == 1
+
+
+def test_F21_vector(vectors):
+    v = vectors["reinstatement.json"]
+    i = v["input"]
+    enc = StreamEncoder(i["chainId"], bytes.fromhex(i["contract"]))
+    blobs: list[bytes] = []
+    for n, spec in enumerate(i["batches"]):
+        if blobs:
+            with StreamDecoder(blobs).decode() as dec:
+                b = enc.encode_batch(spec["entries"], previous_entries=dec.records, codec=CODEC_RAW, withdrawals=spec["withdrawals"], reinstatements=spec["reinstatements"], force_index=spec["forceIndex"])
+        else:
+            b = enc.encode_batch(spec["entries"], codec=CODEC_RAW, force_index=spec["forceIndex"])
+        assert b.stream.rstrip(b"\x00").hex() == v["expected"][n]["streamHex"]
+        assert b.manifest == v["expected"][n]["manifest"]
+        blobs = blobs + b.blobs
+        with StreamDecoder(blobs).decode() as dec:
+            assert not dec.torn and dec.withdrawn() == v["withdrawnAfterEachBatch"][n]
+    with StreamDecoder(blobs).decode() as dec:
+        assert dec.published() == v["published"]
+        for org, a in v["artifacts"].items():
+            assert dec.materialise(org).decode("utf-8") == a["ndjson"]
+            assert hashlib.sha256(dec.materialise(org)).hexdigest() == a["sha256"]
