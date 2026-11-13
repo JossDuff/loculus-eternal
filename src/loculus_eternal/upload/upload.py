@@ -1,6 +1,7 @@
 """The upload command: one idempotent run that publishes whatever is newly eligible.
 
     learn what is published (chain + stream)  →  finish an interrupted batch if there is one
+    →  have the maintainer confirm the database being published from
     →  sync the backend  →  select eligible, unpublished entries  →  nothing new? stop
     →  encode a batch  →  journal it  →  dry run  →  send with finality  →  store own blobs
     →  report
@@ -38,7 +39,7 @@ from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, fin
 @dataclass
 class UploadReport:
     mode: str
-    outcome: str                         # "published", "nothing-to-publish", "refused", "checked", "dry-run-ok", "resumed"
+    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "checked", "dry-run-ok", "resumed"
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
@@ -207,14 +208,19 @@ class Uploader:
 
     # --- the run --------------------------------------------------------------------------------
 
-    def run(self, mode: str = "publish", withdraw_vanished: bool = False) -> UploadReport:
+    def run(self, mode: str = "publish", withdraw_vanished: bool = False, confirm: Callable[[str], bool] | None = None) -> UploadReport:
         """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only).
 
         `withdraw_vanished` is the maintainer's explicit confirmation that every published
-        entry the backend no longer serves should be withdrawn in this batch."""
+        entry the backend no longer serves should be withdrawn in this batch.
+
+        `confirm` is asked once before a publish reads the backend: it is handed a sentence
+        naming the database about to be published and the contract it goes to, and the run
+        stops unless it returns True. None means nobody is asked."""
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._withdraw_vanished = withdraw_vanished
+        self._confirm = confirm
         self._client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
         try:
             return self._run(mode, report, started)
@@ -243,6 +249,15 @@ class Uploader:
                     self._finish(journal, store, report)
                 elif not self._resume(journal, store, report):
                     return self._done(report, started)
+            # The maintainer confirms which database is published from, because what goes out
+            # is permanent and a config left pointing at another copy looks the same from the
+            # command line. Asked only now: an interrupted batch has transactions racing their
+            # inclusion window and was confirmed by the run that planned it, so finishing it
+            # must not wait on a person. A check or a dry run sends nothing and asks nothing.
+            if mode == "publish" and self._confirm is not None and not self._confirm(self._confirmation_text()):
+                report.outcome = "resumed" if report.transactions else "declined"
+                report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"stopped at the confirmation: the database at {self.cfg.backend.url} was not read and no new batch was planned"
+                return self._done(report, started)
             # The backend is asked only now: an interrupted batch has transactions racing
             # their inclusion window, and finishing it must not wait on a backend outage.
             # It still comes before the chain read, which is the expensive step.
@@ -399,6 +414,15 @@ class Uploader:
         self._finish(journal, store, report)
         return True
 
+    def _confirmation_text(self) -> str:
+        """What the maintainer agrees to before a publish: where the data comes from and where
+        it goes, and, when a withdrawal is confirmed for the run, that it cannot be taken back."""
+        text = f"You are publishing a copy of the Loculus database located at {self.cfg.backend.url}\nto contract {self.cfg.chain.contract} on chain {self.w3.eth.chain_id}."
+        if self._withdraw_vanished:
+            # The one way a copy with records missing changes the record for good.
+            text += "\nEvery published entry that this copy does not contain will be withdrawn, and a withdrawn entry can never be published again."
+        return text
+
     def _withdrawals(self, stats: list[SyncStats], report: UploadReport) -> list[dict]:
         """Called by the encoder once every feed has been read. Withdraws nothing unless the
         maintainer confirmed it for this run."""
@@ -458,6 +482,7 @@ class Uploader:
             "checked": "CHECK COMPLETE (nothing sent)",
             "dry-run-ok": "DRY RUN PASSED (nothing sent)",
             "refused": "REFUSED (nothing sent)",
+            "declined": "STOPPED AT THE CONFIRMATION (nothing sent)",
             "failed": "FAILED",
         }
         self.log(f"RESULT: {verdicts.get(report.outcome, report.outcome.upper())}" + (f": {report.message}" if report.message else ""))

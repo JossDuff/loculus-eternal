@@ -77,6 +77,18 @@ uv run loculus-eternal upload --config loculus-eternal.toml --check   # Check wh
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```
 
+Before it publishes, the command names the database it is about to publish from and the
+contract it publishes to, and asks you to confirm:
+
+```
+You are publishing a copy of the Loculus database located at https://backend.pathoplexus.org
+to contract 0x… on chain 11155111.
+Continue? (Y/n)
+```
+
+Enter or `y` goes ahead; `n` stops before anything is read or sent. Where there is no
+terminal to ask on, the command refuses unless `--yes` confirms in advance.
+
 Run it whenever you want to update the dataset on Ethereum. The upload works out what is already published and won't ever double-upload any data. With nothing new it does nothing.  Feel free to run it as frequent or as rarely as you want. If it is interrupted, run it again.
 
 > The first upload of a dataset could take awhile.  It might take over an hour.

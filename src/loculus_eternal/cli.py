@@ -71,18 +71,44 @@ def cmd_recover(args: argparse.Namespace) -> int:
     return 0
 
 
+def ask_to_continue(statement: str) -> bool:
+    """Put a statement to the person at the terminal and ask whether to go on. Enter alone
+    means yes; anything that is neither yes nor no is asked again. The question goes to
+    standard error so it is still seen when standard output is being written to a log."""
+    print(statement, file=sys.stderr)
+    while True:
+        print("Continue? (Y/n) ", end="", file=sys.stderr, flush=True)
+        answer = sys.stdin.readline()
+        if not answer:
+            # The input ended without an answer: nobody said yes.
+            print(file=sys.stderr)
+            return False
+        answer = answer.strip().lower()
+        if answer in ("", "y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     from loculus_eternal.upload.upload import Uploader
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
+    # A publish asks the maintainer to confirm the database it publishes from. With no
+    # terminal there is nobody to ask, and going ahead unasked would make the question
+    # worthless exactly where a mistake is least likely to be noticed, so it refuses.
+    confirm = None if args.yes or mode != "publish" else ask_to_continue
+    if confirm is not None and not sys.stdin.isatty():
+        print("refused: publishing asks for confirmation and there is no terminal to ask on; run it in a terminal, or pass --yes to confirm in advance", file=sys.stderr)
+        return 1
     try:
         # Construction already talks to the endpoint (for the chain id), so it is inside the try.
         if mode == "check" and not args.with_key:
             uploader = Uploader(cfg)
         else:
             uploader = Uploader.with_key(cfg, configuration.publisher_key())
-        report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
+        report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished, confirm=confirm)
     except (RequestException, ChainError) as e:
         # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
         # in the journal; the next run resumes from it.
@@ -135,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
     up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
+    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks about the database it publishes from; needed when there is no terminal")
     up.set_defaults(func=cmd_upload)
 
     health = sub.add_parser("health", help="serve a one-page health check of the published record for anyone to verify")

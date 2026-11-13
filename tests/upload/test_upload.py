@@ -336,17 +336,95 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
     env.pop(configuration.PUBLISHER_KEY_ENV, None)
     cmd = [sys.executable, "-m", "loculus_eternal.cli", "upload", "--config", str(world["cfg_path"])]
-    missing = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    missing = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert missing.returncode != 0 and configuration.PUBLISHER_KEY_ENV in missing.stderr
     env[configuration.PUBLISHER_KEY_ENV] = world["anvil"].publisher.key.hex()
     checked = subprocess.run(cmd + ["--check"], capture_output=True, text=True, env=env)
     assert checked.returncode == 0 and "planned batch 0" in checked.stdout and "estimated cost" in checked.stdout
-    published = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # A subprocess has no terminal to be asked on, so the publish is confirmed in advance.
+    published = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert published.returncode == 0, published.stderr
     assert "published batch 0" in published.stdout
-    again = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    again = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert again.returncode == 0 and "nothing to publish" in again.stdout
     assert world["anvil"].contract.functions.blobCount().call() >= 1
+
+
+def test_U24_command_line_without_a_terminal_publishes_only_with_yes(world):
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
+    env[configuration.PUBLISHER_KEY_ENV] = world["anvil"].publisher.key.hex()
+    cmd = [sys.executable, "-m", "loculus_eternal.cli", "upload", "--config", str(world["cfg_path"])]
+    unasked = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert unasked.returncode == 1 and "--yes" in unasked.stderr
+    assert world["anvil"].contract.functions.blobCount().call() == 0 and world["backend"].requests == []
+    # A dry run sends nothing, so it has nothing to ask.
+    dry = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert dry.returncode == 0, dry.stderr
+    assert world["anvil"].contract.functions.blobCount().call() == 0
+
+
+def test_U24_publish_names_the_database_and_stops_on_no_before_reading_it(world):
+    anvil, backend = world["anvil"], world["backend"]
+    asked, lines = [], []
+
+    def no(text):
+        asked.append(text)
+        return False
+
+    cfg = configuration.load(world["cfg_path"])
+    up = Uploader(cfg, account=anvil.publisher, log=lines.append, poll_interval=0.1)
+    declined = up.run(confirm=no)
+    assert declined.outcome == "declined" and backend.url in declined.message
+    assert lines[-1].startswith("RESULT: STOPPED AT THE CONFIRMATION (nothing sent)")
+    assert len(asked) == 1
+    assert f"located at {backend.url}" in asked[0] and anvil.contract.address in asked[0] and f"chain {anvil.chain_id}" in asked[0]
+    assert asked[0].endswith(f"on chain {anvil.chain_id}.") and "withdrawn" not in asked[0]
+    assert backend.requests == [], "the database was not read"
+    assert anvil.contract.functions.blobCount().call() == 0 and not (up.data_dir / "journal.json").exists()
+    assert list((up.data_dir / "reports").glob("*-publish-declined.json"))
+
+    def never(text):
+        raise AssertionError("a check or a dry run sends nothing and must not ask")
+
+    assert Uploader(cfg, log=lambda s: None).run("check", confirm=never).outcome == "checked"
+    assert uploader(world).run("dry-run", confirm=never).outcome == "dry-run-ok"
+
+    published = uploader(world).run(confirm=lambda text: True)
+    assert published.outcome == "published" and published.new_entries == 3
+
+
+def test_U24_confirmation_warns_when_missing_entries_will_be_withdrawn(world):
+    asked = []
+    report = uploader(world).run(withdraw_vanished=True, confirm=lambda text: asked.append(text) or False)
+    assert report.outcome == "declined"
+    assert "does not contain will be withdrawn" in asked[0] and "never be published again" in asked[0]
+
+
+def test_U24_interrupted_batch_is_finished_before_anyone_is_asked(world):
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(4)])  # more than two blobs: two transactions
+    up = uploader(world)
+
+    def crash_after_first(tx):
+        if tx.index == 0:
+            raise KeyboardInterrupt("simulated crash right after the first transaction was sent")
+
+    up.submitter.after_send = crash_after_first
+    with pytest.raises(KeyboardInterrupt):
+        up.run(confirm=lambda text: True)
+    assert (up.data_dir / "journal.json").exists()
+    seen = []
+
+    def no(text):
+        # By the time the question comes, the batch that was already confirmed is complete.
+        seen.append((anvil.contract.functions.blobCount().call(), (up.data_dir / "journal.json").exists()))
+        return False
+
+    resumed = uploader(world).run(confirm=no)
+    assert resumed.outcome == "resumed" and len(resumed.transactions) == 2
+    assert "interrupted batch was finished" in resumed.message and "stopped at the confirmation" in resumed.message
+    assert len(seen) == 1 and seen[0][0] > 2 and seen[0][1] is False
+    assert anvil.contract.functions.blobCount().call() == seen[0][0], "nothing new was sent after the no"
 
 
 def test_U11_tooling_is_republished_when_the_version_changes(world):
