@@ -7,7 +7,7 @@ import pytest
 
 from loculus_eternal.format.encode import Entry
 from loculus_eternal.testkit import BackendStub, released_line
-from loculus_eternal.upload.sync import BackendClient, SyncError, check_shape, is_eligible, iter_lines, select_new_entries
+from loculus_eternal.upload.sync import BackendClient, OrganismFeed, SyncError, check_shape, is_eligible, iter_lines, select_new_entries
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "released"
 
@@ -254,3 +254,61 @@ min_age_days = {value}
     # Left out, there is no delay.
     cfg.write_text(cfg.read_text().replace(f"min_age_days = {value}\n", ""))
     assert configuration.load(cfg).backend.min_age_days == 0
+
+
+def test_U27_the_count_the_backend_reports_is_checked_against_the_lines_read(backend, tmp_path):
+    backend.set_lines("zika", [released_line("zika", f"PP_{i}", 1) for i in range(1, 4)])
+    client = BackendClient(backend.url, tmp_path / "feeds")
+    feed = client.fetch("zika")
+    client.check_complete(feed, 3)
+    assert feed.path.exists()
+    with pytest.raises(SyncError, match="zika.*holds 3 released entries and 2 arrived.*run again"):
+        client.check_complete(feed, 2)
+    # The copy that failed the check is gone, so the next fetch is a download, not "unchanged".
+    assert not feed.path.exists()
+    again = client.fetch("zika")
+    assert not again.from_cache and again.total_records == 3
+    # A backend that reports no count cannot be checked either way.
+    client.check_complete(OrganismFeed("zika", None, None, again.path, from_cache=False), 0)
+    assert again.path.exists()
+
+
+@pytest.mark.parametrize(
+    "table,line,message",
+    [
+        ("backend", "min_age_day = 90", r"\[backend\] has unknown key\(s\) min_age_day; it takes min_age_days, organisms, url"),
+        ("upload", "min_age_days = 90", r"\[upload\] has unknown key\(s\) min_age_days; .*min_age_days belongs under \[backend\]"),
+        ("upload", "max_blob_fee = 5", r"\[upload\] has unknown key\(s\) max_blob_fee; it takes"),
+        ("backend", "data_dir = 'x'", r"data_dir belongs under \[upload\]"),
+    ],
+)
+def test_U23_an_unknown_key_in_the_backend_or_upload_table_is_a_configuration_error(tmp_path, table, line, message):
+    from loculus_eternal import config as configuration
+
+    tables = {"backend": 'url = "http://127.0.0.1:2"\norganisms = "all"\n', "upload": 'data_dir = "upload-data"\n'}
+    tables[table] += line + "\n"
+    cfg = tmp_path / "loculus-eternal.toml"
+    cfg.write_text(
+        f"""
+[chain]
+rpc_url = "http://127.0.0.1:1"
+contract = "0x0000000000000000000000000000000000000001"
+chain_id = 31337
+beacon_genesis_time = 0
+
+[backend]
+{tables["backend"]}
+[upload]
+{tables["upload"]}"""
+    )
+    # A misspelt or misplaced key would otherwise leave its default in force without a word.
+    with pytest.raises(configuration.ConfigError, match=message):
+        configuration.load(cfg)
+
+
+def test_U23_the_shipped_example_config_uses_only_known_keys(monkeypatch):
+    from loculus_eternal import config as configuration
+
+    monkeypatch.setenv("RPC_API", "http://127.0.0.1:1")
+    example = Path(__file__).resolve().parents[2] / "config" / "sepolia.example.toml"
+    assert configuration.load(example).backend.min_age_days == 0

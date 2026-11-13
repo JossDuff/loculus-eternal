@@ -350,17 +350,58 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
     assert world["anvil"].contract.functions.blobCount().call() >= 1
 
 
-def test_U24_command_line_without_a_terminal_publishes_only_with_yes(world):
+def test_U24_command_line_without_a_terminal_sends_a_batch_only_with_yes(world):
+    anvil = world["anvil"]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    env[configuration.PUBLISHER_KEY_ENV] = world["anvil"].publisher.key.hex()
+    env[configuration.PUBLISHER_KEY_ENV] = anvil.publisher.key.hex()
     cmd = [sys.executable, "-m", "loculus_eternal.cli", "upload", "--config", str(world["cfg_path"])]
+    # There is a batch to send and nobody to ask: it is planned, shown, and not sent.
     unasked = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
-    assert unasked.returncode == 1 and "--yes" in unasked.stderr
-    assert world["anvil"].contract.functions.blobCount().call() == 0 and world["backend"].requests == []
+    assert unasked.returncode == 1 and "no terminal" in unasked.stderr and "--yes" in unasked.stderr
+    assert "new entries:  3" in unasked.stderr, "the log shows what --yes would have sent"
+    assert "RESULT: REFUSED (nothing sent)" in unasked.stdout and "Continue?" not in unasked.stdout + unasked.stderr
+    assert anvil.contract.functions.blobCount().call() == 0
     # A dry run sends nothing, so it has nothing to ask.
     dry = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
     assert dry.returncode == 0, dry.stderr
-    assert world["anvil"].contract.functions.blobCount().call() == 0
+    assert anvil.contract.functions.blobCount().call() == 0
+    published = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert published.returncode == 0 and "published batch 0" in published.stdout
+    # With nothing to send there is nothing to ask, so a scheduled run needs no --yes to
+    # report that all is in order.
+    quiet = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert quiet.returncode == 0 and "nothing to publish" in quiet.stdout
+
+
+def test_U24_with_nobody_to_ask_an_interrupted_batch_is_still_finished(world):
+    from loculus_eternal.upload.upload import NobodyToAsk
+
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(4)])  # two transactions
+    up = uploader(world)
+
+    def crash_after_first(tx):
+        if tx.index == 0:
+            raise KeyboardInterrupt("simulated crash right after the first transaction was sent")
+
+    up.submitter.after_send = crash_after_first
+    with pytest.raises(KeyboardInterrupt):
+        up.run(confirm=lambda text: True)
+    world["backend"].add("zika", released_line("zika", "PP_9", 1))
+
+    def nobody(text):
+        raise NobodyToAsk("there is no terminal to ask on")
+
+    # The run that resumes has no terminal (a service, a remote command). The batch already
+    # confirmed is finished all the same; only the new one waits for a person.
+    resumed = uploader(world).run(confirm=nobody)
+    assert resumed.outcome == "resumed" and len(resumed.transactions) == 2 and not (up.data_dir / "journal.json").exists()
+    assert "interrupted batch was finished" in resumed.message and "no terminal" in resumed.message and "nothing of batch 1 was sent" in resumed.message
+    finished = anvil.contract.functions.blobCount().call()
+    register_in_archive(world, resumed)
+    refused = uploader(world).run(confirm=nobody)
+    assert refused.outcome == "refused" and "no terminal" in refused.message and refused.transactions == []
+    assert anvil.contract.functions.blobCount().call() == finished
 
 
 def test_U24_publish_states_the_batch_and_stops_on_no_before_anything_is_sent(world):
@@ -924,3 +965,35 @@ def test_U18_the_gas_headroom_covers_the_first_batch_end_ever():
     # still empty, so the mid-batch estimate is at its lowest and the batch end at its highest.
     warm_mid_batch_call = 16_500 + 21_000 + 700
     assert _gas_limit(warm_mid_batch_call) >= first_batch_end_call
+
+
+def test_U27_a_feed_that_arrived_short_stops_the_run_and_withdraws_nothing(world, tmp_path):
+    """Entries missing from a feed are withdrawn, so a feed holding fewer entries than the
+    backend said it would must not be mistaken for a database that lost them."""
+    import zstandard
+
+    anvil, backend = world["anvil"], world["backend"]
+    first = uploader(world).run()
+    assert first.outcome == "published"
+    register_in_archive(world, first)
+    # The backend still says three entries; one line of the response went missing on the way.
+    short = tmp_path / "zika-short.ndjson.zst"
+    short.write_bytes(zstandard.ZstdCompressor().compress(json.dumps(released_line("zika", "PP_2", 1)).encode() + b"\n"))
+    backend.set_file("zika", short, 3)
+    lines = []
+    up = Uploader(configuration.load(world["cfg_path"]), account=anvil.publisher, log=lines.append, poll_interval=0.1)
+    stopped = up.run()
+    assert stopped.outcome == "failed" and "holds 3 released entries and 1 arrived" in stopped.message
+    assert lines[-1].startswith("RESULT: FAILED") and stopped.withdrawn == {} and stopped.batch is None
+    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"]
+    assert not (up.data_dir / "journal.json").exists()
+    # The short copy is not kept: the next run downloads again and does not trip on it.
+    assert not (up.data_dir / "feeds" / "zika.ndjson.zst").exists() and "zika" not in json.loads((up.data_dir / "feeds" / "etags.json").read_text())
+    with backend._lock:
+        del backend.files["zika"]
+    again = uploader(world).run()
+    assert again.outcome == "nothing-to-publish" and again.withdrawn == {}
+    # A feed that really is that short, and says so, is the database's word: it is followed.
+    backend.set_file("zika", short, 1)
+    followed = uploader(world).run()
+    assert followed.outcome == "published" and followed.withdrawn == {"zika": ["PP_1.1"]}

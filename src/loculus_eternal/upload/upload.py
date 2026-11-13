@@ -61,6 +61,11 @@ class UploadReport:
         return self.__dict__
 
 
+class NobodyToAsk(RuntimeError):
+    """Raised by a confirm callback that has nobody to put the question to. The batch is not
+    sent, and the run says why instead of reporting that somebody answered no."""
+
+
 class Uploader:
     def __init__(self, config: Config, *, w3: Web3 | None = None, account=None, log: Callable[[str], None] = print, sleep=time.sleep, poll_interval: float | None = None, clock: Callable[[], float] = time.time):
         if config.backend is None or config.upload is None:
@@ -116,6 +121,8 @@ class Uploader:
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
         n = len(organisms)
+        # What the stream holds does not change while the feeds are read.
+        published, withdrawn = view.decoded.published(), view.decoded.withdrawn()
         for k, organism in enumerate(organisms, 1):
             feed = client.fetch(organism)
             st = SyncStats(organism)
@@ -127,7 +134,10 @@ class Uploader:
                 self.log(f"[{k}/{n}] {o}: {read:,}/{total:,} read, {st.new:,} new so far" if total else f"[{k}/{n}] {o}: {read:,} read, {st.new:,} new so far")
 
             yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st, progress, submitted_cutoff=self._submitted_cutoff)
-            gone, back = find_changes(st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
+            # An entry that is not in the feed is withdrawn, so a feed that arrived short must
+            # not be mistaken for a database that no longer holds the rest.
+            client.check_complete(feed, st.total)
+            gone, back = find_changes(st, published.get(organism, {}), withdrawn.get(organism, {}))
             days = self.cfg.backend.min_age_days
             self.log(
                 f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, "
@@ -145,7 +155,7 @@ class Uploader:
                 continue
             st = SyncStats(organism)
             stats.append(st)
-            gone, _ = find_changes(st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
+            gone, _ = find_changes(st, published.get(organism, {}), withdrawn.get(organism, {}))
             if gone:
                 self.log(f"{organism}: the backend no longer serves this organism; its {len(gone):,} published entries are to be withdrawn")
 
@@ -225,7 +235,8 @@ class Uploader:
         `confirm` is asked once a publish has planned its batch and before anything of it is
         sent: it is handed a few lines naming the database, the contract, and how many
         entries the batch adds, withdraws and reinstates, and the run stops unless it returns
-        True. None means nobody is asked."""
+        True. It raises NobodyToAsk when it cannot put the question to anyone, which also
+        stops the run. None means nobody is asked."""
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._confirm = confirm
@@ -294,8 +305,8 @@ class Uploader:
                 previous_entries=view.previous_entries,
                 tooling=tooling,
                 codec=CODEC_ZSTD,
-                withdrawals=_Later(lambda: self._withdrawals(stats, report)),
-                reinstatements=_Later(lambda: self._reinstatements(stats, report)),
+                withdrawals=_Later(lambda: self._records(stats, "to_withdraw", report.withdrawn, f"not among the entries eligible for publication in the database on {self._today}")),
+                reinstatements=_Later(lambda: self._records(stats, "to_reinstate", report.reinstated, f"among the entries eligible for publication in the database again on {self._today}")),
             )
         except EmptyBatch:
             report.sync = [_stats_json(s) for s in stats]
@@ -334,10 +345,17 @@ class Uploader:
         # interrupted batch was finished above without asking: the run that planned it had
         # it confirmed, and its transactions could not wait on a person. A check or a dry
         # run sends nothing and asks nothing.
-        if mode == "publish" and self._confirm is not None and not self._confirm(self._confirmation_text(batch, stats)):
-            report.outcome = "resumed" if report.transactions else "declined"
-            report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"stopped at the confirmation: nothing of batch {batch.batch} was sent"
-            return self._done(report, started)
+        if mode == "publish" and self._confirm is not None:
+            try:
+                stopped = None if self._confirm(self._confirmation_text(batch, stats)) else ("declined", "stopped at the confirmation")
+            except NobodyToAsk as e:
+                stopped = ("refused", str(e))
+            if stopped:
+                report.outcome = "resumed" if report.transactions else stopped[0]
+                report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"{stopped[1]}: nothing of batch {batch.batch} was sent"
+                if stopped[0] == "refused":
+                    self.log(f"refused: {report.message}")
+                return self._done(report, started)
         # The snapshot of the stream as it will stand after this batch goes to IPFS first,
         # because the batch-end transaction carries its CID as the pointer. Without IPFS, or
         # if no endpoint takes it, the existing pointer is carried forward: a batch end always
@@ -445,23 +463,18 @@ class Uploader:
             lines.append(f"  held back:    {sum(s.held_back for s in stats):,}  (submitted less than {days} days ago)")
         return "\n".join(lines)
 
-    def _withdrawals(self, stats: list[SyncStats], report: UploadReport) -> list[dict]:
-        """Called by the encoder once every feed has been read: every published entry that is
-        not in the copy is withdrawn, so that recovery produces the copy and nothing else."""
+    @staticmethod
+    def _records(stats: list[SyncStats], which: str, reported: dict, note: str) -> list[dict]:
+        """The withdrawal or reinstatement records of a batch, one per organism that has any,
+        called by the encoder once every feed has been read. `which` is the list in the
+        organism's statistics (what to withdraw, or what to reinstate); the same lists go
+        into the run report under `reported`."""
         out = []
         for st in stats:
-            if st.to_withdraw:
-                out.append({"organism": st.organism, "accessionVersions": st.to_withdraw, "note": f"not among the entries eligible for publication in the database on {self._today}"})
-                report.withdrawn[st.organism] = list(st.to_withdraw)
-        return out
-
-    def _reinstatements(self, stats: list[SyncStats], report: UploadReport) -> list[dict]:
-        """The other direction: every withdrawn entry that is in the copy again is reinstated."""
-        out = []
-        for st in stats:
-            if st.to_reinstate:
-                out.append({"organism": st.organism, "accessionVersions": st.to_reinstate, "note": f"among the entries eligible for publication in the database again on {self._today}"})
-                report.reinstated[st.organism] = list(st.to_reinstate)
+            named = getattr(st, which)
+            if named:
+                out.append({"organism": st.organism, "accessionVersions": named, "note": note})
+                reported[st.organism] = list(named)
         return out
 
     def _snapshots_held(self) -> dict[str, str]:
@@ -540,7 +553,10 @@ def _installed_version() -> str | None:
 
 def _stats_json(st: SyncStats) -> dict:
     d = dict(st.__dict__)
-    d.pop("eligible", None)
+    # The eligible set is the whole feed's worth of names, and the names withdrawn and
+    # reinstated are already in the report under their own keys.
+    for key in ("eligible", "to_withdraw", "to_reinstate"):
+        d.pop(key, None)
     return d
 
 

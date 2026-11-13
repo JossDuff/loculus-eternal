@@ -100,6 +100,20 @@ class BackendClient:
             self._etags_path.write_text(json.dumps(self._etags, indent=1))
         return OrganismFeed(organism, etag, count, cached, from_cache=False)
 
+    def check_complete(self, feed: OrganismFeed, lines_read: int) -> None:
+        """Refuse a feed that held a different number of entries than the backend said it
+        would. An entry missing from a feed is withdrawn from the record, so a response that
+        arrived short or empty (a proxy answering for a backend that is down, a migration half
+        done) must stop the run, not be taken for a database that lost those entries. The
+        cached copy is dropped with it, or the next run would be answered "unchanged" and
+        read the same short file again. A backend that reports no count cannot be checked."""
+        if feed.total_records is None or lines_read == feed.total_records:
+            return
+        self._etags.pop(feed.organism, None)
+        self._etags_path.write_text(json.dumps(self._etags, indent=1))
+        feed.path.unlink(missing_ok=True)
+        raise SyncError(f"{feed.organism}: the backend said its feed holds {feed.total_records:,} released entries and {lines_read:,} arrived. Publishing from an incomplete feed would withdraw the entries that did not arrive, so nothing was sent; the cached copy was discarded, run again")
+
 
 def iter_lines(feed: OrganismFeed) -> Iterator[dict]:
     """Decode the cached feed line by line without holding it all in memory."""

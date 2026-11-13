@@ -91,7 +91,7 @@ Continue? (Y/n)
 ```
 
 Enter or `y` goes ahead; `n` stops with nothing sent. Where there is no terminal to ask on,
-the command refuses unless `--yes` confirms in advance.
+the batch is shown and not sent unless `--yes` confirmed in advance.
 
 **The published record follows the database.** After an upload, `recover` produces exactly
 the entries that were eligible in the database that upload read: an entry that is new is

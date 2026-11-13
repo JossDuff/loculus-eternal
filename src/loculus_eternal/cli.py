@@ -71,17 +71,36 @@ def cmd_recover(args: argparse.Namespace) -> int:
     return 0
 
 
-def ask_to_continue(statement: str) -> bool:
-    """Put a statement to the person at the terminal and ask whether to go on. Enter alone
-    means yes; anything that is neither yes nor no is asked again. The question goes to
-    standard error so it is still seen when standard output is being written to a log."""
-    print(statement, file=sys.stderr)
+def discard_typed_ahead(terminal) -> None:
+    """Throw away whatever was typed at the terminal before the question was shown. A publish
+    can plan for an hour before it asks, and an Enter pressed in that time to see whether the
+    terminal is alive would otherwise be read as the answer, and Enter alone means yes."""
+    if not terminal.isatty():
+        return
+    try:
+        import termios
+    except ImportError:
+        # Windows has no termios; its console keeps the keys typed ahead in its own buffer.
+        import msvcrt
+
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+        return
+    termios.tcflush(terminal.fileno(), termios.TCIFLUSH)
+
+
+def ask_to_continue(statement: str, answers, shown) -> bool:
+    """Put a statement to a person and ask whether to go on: `shown` is where they read it,
+    `answers` where they type. Enter alone means yes; anything that is neither yes nor no is
+    asked again; only what is typed after the question appeared counts."""
+    discard_typed_ahead(answers)
+    print(statement, file=shown)
     while True:
-        print("Continue? (Y/n) ", end="", file=sys.stderr, flush=True)
-        answer = sys.stdin.readline()
+        print("Continue? (Y/n) ", end="", file=shown, flush=True)
+        answer = answers.readline()
         if not answer:
             # The input ended without an answer: nobody said yes.
-            print(file=sys.stderr)
+            print(file=shown)
             return False
         answer = answer.strip().lower()
         if answer in ("", "y", "yes"):
@@ -90,18 +109,40 @@ def ask_to_continue(statement: str) -> bool:
             return False
 
 
+def confirm_at_terminal(statement: str) -> bool:
+    """The question a publish asks before it sends its batch, put to the person at the
+    terminal. Answers are typed on standard input, so that must be a terminal. The question
+    is written where it will be seen: on standard error when that is the terminal, and
+    otherwise (standard error going to a log file or a pipe) on the terminal itself, because
+    a question that lands in a log leaves the command waiting on someone who cannot see it.
+    With nobody to ask it says so and stops the batch, having shown what was not sent."""
+    from loculus_eternal.upload.upload import NobodyToAsk
+
+    nobody = NobodyToAsk("publishing asks for confirmation and there is no terminal to ask on; run it in a terminal, or pass --yes to confirm in advance")
+    if sys.stdin is None or not sys.stdin.isatty():
+        print(statement, file=sys.stderr)
+        raise nobody
+    if sys.stderr is not None and sys.stderr.isatty():
+        return ask_to_continue(statement, sys.stdin, sys.stderr)
+    try:
+        terminal = open("/dev/tty", "w")
+    except OSError:
+        print(statement, file=sys.stderr)
+        raise nobody from None
+    with terminal:
+        return ask_to_continue(statement, sys.stdin, terminal)
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     from loculus_eternal.upload.upload import Uploader
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
-    # A publish asks the maintainer to confirm the batch it has planned. With no terminal
-    # there is nobody to ask, and going ahead unasked would make the question worthless
-    # exactly where a mistake is least likely to be noticed, so it refuses up front.
-    confirm = None if args.yes or mode != "publish" else ask_to_continue
-    if confirm is not None and not sys.stdin.isatty():
-        print("refused: publishing asks for confirmation and there is no terminal to ask on; run it in a terminal, or pass --yes to confirm in advance", file=sys.stderr)
-        return 1
+    # A publish asks the maintainer to confirm the batch it has planned, unless --yes
+    # answered in advance. Whether there is a terminal to ask on is found out only when the
+    # question comes up: a run that finishes an interrupted batch, or finds nothing to
+    # publish, never asks and so needs neither a terminal nor --yes.
+    confirm = None if args.yes or mode != "publish" else confirm_at_terminal
     try:
         # Construction already talks to the endpoint (for the chain id), so it is inside the try.
         if mode == "check" and not args.with_key:
