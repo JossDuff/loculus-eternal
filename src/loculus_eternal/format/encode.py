@@ -168,6 +168,8 @@ class EncodedBatch:
     entry_count: int
     withdrawn_count: int = 0
     reinstated_count: int = 0
+    uncompressed_bytes: int = 0   # the batch body as records, before the codec
+    compressed_bytes: int = 0     # the batch body as it is written into the stream
 
 
 # previous_entries(organism, reinstated) yields (accession, version, payload) in
@@ -400,6 +402,8 @@ class StreamEncoder:
             entry_count=count,
             withdrawn_count=sum(len(v) for accs in withdraw_now.values() for v in accs.values()),
             reinstated_count=sum(len(v) for accs in reinstate_now.values() for v in accs.values()),
+            uncompressed_bytes=uncompressed_length,
+            compressed_bytes=len(compressed_bytes),
         )
 
 

@@ -24,6 +24,7 @@ from eth_account import Account
 from web3 import Web3
 
 from loculus_eternal.config import Config
+from loculus_eternal.format.chunks import BLOB_BYTES
 from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
@@ -59,6 +60,40 @@ class UploadReport:
 
     def to_json(self) -> dict:
         return self.__dict__
+
+
+# The time a batch takes to send is estimated for the operator's planning and for nothing
+# else. Transactions go out several at a time; a block has taken one or two of them in the
+# runs so far, and one per block is assumed. A block is final two epochs after its own ends,
+# so between two and three epochs after it is made; two and a half are assumed.
+SLOTS_PER_EPOCH = 32
+EPOCHS_TO_FINALITY_ASSUMED = 2.5
+
+
+def estimated_seconds(transactions: int, seconds_per_slot: float) -> tuple[float, float]:
+    """Roughly how long a batch takes: (to include its transactions, then to finality)."""
+    return transactions * seconds_per_slot, EPOCHS_TO_FINALITY_ASSUMED * SLOTS_PER_EPOCH * seconds_per_slot
+
+
+def human_size(n: int) -> str:
+    """A byte count as the health page writes one: decimal units, one decimal for GB."""
+    if n >= 1e9:
+        return f"{n / 1e9:.1f} GB"
+    if n >= 1e6:
+        return f"{round(n / 1e6)} MB"
+    if n >= 1e3:
+        return f"{round(n / 1e3)} kB"
+    return f"{n} bytes"
+
+
+def human_duration(seconds: float) -> str:
+    seconds = round(seconds)
+    if seconds < 120:
+        return f"{seconds} seconds"
+    minutes = round(seconds / 60)
+    if minutes < 120:
+        return f"{minutes} minutes"
+    return f"{minutes // 60} hours {minutes % 60} minutes"
 
 
 class NobodyToAsk(RuntimeError):
@@ -316,19 +351,27 @@ class Uploader:
         report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // self.policy.max_blobs_per_transaction), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
         report.batch["withdrawn"] = batch.withdrawn_count
         report.batch["reinstated"] = batch.reinstated_count
+        to_include, to_finality = estimated_seconds(report.batch["transactions"], self.cfg.chain.seconds_per_slot)
+        report.batch.update({"uncompressedBytes": batch.uncompressed_bytes, "compressedBytes": batch.compressed_bytes, "blobBytes": len(batch.blobs) * BLOB_BYTES, "estimatedSeconds": round(to_include + to_finality)})
         self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + (f", {batch.reinstated_count} reinstatement(s)" if batch.reinstated_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
+        # What the batch would cost at this moment, before anything is simulated: shown with
+        # the summary so the size, the cost and the time are seen together, and before a
+        # publish asks its question.
+        fees = current_fees(self.w3, self.policy)
+        likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
+        at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
+        cost = f"{likely / 10**18:.6f} ETH at current fees, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
+        balance = self.w3.eth.get_balance(self.account.address) if self.account is not None else None
+        if balance is not None:
+            cost += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
+        time_line = f"about {human_duration(to_include + to_finality)}: {human_duration(to_include)} to include {report.batch['transactions']} transaction(s) at about one per block, then {human_duration(to_finality)} until the last is final"
+        self._summarise(batch, stats, "planned", [("transactions", f"{report.batch['transactions']}"), ("estimated cost", cost), ("estimated time", time_line)])
+
         if mode == "check":
-            fees = current_fees(self.w3, self.policy)
-            likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
-            at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
             report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
-            line = f"estimated cost at current fees: {likely / 10**18:.6f} ETH, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
-            if self.account is not None:
-                balance = self.w3.eth.get_balance(self.account.address)
+            if balance is not None:
                 report.dry_run["balanceWei"] = balance
-                line += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
-            self.log(line)
             report.outcome = "checked"
             return self._done(report, started)
 
@@ -400,6 +443,7 @@ class Uploader:
             self._abandon(journal)
             return self._done(report, started)
 
+        sending_started = time.time()
         try:
             self.submitter.run(journal)
         except (Refused, RevertedOnChain) as e:
@@ -415,7 +459,18 @@ class Uploader:
             report.message = str(e)
             self.log(f"publishing stopped: {e}")
             return self._done(report, started)
+        sending_seconds = time.time() - sending_started
         self._finish(journal, store, report)
+        # What it took, now that it is known: the summary shown before sending gave estimates.
+        sent = report.transactions[-len(journal.txs):]
+        paid = sum((t.get("gasUsed") or 0) * (t.get("effectiveGasPrice") or 0) + len(t["seqs"]) * BLOB_GAS_PER_BLOB * (t.get("blobGasPrice") or 0) for t in sent)
+        blocks = [t["block"] for t in sent if t.get("block") is not None]
+        report.batch.update({"costWei": paid, "sendingSeconds": round(sending_seconds)})
+        self._summarise(batch, stats, "published", [
+            ("transactions", f"{len(sent)}" + (f", in blocks {min(blocks):,} to {max(blocks):,}" if blocks else "")),
+            ("cost", f"{paid / 10**18:.6f} ETH paid"),
+            ("time", f"{human_duration(time.time() - started)} in all; {human_duration(sending_seconds)} from the first transaction sent until the last was final"),
+        ])
         report.outcome = "published"
         report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f", {view.torn_blobs} of them from an abandoned upload that readers skip" if view.torn_blobs else "") + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
         self.log(report.message)
@@ -443,6 +498,23 @@ class Uploader:
             return False
         self._finish(journal, store, report)
         return True
+
+    def _summarise(self, batch, stats: list[SyncStats], state: str, rows: list[tuple[str, str]]) -> None:
+        """The few numbers that describe a batch, together in one place near the end of what a
+        run logs: what it changes in the record and how large it is, followed by what the
+        caller knows about its transactions, cost and time (estimates before it is sent,
+        what it took afterwards)."""
+        days = self.cfg.backend.min_age_days
+        entries = f"{batch.entry_count:,} new, {batch.withdrawn_count:,} withdrawn, {batch.reinstated_count:,} reinstated"
+        if days:
+            entries += f"; {sum(s.held_back for s in stats):,} held back as submitted less than {days} days ago"
+        blob_bytes = len(batch.blobs) * BLOB_BYTES
+        size = f"{human_size(batch.uncompressed_bytes)} of records, {human_size(batch.compressed_bytes)} compressed, in {len(batch.blobs):,} blob(s) that take {human_size(blob_bytes)} on chain"
+        lines = [("entries", entries), ("size", size), *rows]
+        width = max(len(name) for name, _ in lines)
+        self.log(f"summary of batch {batch.batch} ({state}):")
+        for name, text in lines:
+            self.log(f"  {name.ljust(width)}  {text}")
 
     def _confirmation_text(self, batch, stats: list[SyncStats]) -> str:
         """What the maintainer agrees to before a batch is sent: where the data comes from,

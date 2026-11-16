@@ -331,3 +331,12 @@ def test_U1_a_version_that_is_not_a_whole_number_fails_the_name_check(backend, t
     feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
     with pytest.raises(SyncError, match="names itself 'PP_1.1' but carries accession 'PP_1' and version 1.0"):
         select_new_entries("zika", feed, lambda acc, ver: True)
+
+
+def test_U28_sizes_and_durations_read_as_a_person_would_say_them():
+    from loculus_eternal.upload.upload import estimated_seconds, human_duration, human_size
+
+    assert [human_size(n) for n in (0, 999, 1_000, 414_400, 45_613_056, 999_499_999, 14_123_456_789)] == ["0 bytes", "999 bytes", "1 kB", "414 kB", "46 MB", "999 MB", "14.1 GB"]
+    assert [human_duration(s) for s in (0.4, 45, 119, 120, 696, 1656, 7140, 7200, 9000)] == ["0 seconds", "45 seconds", "119 seconds", "2 minutes", "12 minutes", "28 minutes", "119 minutes", "2 hours 0 minutes", "2 hours 30 minutes"]
+    # Fifty-eight transactions at one per twelve-second block, then two and a half epochs.
+    assert estimated_seconds(58, 12) == (696, 960)

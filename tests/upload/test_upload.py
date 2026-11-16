@@ -360,6 +360,55 @@ def test_U22_the_log_names_the_backend_and_the_contract_a_run_works_with(world):
     assert lines.index(f"backend at {world['backend'].url} serves 2 organisms: mpox, zika") < lines.index(f"reading the contract at {world['anvil'].contract.address} and the published stream")
 
 
+def test_U28_a_run_ends_with_a_summary_of_size_cost_and_time(world):
+    from loculus_eternal.upload.upload import human_size
+
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_S{i}") for i in range(4)])  # more than two blobs: two transactions
+    cfg = configuration.load(world["cfg_path"])
+
+    def summary(lines, state):
+        start = lines.index(f"summary of batch 0 ({state}):")
+        rows = {}
+        for line in lines[start + 1:]:
+            if not line.startswith("  "):
+                break
+            name, _, text = line.strip().partition("  ")
+            rows[name] = text.strip()
+        return start, rows
+
+    lines = []
+    checked = Uploader(cfg, log=lines.append).run("check")
+    start, rows = summary(lines, "planned")
+    assert lines.index(next(l for l in lines if l.startswith("planned batch 0"))) < start and lines[-1].startswith("RESULT: CHECK COMPLETE")
+    assert list(rows) == ["entries", "size", "transactions", "estimated cost", "estimated time"]
+    assert rows["entries"] == "6 new, 0 withdrawn, 0 reinstated"
+    b = checked.batch
+    assert b["blobs"] == 4 and b["blobBytes"] == 4 * 131_072 and 0 < b["compressedBytes"] < b["uncompressedBytes"]
+    assert rows["size"] == f"{human_size(b['uncompressedBytes'])} of records, {human_size(b['compressedBytes'])} compressed, in 4 blob(s) that take 524 kB on chain"
+    assert rows["transactions"] == "2" and rows["estimated cost"].endswith("gwei)") and "ETH at current fees, at most" in rows["estimated cost"]
+    # One transaction per block of one second here, then two and a half epochs to finality.
+    assert b["estimatedSeconds"] == 2 + 80 and rows["estimated time"] == "about 82 seconds: 2 seconds to include 2 transaction(s) at about one per block, then 80 seconds until the last is final"
+
+    lines = []
+    published = Uploader(cfg, account=anvil.publisher, log=lines.append, poll_interval=0.1).run()
+    assert published.outcome == "published"
+    # Before sending, the same estimates, now with the wallet that will pay.
+    _, planned = summary(lines, "planned")
+    assert f"wallet {anvil.publisher.address} holds" in planned["estimated cost"]
+    start, rows = summary(lines, "published")
+    assert list(rows) == ["entries", "size", "transactions", "cost", "time"] and lines[-1].startswith("RESULT: SUCCESS") and start < len(lines) - 2
+    blocks = [t["block"] for t in published.transactions]
+    assert rows["transactions"] == f"2, in blocks {min(blocks):,} to {max(blocks):,}"
+    paid = sum(t["gasUsed"] * t["effectiveGasPrice"] + len(t["seqs"]) * 131_072 * t["blobGasPrice"] for t in published.transactions)
+    assert published.batch["costWei"] == paid > 0 and rows["cost"] == f"{paid / 10**18:.6f} ETH paid"
+    assert published.batch["sendingSeconds"] >= 0 and "in all;" in rows["time"] and rows["time"].endswith("from the first transaction sent until the last was final")
+    # A run with nothing to publish has no batch and so no summary.
+    register_in_archive(world, published)
+    lines = []
+    assert Uploader(cfg, log=lines.append).run("check").outcome == "nothing-to-publish" and not any(l.startswith("summary of batch") for l in lines)
+
+
 def test_U24_command_line_without_a_terminal_sends_a_batch_only_with_yes(world):
     anvil = world["anvil"]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
@@ -771,6 +820,9 @@ def test_U26_entries_wait_for_the_minimum_age_and_are_published_once_old_enough(
         assert recovered.missing == [] and recovered.decode["allArtifactsMatch"]
         return report, [json.loads(l)["metadata"]["accessionVersion"] for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
 
+    logged = []
+    assert Uploader(configuration.load(cfg), log=logged.append, clock=lambda: now).run("check").outcome == "checked"
+    assert "  entries         2 new, 0 withdrawn, 0 reinstated; 2 held back as submitted less than 90 days ago" in logged
     asked = []
     first, recovered = upload(now, asked)
     assert recovered == ["PP_1.1", "PP_2.1"], "exactly ninety days is old enough, eighty-nine is not"
