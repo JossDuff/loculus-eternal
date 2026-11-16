@@ -92,4 +92,7 @@ def test_H8_the_health_page_writes_out_the_recovery_command_for_its_dataset(tmp_
     # A chain with no public example gets a placeholder the reader must fill in.
     assert load("chain_id = 31337\nbeacon_genesis_time = 0\n")[1].endswith("--rpc https://your-ethereum-rpc")
     page = (Path(cli.__file__).parent / "health_page.html").read_text()
-    assert 'id="recover-command"' in page and 'id="copy-recover"' in page and "Recover this dataset yourself" in page
+    assert 'id="recover-command"' in page and 'id="copy-recover"' in page
+    # The command has a section of its own, below the blob check and above the general examples.
+    assert page.index("<h2>Blob check</h2>") < page.index("<h2>Recover</h2>") < page.index('id="recover-command"') < page.index("<footer>")
+    assert page.index("<footer>") < page.index("Backup and recover your Loculus database to Ethereum!")

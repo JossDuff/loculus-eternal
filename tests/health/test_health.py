@@ -245,7 +245,7 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
     try:
         page = httpx.get(f"{server.url}/")
         assert page.status_code == 200 and "Loculus Eternal health" in page.text and "<script>" in page.text
-        assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "Recover this dataset yourself" in page.text
+        assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "<h2>Recover</h2>" in page.text and "Backup and recover your Loculus database to Ethereum!" in page.text
         # The archives with rules of their own about when a blob is served carry a note.
         assert "stores its bytes only a week or two later" in page.text and "stopped guaranteeing blob storage" in page.text
         idle = httpx.get(f"{server.url}/api/report").json()
