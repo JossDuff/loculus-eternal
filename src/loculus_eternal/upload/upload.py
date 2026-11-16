@@ -41,13 +41,13 @@ from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, fin
 @dataclass
 class UploadReport:
     mode: str
-    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "checked", "dry-run-ok", "resumed"
+    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "planned", "dry-run-ok", "resumed"
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
     # organism -> accessionVersions this run's batch withdraws (published, no longer eligible
-    # in the copy) and reinstates (withdrawn, eligible in it again); a check or a dry run
-    # reports what a publish would do
+    # in the copy) and reinstates (withdrawn, eligible in it again); a dry run reports what
+    # a publish would do
     withdrawn: dict = field(default_factory=dict)
     reinstated: dict = field(default_factory=dict)
     tooling_published: bool = False
@@ -241,7 +241,10 @@ class Uploader:
     # --- the run --------------------------------------------------------------------------------
 
     def run(self, mode: str = "publish", confirm: Callable[[str], bool] | None = None) -> UploadReport:
-        """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only).
+        """mode: "publish" (default) or "dry-run", which sends nothing. A dry run goes as far
+        as it can: built with the publisher's account it plans the batch, simulates every
+        transaction and checks the key, the fees and the balance; built without one it plans
+        the batch and estimates its cost, and says the simulation was left out.
 
         `confirm` is asked once a publish has planned its batch and before anything of it is
         sent: it is handed a few lines naming the database, the contract, and how many
@@ -348,22 +351,22 @@ class Uploader:
         time_line = f"about {human_duration(to_include + to_finality)}: {human_duration(to_include)} to include {report.batch['transactions']} transaction(s) at about one per block, then {human_duration(to_finality)} until the last is final"
         self._summarise(batch, stats, "planned", [("transactions", f"{report.batch['transactions']}"), ("estimated cost", cost), ("estimated time", time_line)])
 
-        if mode == "check":
-            report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
-            if balance is not None:
-                report.dry_run["balanceWei"] = balance
-            report.outcome = "checked"
-            return self._done(report, started)
-
         if self.submitter is None:
-            raise SystemExit("configuration error: publishing needs the publisher private key")
+            if mode != "dry-run":
+                raise SystemExit("configuration error: publishing needs the publisher private key")
+            # A dry run without the key ends here: the batch is planned and costed, and the
+            # part that needs the key is named, so nobody takes this for a full rehearsal.
+            report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
+            self.log("the publisher key is not in the environment, so no transaction was simulated: with the key, a dry run also checks that the key is the contract's publisher, that the wallet covers the cost, and that every transaction would be accepted")
+            report.outcome = "planned"
+            return self._done(report, started)
         # The maintainer confirms the batch before anything of it leaves this machine: which
         # database it was read from, where it goes, and how many entries it adds, withdraws
         # and reinstates. The record will hold exactly what that copy holds, so a copy with
         # entries missing withdraws them, and this is where that is seen in time. An
         # interrupted batch was finished above without asking: the run that planned it had
-        # it confirmed, and its transactions could not wait on a person. A check or a dry
-        # run sends nothing and asks nothing.
+        # it confirmed, and its transactions could not wait on a person. A dry run sends
+        # nothing and asks nothing.
         if mode == "publish" and self._confirm is not None:
             try:
                 stopped = None if self._confirm(self._confirmation_text(batch, stats)) else ("declined", "stopped at the confirmation")
@@ -568,7 +571,7 @@ class Uploader:
             "published": "SUCCESS",
             "resumed": "SUCCESS",
             "nothing-to-publish": "NOTHING TO DO",
-            "checked": "CHECK COMPLETE (nothing sent)",
+            "planned": "DRY RUN WITHOUT THE KEY (batch planned, nothing simulated or sent)",
             "dry-run-ok": "DRY RUN PASSED (nothing sent)",
             "refused": "REFUSED (nothing sent)",
             "declined": "STOPPED AT THE CONFIRMATION (nothing sent)",

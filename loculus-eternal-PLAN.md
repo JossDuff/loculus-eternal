@@ -298,7 +298,7 @@ safe to interrupt and rerun. Steps:
    configured endpoints; verify the CIDs match the precomputed ones.
 9. **Report.** Write the run report (blob seq range, versioned hashes, CIDs, gas paid).
 
-`loculus-eternal upload --check` reports how many eligible entries are unpublished and the
+`loculus-eternal upload --dry-run` reports how many eligible entries are unpublished and the
 estimated cost, without sending anything.
 
 Configuration: backend URL, RPC URL, contract address, blob source list, IPFS
@@ -445,7 +445,7 @@ vectors to byte-identical NDJSON with every source but one disabled.
 
 **Upload command.** Published-set acquisition from the chain and stream, sync from a Loculus
 backend (recorded fixtures, and a local Loculus dev instance if available), eligibility
-filter, batch planner, dry-run, journaled submitter with finality wait, run report, `--check`,
+filter, batch planner, dry-run, journaled submitter with finality wait, run report, `--dry-run`,
 runbook. Round-trip test: upload on anvil → recover → digests match. Deliverable:
 `loculus-eternal upload` publishes a real delta on anvil end-to-end.
 
@@ -462,7 +462,7 @@ using only public sources. Record costs, timings, and every operational surprise
 `docs/testnet-report.md`. Freeze the format, the contract, and the IPFS profile.
 
 **Mainnet genesis and handover.** Resolve hosting first. Deploy. Publish genesis. Set up
-alerts (publish failures, balance low, IPFS pin failures, a periodic `--check` that reports
+alerts (publish failures, balance low, IPFS pin failures, a periodic `--dry-run` without the key that reports
 unpublished eligible entries), and the public "how to verify / how to recover" page. Hand the
 runbook to the Pathoplexus team, who operate it from then on.
 
@@ -506,6 +506,14 @@ feeds cached on 2026-10-07 and 2026-10-13: 944 of 308,398 open entries changed c
 without a new version in six days (two metadata fields filled in later), and a pipeline
 version change rewrites every entry of an organism, so following content would grow the
 stream by roughly a full dataset each time.
+
+**One dry run — DECIDED 2026-11-16: `--check` is folded into `--dry-run`.** The two
+overlapped: both planned the batch and sent nothing, and only the dry run simulated the
+transactions. What `--check` alone offered was running without the publisher key, which a
+machine that only watches for pending entries should not have to hold. So `--dry-run` goes
+as far as the key allows: with the key in the environment it simulates every transaction
+and checks the key, the fees and the balance; without it, it plans the batch, estimates its
+cost, and says the simulation was left out. `--check` and `--with-key` are removed.
 
 **Recovery in one command — DECIDED 2026-11-16: `recover <contract address> --rpc <url>`,
 run from a clone.** Recovery is for anyone, and a config file to write first was the largest

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -201,7 +202,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
     from loculus_eternal.upload.upload import Uploader
 
     cfg = configuration.load(args.config)
-    mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
+    mode = "dry-run" if args.dry_run else "publish"
     # A publish asks the maintainer to confirm the batch it has planned, unless --yes
     # answered in advance. Whether there is a terminal to ask on is found out only when the
     # question comes up: a run that finishes an interrupted batch, or finds nothing to
@@ -209,7 +210,10 @@ def cmd_upload(args: argparse.Namespace) -> int:
     confirm = None if args.yes or mode != "publish" else confirm_at_terminal
     try:
         # Construction already talks to the endpoint (for the chain id), so it is inside the try.
-        if mode == "check" and not args.with_key:
+        # A dry run goes as far as the key lets it: without the key it plans the batch and
+        # estimates its cost, which is all a machine that only watches for pending entries
+        # needs and which lets it do so without holding the key that can publish.
+        if mode == "dry-run" and not os.environ.get(configuration.PUBLISHER_KEY_ENV):
             uploader = Uploader(cfg)
         else:
             uploader = Uploader.with_key(cfg, configuration.publisher_key())
@@ -219,7 +223,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         # in the journal; the next run resumes from it.
         print(f"the RPC endpoint failed: {e}\nnothing is lost: run the same command again to resume", file=sys.stderr)
         return 3
-    if report.outcome in ("published", "nothing-to-publish", "checked", "dry-run-ok", "resumed"):
+    if report.outcome in ("published", "nothing-to-publish", "planned", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":
         print(f"publishing stopped: {report.message}", file=sys.stderr)
@@ -262,10 +266,8 @@ def main(argv: list[str] | None = None) -> int:
 
     up = sub.add_parser("upload", help="make the published record hold exactly the eligible entries of the database, as one batch; a no-op when it already does")
     up.add_argument("--config", type=Path, required=True, help="TOML config file (see the README)")
-    up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
-    up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
-    up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
-    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks before it sends its batch (see --check first for what the batch would do); needed when there is no terminal")
+    up.add_argument("--dry-run", action="store_true", help="send nothing: plan the batch and report what it would change, its size, cost and time. With the publisher key in the environment, also simulate every transaction and check the key, the fees and the wallet's balance")
+    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks before it sends its batch (see --dry-run first for what the batch would do); needed when there is no terminal")
     up.set_defaults(func=cmd_upload)
 
     health = sub.add_parser("health", help="serve a one-page health check of the published record for anyone to verify")

@@ -73,7 +73,7 @@ Then, with the publisher private key in the environment:
 
 ```
 export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
-uv run loculus-eternal upload --config loculus-eternal.toml --check   # Check what would be published and the cost.  Nothing gets uploaded
+uv run loculus-eternal upload --config loculus-eternal.toml --dry-run   # See what would be published, its size, cost and time.  Nothing gets uploaded
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```
 
