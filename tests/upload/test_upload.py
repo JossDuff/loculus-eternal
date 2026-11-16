@@ -349,6 +349,17 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
     assert world["anvil"].contract.functions.blobCount().call() >= 1
 
 
+def test_U22_the_log_names_the_backend_and_the_contract_a_run_works_with(world):
+    lines = []
+    checked = Uploader(configuration.load(world["cfg_path"]), log=lines.append).run("check")
+    assert checked.outcome == "checked"
+    # Which database is read and which contract is written to are said in the run's own
+    # output, so a log read later answers both without the config beside it.
+    assert f"backend at {world['backend'].url} serves 2 organisms: mpox, zika" in lines
+    assert f"reading the contract at {world['anvil'].contract.address} and the published stream" in lines
+    assert lines.index(f"backend at {world['backend'].url} serves 2 organisms: mpox, zika") < lines.index(f"reading the contract at {world['anvil'].contract.address} and the published stream")
+
+
 def test_U24_command_line_without_a_terminal_sends_a_batch_only_with_yes(world):
     anvil = world["anvil"]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))

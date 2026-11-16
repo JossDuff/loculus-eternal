@@ -112,7 +112,7 @@ class Uploader:
         """The organisms to sync: every organism the backend serves, asked at the start of each
         run, so a newly added organism is picked up by the next run with nothing to configure."""
         organisms = client.organisms()
-        self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
+        self.log(f"backend at {self.cfg.backend.url} serves {len(organisms)} organisms: {', '.join(organisms)}")
         return organisms
 
     def _sync(self, view: PublishedView, stats: list[SyncStats], client: BackendClient, organisms: list[str]):
@@ -274,7 +274,7 @@ class Uploader:
             # their inclusion window, and finishing it must not wait on a backend outage.
             # It still comes before the chain read, which is the expensive step.
             self._organism_list = self._organisms(self._client)
-            self.log("reading the contract and the published stream")
+            self.log(f"reading the contract at {self.cfg.chain.contract} and the published stream")
             view = self._view(store)
             self.log(f"contract holds {view.state.blob_count} blob(s) in {len(view.decoded.batches)} complete batch(es)")
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
