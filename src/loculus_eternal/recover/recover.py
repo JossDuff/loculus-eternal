@@ -152,13 +152,19 @@ class Recovery:
         digests = {}
         # The spilled entries live under the data directory while the files are written and
         # are removed when the decoded stream is closed; the output files are the result.
-        with StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill").decode() as decoded:
+        # Decoding and writing the files take minutes for a large stream, so each batch and
+        # each file is announced as it is done.
+        self.cfg.log(f"decoding the stream from {count:,} blobs")
+        with StreamDecoder(store.blobs(count), spill_dir=self.cfg.data_dir / "spill", progress=self.cfg.log).decode() as decoded:
             last = decoded.batches[-1].manifest["organisms"] if decoded.batches else {}
             withdrawn = decoded.withdrawn()
-            for org in decoded.organisms():
+            organisms = decoded.organisms()
+            for n, org in enumerate(organisms, 1):
                 path = out / f"{safe_dirname(org)}.ndjson"
                 with open(path, "wb", buffering=1 << 20) as f:
                     digests[org] = decoded.materialise_to(org, f)
+                matches = last.get(org, {}).get("artifactSha256") == digests[org]
+                self.cfg.log(f"[{n}/{len(organisms)}] wrote {path.name}: {decoded.count(org):,} entries, " + ("matching the publisher's digest" if matches else "which does NOT match the publisher's digest"))
                 files[org] = {"path": str(path), "entries": decoded.count(org), "withdrawn": sum(len(v) for v in withdrawn.get(org, {}).values()), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
             verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
         report = {

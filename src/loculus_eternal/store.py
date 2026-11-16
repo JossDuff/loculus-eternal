@@ -167,6 +167,13 @@ def fill_store(store: BlobStore, sources, refs, *, log=lambda s: None) -> tuple[
     for r in refs:
         if not store.has(r.seq):
             groups.setdefault((r.block_number, r.block_timestamp), []).append(r)
+    total = len(refs)
+    wanted = sum(len(group) for group in groups.values())
+    held = total - wanted
+    if wanted:
+        # Fetching is the slow part of a recovery, so it says where it stands after every
+        # block's worth of blobs: how many of the stream's blobs are verified and in hand.
+        log(f"{held:,} of {total:,} blobs already held; fetching the other {wanted:,}, which were published in {len(groups):,} block(s)")
     for (block_number, block_timestamp), group in sorted(groups.items(), key=lambda kv: kv[1][0].seq):
         result = sources.acquire(BlobContext(block_number=block_number, block_timestamp=block_timestamp), [r.versioned_hash for r in group])
         rejected += result.rejected
@@ -186,4 +193,9 @@ def fill_store(store: BlobStore, sources, refs, *, log=lambda s: None) -> tuple[
                 missing.append({**entry, "error": str(e)})
                 continue
             fetched += 1
+        # A blob list that came from a snapshot or a file may not say which block a blob was
+        # published in; such blobs are fetched together and the line simply leaves the block out.
+        gave = [a.source for a in result.attempts if a.outcome in ("ok", "partial")]
+        where = ([f"block {block_number:,}"] if block_number is not None else []) + ([f"from {', '.join(gave)}"] if gave else [])
+        log(f"{held + fetched:,}/{total:,} blobs verified" + (f" ({', '.join(where)})" if where else "") + (f"; {len(missing):,} missing so far" if missing else ""))
     return fetched, rejected, missing

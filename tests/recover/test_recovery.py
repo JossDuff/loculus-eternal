@@ -348,6 +348,37 @@ def test_R17_the_short_form_names_a_wrong_address_or_an_unknown_chain(published,
     assert not (tmp_path / "recovery-data").exists() and not (tmp_path / "recovered").exists()
 
 
+def test_R18_recovery_says_how_far_along_it_is(published, tmp_path):
+    import dataclasses
+
+    lines = []
+    cfg = dataclasses.replace(config(published, tmp_path, [BlobscanSource(published["stub"].url)]), log=lines.append)
+    report = Recovery(cfg).run()
+    total = len(published["blobs"])
+    assert report.missing == [] and total > 1
+    # Fetching: where it starts from, then the count of verified blobs after every block.
+    assert any(l.startswith(f"0 of {total} blobs already held; fetching the other {total}, which were published in ") for l in lines)
+    progress = [l for l in lines if "blobs verified (block " in l]
+    counts = [int(l.split("/")[0]) for l in progress]
+    assert len(progress) >= 2 and counts == sorted(set(counts)) and counts[-1] == total
+    assert all(f"/{total} blobs verified (block " in l and "from blobscan(" in l for l in progress)
+    # Decoding: each batch as it starts and as it is verified, then each file as it is written.
+    decoding = lines.index(f"decoding the stream from {total} blobs")
+    assert lines.index(progress[-1]) < decoding
+    assert [l.split(":")[0] for l in lines if l.startswith("decoding batch ")] == ["decoding batch 0", "decoding batch 1"]
+    assert [l.split(" verified")[0] for l in lines if l.startswith("batch ") and " verified: " in l] == ["batch 0", "batch 1"]
+    wrote = [l for l in lines if "] wrote " in l]
+    organisms = published["expected"].organisms()
+    assert [l.split("] wrote ")[1].split(".ndjson")[0] for l in wrote] == organisms
+    assert wrote[0].startswith(f"[1/{len(organisms)}] wrote ") and all(l.endswith("matching the publisher's digest") for l in wrote)
+    assert lines[-1].startswith("done: ")
+    # A second run already holds every blob, so it has no fetching to report.
+    lines.clear()
+    Recovery(cfg).run()
+    assert not any("blobs verified (block " in l or "already held; fetching" in l for l in lines)
+    assert any(l.startswith("decoding batch 0") for l in lines)
+
+
 def test_R4_missing_blob_zero_is_reported_not_a_crash(published, tmp_path):
     stub = published["stub"]
     first = kzg.blob_to_versioned_hash(published["blobs"][0])

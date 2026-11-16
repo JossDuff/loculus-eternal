@@ -15,7 +15,7 @@ import io
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Iterator, Sequence
+from typing import BinaryIO, Callable, Iterator, Sequence
 
 import zstandard
 
@@ -232,13 +232,16 @@ def _body_stream(codec: int, body: bytes) -> BinaryIO:
 
 
 class StreamDecoder:
-    def __init__(self, blobs: Sequence[bytes | None], spill_dir: Path | None = None, sort_buffer_bytes: int | None = None):
+    def __init__(self, blobs: Sequence[bytes | None], spill_dir: Path | None = None, sort_buffer_bytes: int | None = None, progress: Callable[[str], None] | None = None):
         """blobs[i] is blob i's 131,072 bytes, or None if it could not be obtained.
 
         Entries are spilled under `spill_dir` (a fresh temporary directory by default, removed
         when the returned stream is closed). `sort_buffer_bytes` bounds the memory used to sort
-        a batch whose entries are not already in order.
+        a batch whose entries are not already in order. `progress` is told, in a sentence,
+        when a batch starts being decoded and when it has been verified, since a large batch
+        takes minutes.
         """
+        self.progress = progress or (lambda message: None)
         parts = []
         self.missing: set[int] = set()
         for i, b in enumerate(blobs):
@@ -286,12 +289,19 @@ class StreamDecoder:
                 next_blob = self._find_resync(blob + 1, expected_batch, previous_digest)
                 last = (next_blob if next_blob is not None else self.blob_count) - 1
                 out.torn.append(TornBatch(expected_batch, blob, last, str(e)))
+                self.progress(f"blobs {blob:,} to {last:,} do not form batch {expected_batch} ({e})" + ("; a later attempt at it follows" if next_blob is not None else ""))
                 if next_blob is None:
                     out.blobs_consumed = self.blob_count
                     return out
                 blob = next_blob
                 continue
             out.batches.append(decoded)
+            self.progress(
+                f"batch {decoded.batch} verified: {decoded.entry_count:,} entries"
+                + (f", {decoded.withdrawn_count:,} withdrawn" if decoded.withdrawn_count else "")
+                + (f", {decoded.reinstated_count:,} reinstated" if decoded.reinstated_count else "")
+                + f" (blobs {decoded.first_blob_seq:,} to {decoded.blob_count_after - 1:,})"
+            )
             expected_batch += 1
             previous_digest = decoded.manifest_digest
             blob = decoded.blob_count_after
@@ -373,6 +383,7 @@ class StreamDecoder:
 
         # Everything structural verified. Stream the body: schemas and tooling are small and
         # kept in memory; entries go to one staged sorted run per organism.
+        self.progress(f"decoding batch {expected_batch}: its body is {begin.uncompressed_length:,} bytes, {begin.compressed_length:,} compressed")
         schemas: dict[str, dict] = {}
         tooling: dict[str, bytes] = {}
         sorters: dict[str, ExternalSorter] = {}
