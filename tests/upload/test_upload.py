@@ -85,7 +85,6 @@ deployment_block = 1
 
 [backend]
 url = "{backend.url}"
-organisms = ["zika", "mpox"]
 
 [upload]
 data_dir = "{tmp_path / 'upload-data'}"
@@ -741,7 +740,10 @@ def test_U25_the_record_follows_the_latest_copy_through_alternating_uploads(worl
 def test_U26_entries_wait_for_the_minimum_age_and_are_published_once_old_enough(world, tmp_path):
     backend = world["backend"]
     cfg = world["cfg_path"]
-    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]\nmin_age_days = 90'))
+    cfg.write_text(cfg.read_text().replace("\n[upload]", "min_age_days = 90\n\n[upload]"))
+    assert configuration.load(cfg).backend.min_age_days == 90
+    with backend._lock:
+        del backend.lines["mpox"]  # this test is about one organism's entries and their ages
     now, day = 1_800_000_000, 86_400
 
     def submitted(accession, days_ago, version=1):
@@ -809,9 +811,7 @@ def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
     assert rec.missing == [] and rec.decode["allArtifactsMatch"]
 
 
-def test_U16_all_organisms_follows_the_backend_and_withdraws_a_dropped_one(world, tmp_path):
-    cfg = world["cfg_path"]
-    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = "all"'))
+def test_U16_the_upload_follows_the_organisms_the_backend_serves(world, tmp_path):
     first = uploader(world).run()
     assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
     register_in_archive(world, first)
@@ -836,19 +836,7 @@ def test_U16_all_organisms_follows_the_backend_and_withdraws_a_dropped_one(world
     # A backend that cannot enumerate organisms is a plain error before anything is read.
     world["backend"].enumerate_organisms = False
     fifth = uploader(world).run()
-    assert fifth.outcome == "failed" and "list them in the config" in fifth.message
-
-
-def test_U16_an_organism_left_out_of_a_configured_list_is_not_withdrawn(world, tmp_path):
-    first = uploader(world).run()
-    assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
-    register_in_archive(world, first)
-    cfg = world["cfg_path"]
-    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]'))
-    # mpox is still served and still published; the maintainer simply chose not to sync it.
-    second = uploader(world).run()
-    assert second.outcome == "nothing-to-publish" and second.withdrawn == {}
-    assert [s["organism"] for s in second.sync] == ["zika"]
+    assert fifth.outcome == "failed" and "cannot go on without that list" in fifth.message
 
 
 def test_U18_batch_end_transaction_waits_for_its_predecessors_and_gets_its_own_estimate(world, tmp_path):

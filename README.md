@@ -50,9 +50,9 @@ gas schedule.
 ### 2. Upload data (repeatable)
 
 > **Where the data comes from.** `upload` reads it live from the Loculus backend named in
-the config's `[backend]` section: the `url` of the backend and the `organisms` to publish,
-either `"all"` or a list of names. For each organism it downloads the backend's released-data
-feed, the same feed the Loculus website serves its downloads from. The feed is cached in the upload data directory by ETag, so an
+the config's `[backend]` section by its `url`. It asks that backend which organisms it serves
+and publishes all of them; there is no list to keep. For each organism it downloads the
+backend's released-data feed, the same feed the Loculus website serves its downloads from. The feed is cached in the upload data directory by ETag, so an
 organism that has not changed since the last run is not downloaded again. From the feed it
 keeps only entries whose data use terms are OPEN, drops the four bookkeeping fields about
 version status and data use terms, and publishes every entry that is not on the chain yet. A
@@ -100,9 +100,10 @@ that is there again is reinstated. Nothing is double-uploaded, and an entry that
 costs a short record, not its data again. An entry keeps the content it was first published
 with; later changes to it are not followed.
 
-To hold new submissions back for a while before they reach the permanent record, set a
-minimum age in the config. An entry is then eligible only once that version was submitted
-that many days ago:
+New submissions are held back for a while before they reach the permanent record. The
+example config sets a minimum age of 90 days: an entry is eligible only once that version was
+submitted that many days ago. Change the number to suit, or write 0 (or remove the line) for
+no delay:
 
 ```toml
 [backend]

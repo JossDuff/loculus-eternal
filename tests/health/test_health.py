@@ -62,7 +62,6 @@ deployment_block = 1
 
 [backend]
 url = "{backend.url}"
-organisms = "all"
 
 [upload]
 data_dir = "{tmp / 'upload-data'}"

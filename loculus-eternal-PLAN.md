@@ -268,7 +268,7 @@ safe to interrupt and rerun. Steps:
    accelerator keyed by `(blobCount, head)`. Detect a torn batch (blobs after the last
    manifest): resume it if the journal covers it, otherwise report it and start fresh at the
    next blob boundary.
-3. **Sync.** For each configured organism, `GET get-released-data` with `If-None-Match`.
+3. **Sync.** For each organism the backend serves, `GET get-released-data` with `If-None-Match`.
    Parse NDJSON. Select entries eligible for publication (**OPEN only**; an entry becomes
    eligible the day it becomes open; with `min_age_days` set, only once that version was
    submitted at least that many days ago) whose accessionVersion is not yet published. Project
@@ -301,7 +301,7 @@ safe to interrupt and rerun. Steps:
 `loculus-eternal upload --check` reports how many eligible entries are unpublished and the
 estimated cost, without sending anything.
 
-Configuration: backend URL, organism list, RPC URL, contract address, blob source list, IPFS
+Configuration: backend URL, RPC URL, contract address, blob source list, IPFS
 endpoints, data directory. Key via environment variable **only**
 (`LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY`), never config or code. No assumptions about where it runs
 (hosting decided before mainnet). Operated by the Pathoplexus team, so error messages and the
@@ -505,8 +505,16 @@ published with; the decision of 2026-09-30 under "Published fields" stands. Meas
 feeds cached on 2026-10-07 and 2026-10-13: 944 of 308,398 open entries changed content
 without a new version in six days (two metadata fields filled in later), and a pipeline
 version change rewrites every entry of an organism, so following content would grow the
-stream by roughly a full dataset each time. An organism left out of a configured organism
-list is still not synced and not withdrawn.
+stream by roughly a full dataset each time.
+
+**Organisms — DECIDED 2026-11-16: always every organism the backend serves; it is not a
+setting.** The upload asks the backend which organisms it serves at the start of each run
+and publishes them all. The `organisms` key, which took `"all"` or a list of names, is
+removed, and a config that still carries it is refused with a message saying so. A list
+could leave part of the database out of a record that is meant to follow the whole of it,
+and an organism left off the list was the one case where the record did not follow the
+copy. An organism the backend stops serving is withdrawn whole, and reinstated if it is
+served again.
 
 **Publication delay — DECIDED 2026-11-13: `min_age_days` in the upload configuration,
 counted from each version's submission time.** The Pathoplexus team wants a submission to

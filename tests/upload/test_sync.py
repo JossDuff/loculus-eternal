@@ -94,7 +94,7 @@ def test_U17_config_expands_environment_references(tmp_path, monkeypatch):
         configuration.load(cfg)
 
 
-def test_U16_organisms_are_discovered_from_the_backend(backend, tmp_path):
+def test_U16_organisms_are_asked_from_the_backend_and_are_not_a_setting(backend, tmp_path):
     from loculus_eternal import config as configuration
 
     backend.set_lines("zika", [released_line("zika", "PP_1", 1)])
@@ -104,18 +104,15 @@ def test_U16_organisms_are_discovered_from_the_backend(backend, tmp_path):
     cfg = tmp_path / "c.toml"
     base = f'[chain]\nrpc_url = "http://x"\ncontract = "0x0000000000000000000000000000000000000001"\nchain_id = 1\n[backend]\nurl = "{backend.url}"\n'
     cfg.write_text(base)
-    with pytest.raises(SystemExit, match="organisms is required"):
-        configuration.load(cfg)
-    cfg.write_text(base + 'organisms = "all"\n')
-    assert configuration.load(cfg).backend.organisms is None
-    for bad in ('organisms = []\n', 'organisms = ["zika", ""]\n', 'organisms = ["zika", 1]\n', 'organisms = "some"\n'):
-        cfg.write_text(base + bad)
-        with pytest.raises(SystemExit, match="organisms"):
+    assert configuration.load(cfg).backend.url == backend.url, "the backend table needs nothing about organisms"
+    # A config written for an earlier version says so plainly, whichever form it used: a list
+    # left there would otherwise look as if it still limited what is published.
+    for retired in ('organisms = "all"\n', 'organisms = ["zika"]\n'):
+        cfg.write_text(base + retired)
+        with pytest.raises(SystemExit, match="organisms is no longer configured.*remove the key"):
             configuration.load(cfg)
-    cfg.write_text(base + 'organisms = ["zika"]\n')
-    assert configuration.load(cfg).backend.organisms == ["zika"]
     backend.enumerate_organisms = False
-    with pytest.raises(SyncError, match="list them in the config"):
+    with pytest.raises(SyncError, match="cannot go on without that list"):
         BackendClient(backend.url, tmp_path / "feeds2").organisms()
 
 
@@ -242,7 +239,6 @@ beacon_genesis_time = 0
 
 [backend]
 url = "http://127.0.0.1:2"
-organisms = "all"
 min_age_days = {value}
 """
     )
@@ -276,7 +272,7 @@ def test_U27_the_count_the_backend_reports_is_checked_against_the_lines_read(bac
 @pytest.mark.parametrize(
     "table,line,message",
     [
-        ("backend", "min_age_day = 90", r"\[backend\] has unknown key\(s\) min_age_day; it takes min_age_days, organisms, url"),
+        ("backend", "min_age_day = 90", r"\[backend\] has unknown key\(s\) min_age_day; it takes min_age_days, url"),
         ("upload", "min_age_days = 90", r"\[upload\] has unknown key\(s\) min_age_days; .*min_age_days belongs under \[backend\]"),
         ("upload", "max_blob_fee = 5", r"\[upload\] has unknown key\(s\) max_blob_fee; it takes"),
         ("backend", "data_dir = 'x'", r"data_dir belongs under \[upload\]"),
@@ -285,7 +281,7 @@ def test_U27_the_count_the_backend_reports_is_checked_against_the_lines_read(bac
 def test_U23_an_unknown_key_in_the_backend_or_upload_table_is_a_configuration_error(tmp_path, table, line, message):
     from loculus_eternal import config as configuration
 
-    tables = {"backend": 'url = "http://127.0.0.1:2"\norganisms = "all"\n', "upload": 'data_dir = "upload-data"\n'}
+    tables = {"backend": 'url = "http://127.0.0.1:2"\n', "upload": 'data_dir = "upload-data"\n'}
     tables[table] += line + "\n"
     cfg = tmp_path / "loculus-eternal.toml"
     cfg.write_text(
@@ -311,7 +307,8 @@ def test_U23_the_shipped_example_config_uses_only_known_keys(monkeypatch):
 
     monkeypatch.setenv("RPC_API", "http://127.0.0.1:1")
     example = Path(__file__).resolve().parents[2] / "config" / "sepolia.example.toml"
-    assert configuration.load(example).backend.min_age_days == 0
+    # The example is the template for the real deployment, so it carries the delay.
+    assert configuration.load(example).backend.min_age_days == 90
 
 
 @pytest.mark.parametrize("name", ["PP_1.2", "PP_1.01", "PP_2.1", "PP_1", ""])

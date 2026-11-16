@@ -42,7 +42,6 @@ class ChainConfig:
 @dataclass
 class BackendConfig:
     url: str
-    organisms: list[str] | None   # None means every organism the backend serves, asked each run
     min_age_days: int = 0         # an entry is eligible only this many days after that version was submitted; 0 is no delay
 
 
@@ -115,7 +114,7 @@ def _archive_url(s: dict, chain_id: int | None) -> str:
 # age written under [upload], say) would silently leave its default in force and send out
 # entries that can never be taken back.
 TABLE_KEYS = {
-    "backend": {"url", "organisms", "min_age_days"},
+    "backend": {"url", "min_age_days"},
     "upload": {"data_dir", "tooling_paths", "max_blob_fee_gwei", "max_priority_fee_gwei", "finality_timeout_seconds", "inclusion_timeout_blocks", "escalation_attempts", "max_in_flight", "max_blobs_per_transaction"},
 }
 
@@ -204,20 +203,16 @@ def load(path: str | Path) -> Config:
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot, chain.chain_id)
         backend = None
         if "backend" in raw:
+            if "organisms" in raw["backend"]:
+                # The record follows the whole database, so which organisms are published is
+                # not a setting any more. The retired key gets its own message, so that
+                # nobody believes a list written there still limits what is published.
+                raise ConfigError("backend.organisms is no longer configured: every organism the backend serves is published; remove the key")
             check_table_keys("backend", raw["backend"])
-            if "organisms" not in raw["backend"]:
-                # Publishing into an immutable stream is not something to default into: the
-                # operator writes "all" or a list.
-                raise ConfigError('backend.organisms is required: "all" to publish every organism the backend serves, or a list of organism names')
-            organisms = raw["backend"]["organisms"]
-            if organisms == "all":
-                organisms = None
-            elif not isinstance(organisms, list) or not organisms or not all(isinstance(o, str) and o.strip() for o in organisms):
-                raise ConfigError('backend.organisms must be "all" or a non-empty list of non-empty organism names')
             min_age_days = raw["backend"].get("min_age_days", 0)
             if isinstance(min_age_days, bool) or not isinstance(min_age_days, int) or min_age_days < 0:
                 raise ConfigError("backend.min_age_days must be a whole number of days, 0 or more")
-            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms, min_age_days=min_age_days)
+            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), min_age_days=min_age_days)
         upload = None
         if "upload" in raw:
             u = raw["upload"]
