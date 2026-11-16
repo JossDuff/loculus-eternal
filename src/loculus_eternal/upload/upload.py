@@ -109,10 +109,8 @@ class Uploader:
         return load_published_view(self.w3, self.cfg.chain.contract, SourceChain(self.cfg.sources), store, deployment_block=self.cfg.chain.deployment_block, spill_dir=self.data_dir / "spill" / "decoded", log=self.log)
 
     def _organisms(self, client: BackendClient) -> list[str]:
-        """The organisms to sync: the configured list, or every organism the backend serves,
-        so a newly added organism is picked up by the next run without a configuration change."""
-        if self.cfg.backend.organisms is not None:
-            return list(self.cfg.backend.organisms)
+        """The organisms to sync: every organism the backend serves, asked at the start of each
+        run, so a newly added organism is picked up by the next run with nothing to configure."""
         organisms = client.organisms()
         self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
         return organisms
@@ -147,10 +145,8 @@ class Uploader:
                 + (f", {len(back):,} to reinstate (withdrawn, in this copy again)" if back else "")
             )
         # An organism that is in the stream but that the backend no longer serves at all: none
-        # of its entries is in this copy, so every published one is withdrawn. Only when the
-        # backend chose the list: an organism left out of a configured list was left out on
-        # purpose, is not synced, and stays in the record as it is.
-        for organism in view.decoded.organisms() if self.cfg.backend.organisms is None else []:
+        # of its entries is in this copy, so every published one is withdrawn.
+        for organism in view.decoded.organisms():
             if organism in organisms:
                 continue
             st = SyncStats(organism)

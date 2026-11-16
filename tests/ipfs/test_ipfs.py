@@ -92,7 +92,6 @@ deployment_block = 1
 
 [backend]
 url = "{backend.url}"
-organisms = ["zika", "mpox"]
 
 [upload]
 data_dir = "{tmp_path / 'upload-data'}"

@@ -282,6 +282,72 @@ url = "{stub.url}"
     assert run_report["missing"] == []
 
 
+# --- the short form: a contract address and an RPC on the command line -------------------------
+
+
+def teach_the_short_form_about_anvil(monkeypatch, published, public_sources):
+    """The short form knows mainnet and Sepolia. The test chain is anvil's, so it is given
+    that chain's genesis time and a list of public archives, here the stub."""
+    from loculus_eternal import config as configuration
+
+    monkeypatch.setitem(configuration.KNOWN_GENESIS, published["anvil"].chain_id, 0)
+    monkeypatch.setitem(configuration.PUBLIC_SOURCES, published["anvil"].chain_id, public_sources)
+    monkeypatch.setattr(configuration, "SECONDS_PER_SLOT", 1)
+    monkeypatch.setitem(__import__("loculus_eternal.cli", fromlist=["NETWORK_NAMES"]).NETWORK_NAMES, published["anvil"].chain_id, "the test chain")
+
+
+def test_R17_command_line_recovers_from_a_contract_address_and_an_rpc_alone(published, tmp_path, monkeypatch, capsys):
+    from loculus_eternal import cli
+
+    anvil, stub = published["anvil"], published["stub"]
+    teach_the_short_form_about_anvil(monkeypatch, published, [{"type": "blobscan", "url": stub.url}])
+    monkeypatch.chdir(tmp_path)
+    # Nothing but the address and the RPC: the chain is asked from the RPC, the blob bytes
+    # come from the built-in archives, and the contract's history is read from the start.
+    # The address is accepted in small letters, as it is often copied.
+    assert cli.main(["recover", anvil.contract.address.lower(), "--rpc", anvil.url]) == 0
+    out = capsys.readouterr().out
+    assert f"recovering the dataset at {anvil.contract.address} on the test chain; asking 1 blob source(s): blobscan({stub.url})" in out
+    assert "no --from-block given" in out and "RESULT: SUCCESS" in out
+    assert_recovered_matches(published, tmp_path / "recovered")
+    assert json.loads((tmp_path / "recovery-data" / "run-report.json").read_text())["missing"] == []
+
+
+def test_R17_readers_own_sources_and_the_other_flags_extend_the_short_form(published, tmp_path, monkeypatch, capsys):
+    from loculus_eternal import cli
+
+    anvil, stub = published["anvil"], published["stub"]
+    # The built-in archive here answers nothing, so recovery succeeds only through --source.
+    teach_the_short_form_about_anvil(monkeypatch, published, [{"type": "blobscan", "url": "http://127.0.0.1:9"}])
+    monkeypatch.chdir(tmp_path)
+    out_dir = tmp_path / "elsewhere"
+    argv = ["recover", anvil.contract.address, "--rpc", anvil.url, "--from-block", "1", "--out", str(out_dir), "--source", f"beacon={stub.url}"]
+    assert cli.main(argv) == 0
+    out = capsys.readouterr().out
+    assert f"asking 2 blob source(s): beacon({stub.url}), blobscan(http://127.0.0.1:9)" in out, "the reader's source is asked first"
+    assert "no --from-block given" not in out
+    assert_recovered_matches(published, out_dir)
+    # With only the reader's sources, the built-in ones are not even listed.
+    only = tmp_path / "only"
+    assert cli.main(argv[:7] + [str(only), "--source", f"blobscan={stub.url}", "--only-given-sources"]) == 0
+    assert f"asking 1 blob source(s): blobscan({stub.url})" in capsys.readouterr().out
+    assert_recovered_matches(published, only)
+
+
+def test_R17_the_short_form_names_a_wrong_address_or_an_unknown_chain(published, tmp_path, monkeypatch):
+    from loculus_eternal import cli
+
+    anvil = published["anvil"]
+    monkeypatch.chdir(tmp_path)
+    # Untaught, the short form does not know anvil's chain, and says where to go instead.
+    with pytest.raises(SystemExit, match=rf"the RPC serves chain {anvil.chain_id}; the short form of recover knows Ethereum mainnet.*--config"):
+        cli.main(["recover", anvil.contract.address, "--rpc", anvil.url])
+    teach_the_short_form_about_anvil(monkeypatch, published, [])
+    with pytest.raises(SystemExit, match="there is no contract at 0x000000000000000000000000000000000000dEaD on the test chain"):
+        cli.main(["recover", "0x000000000000000000000000000000000000dead", "--rpc", anvil.url])
+    assert not (tmp_path / "recovery-data").exists() and not (tmp_path / "recovered").exists()
+
+
 def test_R4_missing_blob_zero_is_reported_not_a_crash(published, tmp_path):
     stub = published["stub"]
     first = kzg.blob_to_versioned_hash(published["blobs"][0])

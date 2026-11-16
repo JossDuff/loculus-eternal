@@ -73,6 +73,10 @@
   .step-names { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
   .step-names span.now { color: var(--accent); font-weight: 650; }
   .detail { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1.5em; font-variant-numeric: tabular-nums; }
+  .recover { display: flex; align-items: flex-start; gap: 8px; }
+  .recover pre.quick { flex: 1; min-width: 0; }
+  .recover pre.quick .line { display: block; white-space: pre-wrap; padding-left: 2ch; text-indent: -2ch; }
+  .recover pre.quick .word { white-space: nowrap; }
   pre.quick { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px/1.6 var(--mono); overflow-x: auto; }
   .srcs li { margin: 2px 0; }
   .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 18px; }
@@ -113,10 +117,15 @@
 
   <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
+  <section class="card" style="margin-top:14px"><h2>Recover</h2>
+    <div class="recover"><pre class="quick" id="recover-command"><span class="line">git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal</span><span class="line">uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;</span></pre><button type="button" class="copy" id="copy-recover" title="copy both lines" data-copy="git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal&#10;uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;">copy</button></div>
+    <p class="sub" style="margin:10px 0 0">Run these two lines to rebuild and verify this whole dataset from Ethereum yourself, with no key and no account. They need git and <a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv</a>. The RPC in the command is a public example: swap in one you trust, because it is the one input the result depends on. Blob bytes come from public archives and every one is checked against the contract; add your own with <span class="mono">--source</span>.</p>
+  </section>
+
   <footer>
     <h2>Backup and recover your Loculus database to Ethereum!</h2>
-    <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
-uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
+    <pre class="quick">uv run loculus-eternal upload --config loculus-eternal.toml          # publish the loculus dataset
+uv run loculus-eternal recover 0x… --rpc https://your-ethereum-rpc   # anyone can rebuild and verify the whole dataset from Ethereum</pre>
     <p><a href="https://github.com/JossDuff/loculus-eternal" target="_blank" rel="noopener">github.com/JossDuff/loculus-eternal</a></p>
   </footer>
 </main>
@@ -170,6 +179,19 @@ uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebu
       ["Last update", `<span id="ago-upload">${lastUpload}</span>`],
       ["Last health check", `<span id="ago-check">${lastCheck}</span>`],
     ]), "");
+    // The recovery command for this very dataset, as the server wrote it out. It is set as
+    // text, never as markup, and the copy button carries the same text.
+    // It is redrawn only when it changes, so a selection someone is making in it survives
+    // the page's regular refresh.
+    if (Array.isArray(cfg.recoverCommand)) {
+      const text = cfg.recoverCommand.join("\n");
+      if ($("copy-recover").dataset.copy !== text) {
+        // A line wraps only between its words, so an address or a URL is never split.
+        const word = w => { const el = document.createElement("span"); el.className = "word"; el.textContent = w; return el; };
+        $("recover-command").replaceChildren(...cfg.recoverCommand.map(line => { const el = document.createElement("span"); el.className = "line"; el.append(...line.split(" ").flatMap((w, i) => i ? [" ", word(w)] : [word(w)])); return el; }));
+        $("copy-recover").dataset.copy = text;
+      }
+    }
   }
 
   // The "x ago" values move on their own, without rewriting the box around them.

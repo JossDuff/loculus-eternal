@@ -42,7 +42,6 @@ class ChainConfig:
 @dataclass
 class BackendConfig:
     url: str
-    organisms: list[str] | None   # None means every organism the backend serves, asked each run
     min_age_days: int = 0         # an entry is eligible only this many days after that version was submitted; 0 is no delay
 
 
@@ -100,6 +99,56 @@ ARCHIVE_URLS = {
 }
 
 
+# The public archives a recovery asks when it is given only a contract address and an RPC
+# on the command line: for each chain, every source that needs neither a key nor a node of
+# the reader's own, roughly fastest first. Every byte from any of them is checked against the
+# contract, so this list is a convenience and nothing in it is trusted. Surveyed 2026-10-13.
+PUBLIC_SOURCES: dict[int, list[dict]] = {
+    1: [
+        {"type": "beacon", "endpoints": ["https://ethereum-beacon-api.publicnode.com"]},  # the last 18 days only
+        {"type": "beacon", "endpoints": ["https://eth.blobs.pinax.network"]},
+        {"type": "blob-archiver", "url": "https://gnfd-blobhub.bnbchain.org"},
+        {"type": "blockscout"},
+        {"type": "blobscan"},
+    ],
+    11155111: [
+        {"type": "beacon", "endpoints": ["https://ethereum-sepolia-beacon-api.publicnode.com"]},  # the last 18 days only
+        {"type": "beacon", "endpoints": ["https://sepolia.blobs.pinax.network"]},
+        {"type": "blockscout"},
+        {"type": "blobscan"},
+    ],
+}
+
+# A public Ethereum RPC per chain, shown as the example wherever the recovery command is
+# written out. The command has no default of its own: the RPC is the one input a recovery's
+# result depends on, so the reader names it and can see whom they are trusting.
+PUBLIC_RPC_EXAMPLE = {1: "https://ethereum.publicnode.com", 11155111: "https://ethereum-sepolia-rpc.publicnode.com"}
+
+
+def source_from_flag(text: str) -> dict:
+    """One `--source` value as a `[[sources]]` entry: `TYPE=VALUE`, where the value is the
+    type's URL (or directory, for a local source). The two archives with a known public
+    instance may be named alone."""
+    kind, _, value = text.partition("=")
+    if kind not in SOURCE_KEYS:
+        raise ConfigError(f"--source {text}: unknown source type {kind!r} (known: {', '.join(SOURCE_KEYS)})")
+    (key,) = SOURCE_KEYS[kind]
+    if not value:
+        if kind in ARCHIVE_URLS:
+            return {"type": kind}
+        raise ConfigError(f"--source {kind} needs a value: --source {kind}=<{'directory' if key == 'path' else 'url'}>")
+    return {"type": kind, key: [value] if key == "endpoints" else value}
+
+
+def recovery_sources(given: list[dict], chain_id: int, only_given: bool) -> list[dict]:
+    """The `[[sources]]` entries of a recovery run from the command line: the reader's own
+    first, then the public archives known for the chain, unless the reader asked for theirs
+    alone. An archive the reader named is not asked a second time."""
+    if only_given:
+        return list(given)
+    return list(given) + [s for s in PUBLIC_SOURCES.get(chain_id, []) if s not in given]
+
+
 def _archive_url(s: dict, chain_id: int | None) -> str:
     kind = s["type"]
     if "url" in s and not s["url"]:
@@ -115,7 +164,7 @@ def _archive_url(s: dict, chain_id: int | None) -> str:
 # age written under [upload], say) would silently leave its default in force and send out
 # entries that can never be taken back.
 TABLE_KEYS = {
-    "backend": {"url", "organisms", "min_age_days"},
+    "backend": {"url", "min_age_days"},
     "upload": {"data_dir", "tooling_paths", "max_blob_fee_gwei", "max_priority_fee_gwei", "finality_timeout_seconds", "inclusion_timeout_blocks", "escalation_attempts", "max_in_flight", "max_blobs_per_transaction"},
 }
 
@@ -204,20 +253,16 @@ def load(path: str | Path) -> Config:
         sources = build_sources(raw.get("sources", []), chain.beacon_genesis_time, chain.seconds_per_slot, chain.chain_id)
         backend = None
         if "backend" in raw:
+            if "organisms" in raw["backend"]:
+                # The record follows the whole database, so which organisms are published is
+                # not a setting any more. The retired key gets its own message, so that
+                # nobody believes a list written there still limits what is published.
+                raise ConfigError("backend.organisms is no longer configured: every organism the backend serves is published; remove the key")
             check_table_keys("backend", raw["backend"])
-            if "organisms" not in raw["backend"]:
-                # Publishing into an immutable stream is not something to default into: the
-                # operator writes "all" or a list.
-                raise ConfigError('backend.organisms is required: "all" to publish every organism the backend serves, or a list of organism names')
-            organisms = raw["backend"]["organisms"]
-            if organisms == "all":
-                organisms = None
-            elif not isinstance(organisms, list) or not organisms or not all(isinstance(o, str) and o.strip() for o in organisms):
-                raise ConfigError('backend.organisms must be "all" or a non-empty list of non-empty organism names')
             min_age_days = raw["backend"].get("min_age_days", 0)
             if isinstance(min_age_days, bool) or not isinstance(min_age_days, int) or min_age_days < 0:
                 raise ConfigError("backend.min_age_days must be a whole number of days, 0 or more")
-            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), organisms=organisms, min_age_days=min_age_days)
+            backend = BackendConfig(url=raw["backend"]["url"].rstrip("/"), min_age_days=min_age_days)
         upload = None
         if "upload" in raw:
             u = raw["upload"]

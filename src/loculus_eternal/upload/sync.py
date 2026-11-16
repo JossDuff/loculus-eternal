@@ -62,13 +62,13 @@ class BackendClient:
         except httpx.HTTPError as e:
             raise SyncError(f"cannot reach {url} to list the backend's organisms: {e}") from e
         if r.status_code != 200:
-            raise SyncError(f"{url} returned HTTP {r.status_code}; list the organisms in the config instead")
+            raise SyncError(f"{url} returned HTTP {r.status_code}; the upload publishes every organism the backend serves and cannot go on without that list")
         try:
             names = r.json()["components"]["schemas"]["Organism"]["enum"]
         except (ValueError, KeyError, TypeError) as e:
-            raise SyncError(f"{url} does not enumerate organisms the way Loculus does ({e}); list them in the config instead") from e
+            raise SyncError(f"{url} does not enumerate organisms the way Loculus does ({e}); the upload publishes every organism the backend serves and cannot go on without that list") from e
         if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
-            raise SyncError(f"{url} does not list organisms as a list of names; list them in the config instead")
+            raise SyncError(f"{url} does not list organisms as a list of names; the upload publishes every organism the backend serves and cannot go on without that list")
         return sorted(names)
 
     def fetch(self, organism: str) -> OrganismFeed:

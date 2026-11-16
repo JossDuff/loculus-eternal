@@ -419,7 +419,7 @@ information for each organism so a future decoder does not depend on this file.
 | Record count | `X-Total-Records` header |
 | Selection | every accessionVersion with status `APPROVED_FOR_RELEASE`, all versions, including revocations |
 
-### Organisms (configuration, not code)
+### Organisms (asked from the backend, not written into code)
 
 | Organism | Nucleotide segments | Amino-acid genes (count) |
 |---|---|---|
