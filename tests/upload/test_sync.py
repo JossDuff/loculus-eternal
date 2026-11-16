@@ -340,3 +340,13 @@ def test_U28_sizes_and_durations_read_as_a_person_would_say_them():
     assert [human_duration(s) for s in (0.4, 45, 119, 120, 696, 1656, 7140, 7200, 9000)] == ["0 seconds", "45 seconds", "119 seconds", "2 minutes", "12 minutes", "28 minutes", "119 minutes", "2 hours 0 minutes", "2 hours 30 minutes"]
     # Fifty-eight transactions at one per twelve-second block, then two and a half epochs.
     assert estimated_seconds(58, 12) == (696, 960)
+    # The encoder's own progress line gives sizes the same way.
+    import re
+
+    from loculus_eternal.format.encode import StreamEncoder
+    from loculus_eternal.format.gen_vectors import CHAIN_ID, CONTRACT, genesis_entries
+
+    said = []
+    StreamEncoder(CHAIN_ID, CONTRACT, progress=said.append).encode_batch(genesis_entries())
+    size = r"\d+(\.\d)? (bytes|kB|MB|GB)"
+    assert any(re.fullmatch(rf"encoding: body is {size}, {size} compressed; computing cumulative digests", line) for line in said), said

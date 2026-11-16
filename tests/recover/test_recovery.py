@@ -366,6 +366,11 @@ def test_R18_recovery_says_how_far_along_it_is(published, tmp_path):
     decoding = lines.index(f"decoding the stream from {total} blobs")
     assert lines.index(progress[-1]) < decoding
     assert [l.split(":")[0] for l in lines if l.startswith("decoding batch ")] == ["decoding batch 0", "decoding batch 1"]
+    # Sizes are written in kB, MB or GB, as everywhere else, not as long byte counts.
+    import re
+
+    size = r"\d+(\.\d)? (bytes|kB|MB|GB)"
+    assert all(re.fullmatch(rf"decoding batch \d+: its body is {size}, {size} compressed", l) for l in lines if l.startswith("decoding batch "))
     assert [l.split(" verified")[0] for l in lines if l.startswith("batch ") and " verified: " in l] == ["batch 0", "batch 1"]
     wrote = [l for l in lines if "] wrote " in l]
     organisms = published["expected"].organisms()

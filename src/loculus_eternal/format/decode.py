@@ -20,6 +20,7 @@ from typing import BinaryIO, Callable, Iterator, Sequence
 import zstandard
 
 from loculus_eternal.format import canonical
+from loculus_eternal.human import human_size
 from loculus_eternal.format.chunks import BLOB_DATA_BYTES, unpack_blob
 from loculus_eternal.format.encode import EncoderState, Entry
 from loculus_eternal.format.entrystore import EntryStore
@@ -383,7 +384,7 @@ class StreamDecoder:
 
         # Everything structural verified. Stream the body: schemas and tooling are small and
         # kept in memory; entries go to one staged sorted run per organism.
-        self.progress(f"decoding batch {expected_batch}: its body is {begin.uncompressed_length:,} bytes, {begin.compressed_length:,} compressed")
+        self.progress(f"decoding batch {expected_batch}: its body is {human_size(begin.uncompressed_length)}, {human_size(begin.compressed_length)} compressed")
         schemas: dict[str, dict] = {}
         tooling: dict[str, bytes] = {}
         sorters: dict[str, ExternalSorter] = {}

@@ -25,6 +25,7 @@ from web3 import Web3
 
 from loculus_eternal.config import Config
 from loculus_eternal.format.chunks import BLOB_BYTES
+from loculus_eternal.human import human_duration, human_size
 from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
@@ -73,27 +74,6 @@ EPOCHS_TO_FINALITY_ASSUMED = 2.5
 def estimated_seconds(transactions: int, seconds_per_slot: float) -> tuple[float, float]:
     """Roughly how long a batch takes: (to include its transactions, then to finality)."""
     return transactions * seconds_per_slot, EPOCHS_TO_FINALITY_ASSUMED * SLOTS_PER_EPOCH * seconds_per_slot
-
-
-def human_size(n: int) -> str:
-    """A byte count as the health page writes one: decimal units, one decimal for GB."""
-    if n >= 1e9:
-        return f"{n / 1e9:.1f} GB"
-    if n >= 1e6:
-        return f"{round(n / 1e6)} MB"
-    if n >= 1e3:
-        return f"{round(n / 1e3)} kB"
-    return f"{n} bytes"
-
-
-def human_duration(seconds: float) -> str:
-    seconds = round(seconds)
-    if seconds < 120:
-        return f"{seconds} seconds"
-    minutes = round(seconds / 60)
-    if minutes < 120:
-        return f"{minutes} minutes"
-    return f"{minutes // 60} hours {minutes % 60} minutes"
 
 
 class NobodyToAsk(RuntimeError):
