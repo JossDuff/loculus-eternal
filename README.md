@@ -6,7 +6,7 @@ Data is published in Ethereum blobs ([What's a blob?](#whats-a-blob)) and their 
 
 ```bash
 uv run loculus-eternal upload --config loculus-eternal.toml    # publish the loculus dataset
-uv run loculus-eternal recover --config loculus-eternal.toml   # anyone can rebuild and verify the whole dataset from Ethereum
+uv run loculus-eternal recover 0x… --rpc https://your-ethereum-rpc   # anyone can rebuild and verify the whole dataset from Ethereum
 ```
 
 ## Uploading
@@ -116,16 +116,53 @@ Run it whenever you want to update the dataset on Ethereum. With nothing to chan
 
 ## Recovering
 
-For anyone to run. No key is needed. Clone the repository:
+For anyone to run. No key and no account. You need git, [uv](https://docs.astral.sh/uv/),
+the dataset's contract address, and an Ethereum RPC endpoint:
 
 ```
-git clone https://github.com/JossDuff/loculus-eternal
-cd loculus-eternal
+git clone https://github.com/JossDuff/loculus-eternal && cd loculus-eternal
+uv run loculus-eternal recover 0x… --rpc https://ethereum.publicnode.com
 ```
 
-Then write a config file, `loculus-eternal.toml`, naming your RPC endpoint, the contract, and
-where to look for blob bytes. The contract address is the one from
-[the deploy section](#1-deploy-the-contract-once), ask the dataset's maintainer for it.
+- **`0x…`** is the address of the dataset's `LoculusEternal` contract, the one from
+  [the deploy section](#1-deploy-the-contract-once). Ask the dataset's maintainer for it, or
+  copy the whole command from the dataset's [health page](#health-check), which writes it out
+  with the address filled in.
+- **`--rpc`** is the one input the result depends on: the contract is read through it, and
+  every blob is checked against what it says. The endpoint above is a public one for Ethereum
+  mainnet; use one you trust. The network is asked from the RPC, so for the Sepolia test
+  network give a Sepolia endpoint, such as `https://ethereum-sepolia-rpc.publicnode.com`.
+
+That is all it needs. The blob bytes are fetched from the public archives the tool knows for
+that network (a beacon node, Pinax, Blockscout, Blobscan, and on mainnet the BNB Greenfield
+Blob Hub). Each is an independent operator, none needs a key, and every byte from any of them
+is checked against the contract, so a wrong or missing answer from one just means the next is
+asked.
+
+Add to the same command as you need:
+
+| Flag | What it does |
+|---|---|
+| `--from-block N` | Starts reading the contract's history at block `N`, the block it was deployed in, instead of at the chain's first block. Optional, and much quicker. |
+| `--source TYPE=URL` | Asks a source of your own before the public ones. Repeat it for several. `beacon=URL`, `ipfs=URL`, `blob-archiver=URL`, `blockscout=URL`, `blobscan=URL`, or `local=DIRECTORY` for blobs on disk. |
+| `--only-given-sources` | Leaves the public archives out and asks only your `--source` ones. |
+| `--out DIR` | Puts the recovered files in `DIR` instead of `recovered/`. |
+
+For example, with your own node and a copy on IPFS asked first:
+
+```
+uv run loculus-eternal recover 0x… --rpc http://my-node:8545 --from-block 21000000 \
+  --source beacon=http://my-node:5052 --source ipfs=http://127.0.0.1:5001
+```
+
+The IPFS source talks to a [Kubo](https://docs.ipfs.tech/install/command-line/) node over its
+RPC API, so it needs a node you run or are allowed to use. The node fetches the blobs from
+the IPFS network, so it need not hold them already.
+
+### With a config file
+
+For a network other than mainnet and Sepolia, or to set everything yourself, write a config
+file, `loculus-eternal.toml`, and pass it instead of the address and `--rpc`:
 
 ```toml
 [chain]
@@ -158,17 +195,13 @@ type = "ipfs"                     # copies pinned on IPFS, found through the con
 endpoints = ["http://127.0.0.1:5001"]
 ```
 
-Every source is public and needs no key. Each one is an independent operator, and every byte
-from any of them is checked against the contract, so a wrong or missing answer from one just
-means the next is asked.
-
-The IPFS source talks to a [Kubo](https://docs.ipfs.tech/install/command-line/) node over its
-RPC API, so it needs a node you run or are allowed to use. The node fetches the blobs from
-the IPFS network, so it need not hold them already. Leave that source out if you have no node.
-
 ```
 uv run loculus-eternal recover --config loculus-eternal.toml
 ```
+
+Sources are tried in the order written. Leave the IPFS source out if you have no Kubo node.
+
+### What you get
 
 The dataset lands in `recovered/`, one file per organism in [NDJSON](https://github.com/ndjson/ndjson-spec)
 (one JSON object per line, in the same shape as the Loculus backend's released-data feed) plus

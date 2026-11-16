@@ -49,9 +49,73 @@ def recovery_config(cfg: configuration.Config, skip_decode: bool) -> RecoveryCon
     )
 
 
+NETWORK_NAMES = {1: "Ethereum mainnet", 11155111: "the Sepolia test network"}
+
+
+def recovery_config_from_flags(args: argparse.Namespace) -> RecoveryConfig:
+    """A recovery from the contract address and an RPC alone. The chain is asked from the
+    RPC, and the blob bytes come from the public archives known for that chain unless the
+    reader names sources of their own. Only what cannot be worked out or safely built in is
+    asked for: the address is the dataset's identity, and the RPC is whom the reader trusts
+    to say what the contract holds."""
+    from web3 import Web3
+
+    from loculus_eternal.rpc import ThrottledHTTPProvider
+
+    if not Web3.is_address(args.contract):
+        raise SystemExit(f"{args.contract!r} is not an Ethereum address: it is 0x followed by 40 hexadecimal characters")
+    # The capital letters of an address are a checksum over it. One written all in small
+    # letters carries none and is taken as it is; one with capitals must add up, which
+    # catches a mistyped character before a different contract is read.
+    digits = args.contract[2:]
+    if digits not in (digits.lower(), digits.upper()) and not Web3.is_checksum_address(args.contract):
+        raise SystemExit(f"{args.contract!r} is not a valid Ethereum address: its capital letters do not match its checksum, so a character is probably mistyped")
+    contract = Web3.to_checksum_address(args.contract)
+    given = [configuration.source_from_flag(s) for s in args.source]
+    try:
+        # A first look through the reader's RPC, with a short patience: a mistyped URL should
+        # be reported in seconds, not after the long retry schedule a running recovery uses.
+        w3 = Web3(ThrottledHTTPProvider(args.rpc, timeout=30, retries=2))
+        chain_id = w3.eth.chain_id
+        has_code = bool(w3.eth.get_code(contract))
+    except (RequestException, ValueError) as e:
+        raise SystemExit(f"the RPC endpoint given with --rpc could not be used: {e}") from e
+    if chain_id not in configuration.PUBLIC_SOURCES:
+        raise SystemExit(f"the RPC serves chain {chain_id}; the short form of recover knows Ethereum mainnet (1) and Sepolia (11155111). For any other chain write a config file and pass it with --config (see the README)")
+    if not has_code:
+        raise SystemExit(f"there is no contract at {contract} on {NETWORK_NAMES[chain_id]}: check the address, and that the RPC is for the network the dataset was published on")
+    specs = configuration.recovery_sources(given, chain_id, args.only_given_sources)
+    sources = configuration.build_sources(specs, configuration.KNOWN_GENESIS[chain_id], configuration.SECONDS_PER_SLOT, chain_id)
+    print(f"recovering the dataset at {contract} on {NETWORK_NAMES[chain_id]}; asking {len(sources)} blob source(s): {', '.join(s.name for s in sources)}")
+    if args.from_block is None:
+        print("no --from-block given, so the contract's history is read from the chain's first block; that works but takes a while. The block the contract was deployed in makes it quick")
+    return RecoveryConfig(
+        rpc_url=args.rpc,
+        contract=contract,
+        data_dir=Path("recovery-data"),
+        out_dir=args.out or Path("recovered"),
+        sources=sources,
+        deployment_block=args.from_block or 0,
+        decode=not args.skip_decode,
+    )
+
+
 def cmd_recover(args: argparse.Namespace) -> int:
-    cfg = configuration.load(args.config)
-    rc = recovery_config(cfg, args.skip_decode)
+    short_form_only = {"--rpc": args.rpc, "--source": args.source, "--only-given-sources": args.only_given_sources, "--from-block": args.from_block, "--out": args.out}
+    if args.config is not None:
+        used = [flag for flag, value in short_form_only.items() if value not in (None, [], False)]
+        if args.contract is not None or used:
+            raise SystemExit(f"recover takes either a config file or a contract address with --rpc, not both: with --config, leave out {', '.join((['the contract address'] if args.contract is not None else []) + used)} and put those settings in the file")
+        cfg = configuration.load(args.config)
+        rc = recovery_config(cfg, args.skip_decode)
+    elif args.contract is not None:
+        if not args.rpc:
+            raise SystemExit("recover needs an Ethereum RPC endpoint to read the contract through: add --rpc <url> (a public one for mainnet is " + configuration.PUBLIC_RPC_EXAMPLE[1] + ")")
+        if args.only_given_sources and not args.source:
+            raise SystemExit("--only-given-sources leaves out the built-in public archives, so it needs at least one --source to ask instead")
+        rc = recovery_config_from_flags(args)
+    else:
+        raise SystemExit("recover needs to know which dataset: give the contract address and an RPC, as in\n  loculus-eternal recover 0x… --rpc https://your-ethereum-rpc\nor a config file with --config (see the README)")
     report = Recovery(rc).run()
     rc.data_dir.mkdir(parents=True, exist_ok=True)
     (rc.data_dir / "run-report.json").write_text(json.dumps(report.to_json(), indent=1))
@@ -212,8 +276,14 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--no-open", action="store_true", help="do not open a browser")
     health.set_defaults(func=cmd_health)
 
-    rec = sub.add_parser("recover", help="rebuild the dataset from the contract address and the configured sources")
-    rec.add_argument("--config", type=Path, required=True, help="TOML config file (see README)")
+    rec = sub.add_parser("recover", help="rebuild the dataset from its contract address: recover 0x… --rpc <url>", description="Rebuild and verify the whole dataset from Ethereum. Give the contract address and an Ethereum RPC; blob bytes are fetched from the public archives known for the chain and every one is checked against the contract. Or give a config file for full control.")
+    rec.add_argument("contract", nargs="?", help="address of the dataset's LoculusEternal contract")
+    rec.add_argument("--rpc", metavar="URL", help="an Ethereum RPC endpoint you trust: the contract is read through it, and it is the one input the result depends on")
+    rec.add_argument("--source", action="append", default=[], metavar="TYPE=URL", help="a place to ask for blob bytes before the built-in public archives; repeatable. beacon=URL, ipfs=URL, blob-archiver=URL, blockscout[=URL], blobscan[=URL], local=DIRECTORY")
+    rec.add_argument("--only-given-sources", action="store_true", help="ask only the --source ones and leave the built-in public archives out")
+    rec.add_argument("--from-block", type=int, metavar="N", help="block the contract was deployed in; its history is read from there instead of from the chain's first block")
+    rec.add_argument("--out", type=Path, metavar="DIR", help="where the recovered files go (default: recovered)")
+    rec.add_argument("--config", type=Path, help="a TOML config file, used instead of a contract address and --rpc (see README)")
     rec.add_argument("--skip-decode", action="store_true", help="fetch and verify blobs only; do not materialise the dataset")
     rec.set_defaults(func=cmd_recover)
 

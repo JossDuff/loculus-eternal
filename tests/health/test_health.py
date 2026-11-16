@@ -245,11 +245,14 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
     try:
         page = httpx.get(f"{server.url}/")
         assert page.status_code == 200 and "Loculus Eternal health" in page.text and "<script>" in page.text
-        assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "loculus-eternal recover --config" in page.text
+        assert "github.com/JossDuff/loculus-eternal" in page.text and "Secured by Ethereum" in page.text and "Recover this dataset yourself" in page.text
         # The archives with rules of their own about when a blob is served carry a note.
         assert "stores its bytes only a week or two later" in page.text and "stopped guaranteeing blob storage" in page.text
         idle = httpx.get(f"{server.url}/api/report").json()
         assert idle["verdict"] == "idle" and idle["config"]["contract"] == world["anvil"].contract.address
+        # The page is handed the recovery command for this very contract, starting block included.
+        clone, command = idle["config"]["recoverCommand"]
+        assert clone.startswith("git clone https://github.com/JossDuff/loculus-eternal") and command.startswith(f"uv run loculus-eternal recover {world['anvil'].contract.address} --rpc ") and command.endswith("--from-block 1")
         assert httpx.post(f"{server.url}/api/check").status_code == 202
         deadline = time.time() + 120
         while time.time() < deadline:

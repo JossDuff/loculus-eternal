@@ -507,6 +507,18 @@ without a new version in six days (two metadata fields filled in later), and a p
 version change rewrites every entry of an organism, so following content would grow the
 stream by roughly a full dataset each time.
 
+**Recovery in one command — DECIDED 2026-11-16: `recover <contract address> --rpc <url>`,
+run from a clone.** Recovery is for anyone, and a config file to write first was the largest
+step in it. Of what a recovery needs, only the contract address (the dataset's identity) and
+an Ethereum RPC must come from the reader. The chain is asked from the RPC, and the public
+blob archives for mainnet and Sepolia are built into the tool, which costs no trust because
+every byte is checked against the contract. The RPC is never defaulted: it is the one input
+the result depends on, so the reader names it, and the README and the health page show a
+public endpoint as the example. `--source TYPE=URL` adds sources of the reader's own and the
+config file remains for everything else. The health page writes the command out for its own
+dataset. Running the tool straight from the repository without a clone, and publishing it to
+a package index, were considered and left for later.
+
 **Organisms — DECIDED 2026-11-16: always every organism the backend serves; it is not a
 setting.** The upload asks the backend which organisms it serves at the start of each run
 and publishes them all. The `organisms` key, which took `"all"` or a list of names, is

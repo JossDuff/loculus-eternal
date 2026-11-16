@@ -14,12 +14,24 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from loculus_eternal.config import Config
+from loculus_eternal.config import PUBLIC_RPC_EXAMPLE, Config
 from loculus_eternal.health import HealthCheck, Report, public_url, redact_all, source_endpoints, source_kind
 
 PAGE = Path(__file__).with_name("health_page.html")
 REPOSITORY = "https://github.com/JossDuff/loculus-eternal"
 NETWORKS = {1: "Ethereum mainnet", 11155111: "Sepolia testnet"}
+
+
+def recover_command(config: Config) -> list[str]:
+    """The lines someone pastes to recover this dataset themselves: fetch the tool, then one
+    command naming the contract. The RPC in it is a public one for the chain, never the one
+    this page's operator configured, which may carry an API key. The block the contract was
+    deployed in is included when known, so the reader's run does not scan the whole chain."""
+    rpc = PUBLIC_RPC_EXAMPLE.get(config.chain.chain_id or 0, "https://your-ethereum-rpc")
+    command = f"uv run loculus-eternal recover {config.chain.contract} --rpc {rpc}"
+    if config.chain.deployment_block:
+        command += f" --from-block {config.chain.deployment_block}"
+    return [f"git clone {REPOSITORY} && cd loculus-eternal", command]
 
 
 def public_config(config: Config) -> dict:
@@ -39,6 +51,7 @@ def public_config(config: Config) -> dict:
         "ipfsEndpoints": [public_url(e) for e in config.ipfs.endpoints] if config.ipfs else [],
         "configFile": str(config.path),
         "repository": REPOSITORY,
+        "recoverCommand": recover_command(config),
     }
 
 
