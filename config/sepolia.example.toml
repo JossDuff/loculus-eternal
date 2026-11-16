@@ -12,6 +12,7 @@ deployment_block = 0                                    # CHANGE: the block the 
 [backend]
 url = "https://backend.pathoplexus.org"
 organisms = "all"                       # every organism the backend serves, asked each run; or a list of names
+# min_age_days = 90                     # publish an entry only once that version was submitted this many days ago; left out, no delay
 
 [upload]
 data_dir = "upload-data"

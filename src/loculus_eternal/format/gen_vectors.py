@@ -267,6 +267,37 @@ def vec_withdrawal() -> dict:
     }
 
 
+def vec_reinstatement() -> dict:
+    enc = StreamEncoder(CHAIN_ID, CONTRACT)
+    b0 = enc.encode_batch(genesis_entries(), codec=CODEC_RAW)
+    dec0 = StreamDecoder(b0.blobs).decode()
+    withdrawal = {"organism": "zika", "accessionVersions": ["PP_000001.1", "PP_000002.1"], "note": "not in the database copy read for the second batch"}
+    b1 = enc.encode_batch([], previous_entries=dec0.records, codec=CODEC_RAW, withdrawals=[withdrawal])
+    dec1 = StreamDecoder(b0.blobs + b1.blobs).decode()
+    reinstatement = {"organism": "zika", "accessionVersions": ["PP_000001.1"], "note": "in the database again for the third batch"}
+    second_withdrawal = {"organism": "mpox", "accessionVersions": ["PP_000003.1"], "note": None}
+    b2 = enc.encode_batch([sample_entry("zika", "PP_000010", 1)], previous_entries=dec1.records, codec=CODEC_RAW, withdrawals=[second_withdrawal], reinstatements=[reinstatement], force_index=True)
+    dec = StreamDecoder(b0.blobs + b1.blobs + b2.blobs).decode()
+    assert not dec.torn and all(dec.verify_artifacts().values())
+    assert not dec.is_withdrawn("zika", "PP_000001", 1) and dec.is_withdrawn("zika", "PP_000002", 1) and dec.count("zika") == 3 and dec.count("mpox") == 0
+    return {
+        "input": {
+            "chainId": CHAIN_ID,
+            "contract": _hex(CONTRACT),
+            "codec": CODEC_RAW,
+            "batches": [
+                {"entries": genesis_entries(), "tooling": [], "withdrawals": [], "reinstatements": [], "forceIndex": False},
+                {"entries": [], "tooling": [], "withdrawals": [withdrawal], "reinstatements": [], "forceIndex": False},
+                {"entries": [sample_entry("zika", "PP_000010", 1)], "tooling": [], "withdrawals": [second_withdrawal], "reinstatements": [reinstatement], "forceIndex": True},
+            ],
+        },
+        "expected": [_batch_expectation(b0, True), _batch_expectation(b1, True), _batch_expectation(b2, True)],
+        "published": dec.published(),
+        "withdrawnAfterEachBatch": [dec0.withdrawn(), dec1.withdrawn(), dec.withdrawn()],
+        "artifacts": _artifacts(dec),
+    }
+
+
 GENERATORS = {
     "varint.json": vec_varint,
     "canonical_json.json": vec_canonical_json,
@@ -277,6 +308,7 @@ GENERATORS = {
     "two_batches_index.json": vec_two_batches_index,
     "torn_batch.json": vec_torn_batch,
     "withdrawal.json": vec_withdrawal,
+    "reinstatement.json": vec_reinstatement,
 }
 
 

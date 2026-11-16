@@ -380,6 +380,26 @@ def test_F12_outer_record_type_inside_a_body_tears_the_batch():
     assert not dec.batches and "outer record" in dec.torn[0].reason
 
 
+def test_F21_batch_naming_one_entry_in_a_withdrawal_and_a_reinstatement_is_torn():
+    # The encoder never produces this; records carry no order inside a body, so a decoder
+    # cannot tell which of the two was meant.
+    e = sample_entry("zika", "PP_1", 1)
+    named = canonical.dumps({"organism": "zika", "accessionVersions": ["PP_1.1"], "note": None})
+    blobs = _handmade_batch([e], extra_inner=frame(RecordType.WITHDRAW, named) + frame(RecordType.REINSTATE, named))
+    dec = StreamDecoder(blobs).decode()
+    assert len(dec.batches) == 0 and "both a withdrawal and a reinstatement" in dec.torn[0].reason
+
+
+def test_F21_reinstatement_of_an_entry_that_is_not_withdrawn_has_no_effect():
+    e = sample_entry("zika", "PP_1", 1)
+    named = canonical.dumps({"organism": "zika", "accessionVersions": ["PP_1.1", "PP_9.1"], "note": None})
+    blobs = _handmade_batch([e], extra_inner=frame(RecordType.REINSTATE, named))
+    dec = StreamDecoder(blobs).decode()
+    assert not dec.torn and dec.count("zika") == 1 and dec.withdrawn() == {} and dec.batches[0].reinstated_count == 0
+    for bad in (b"[]", canonical.dumps({"organism": "zika", "accessionVersions": ["PP_1"]})):
+        assert StreamDecoder(_handmade_batch([e], extra_inner=frame(RecordType.REINSTATE, bad))).decode().torn
+
+
 # --- F15 ------------------------------------------------------------------------------------
 
 

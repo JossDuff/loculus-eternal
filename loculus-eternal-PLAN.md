@@ -238,6 +238,8 @@ Proposed shape (refined in the container format phase):
       pipeline change. Unused in v1.
     - `WITHDRAW`: accessionVersions the publisher withdraws; excluded from materialised output
       and snapshots from that batch on, bytes retained.
+    - `REINSTATE`: withdrawn accessionVersions the publisher puts back; they return to the
+      materialised output and snapshots from that batch on, without being published again.
   - `BATCH_MANIFEST` (uncompressed, terminates every batch): batch number, per-organism
     entry counts, **the sha256 of each materialized per-organism NDJSON artifact** so any
     decoder can prove its output is what the publisher intended, the previous manifest's
@@ -268,8 +270,11 @@ safe to interrupt and rerun. Steps:
    next blob boundary.
 3. **Sync.** For each configured organism, `GET get-released-data` with `If-None-Match`.
    Parse NDJSON. Select entries eligible for publication (**OPEN only**; an entry becomes
-   eligible the day it becomes open) whose accessionVersion is not yet published. Project
-   each to the published field set.
+   eligible the day it becomes open; with `min_age_days` set, only once that version was
+   submitted at least that many days ago) whose accessionVersion is not yet published. Project
+   each to the published field set. The eligible entries are the copy of the database this
+   run publishes: a published entry that is not among them is withdrawn, and a withdrawn
+   entry that is among them is reinstated.
 4. **Nothing new → exit 0** with "nothing to publish".
 5. **Plan a batch.** Encode into container records, compress, append `INDEX` when the size
    threshold is reached and `BATCH_MANIFEST`, chunk into 31-byte units, pack into blobs (≤6
@@ -480,6 +485,38 @@ Revocation stays possible as an appended record, but the bytes remain. If a subm
 something that must legally disappear, the only remedy is to stop serving it in our own
 snapshots and document that it is disowned. Written plainly in the design doc and the public
 verification page.
+
+**The record follows the latest copy — DECIDED 2026-11-13: after an upload, recovery
+produces exactly the entries of the database copy that upload read.** A publisher assumes
+that what they just uploaded is what the next recovery returns, and the first design did not
+do that: an entry missing from a later copy stayed in the record unless a flag was passed,
+and once withdrawn it could never come back, so alternating copies of the database left the
+record matching neither. Now the upload withdraws every published entry that is not eligible
+in the copy it read and reinstates every withdrawn entry that is, without a flag, after
+showing the counts and asking. This replaces two earlier choices: that a withdrawal is
+permanent, and (2026-10-05) that the command never withdraws on its own. The safeguard
+against a half-finished backend migration withdrawing a dataset is now that the counts are
+shown before anything is sent and that the next good upload reinstates everything, at the
+cost of one small record. The container format gains a `REINSTATE` record for this; it had
+to be added before mainnet genesis, because a reader that does not know the record produces
+the wrong files and a later minor version may only add what an older reader can ignore.
+**Scope: which entries, not their content.** An entry keeps the content it was first
+published with; the decision of 2026-09-30 under "Published fields" stands. Measured on
+feeds cached on 2026-10-07 and 2026-10-13: 944 of 308,398 open entries changed content
+without a new version in six days (two metadata fields filled in later), and a pipeline
+version change rewrites every entry of an organism, so following content would grow the
+stream by roughly a full dataset each time. An organism left out of a configured organism
+list is still not synced and not withdrawn.
+
+**Publication delay — DECIDED 2026-11-13: `min_age_days` in the upload configuration,
+counted from each version's submission time.** The Pathoplexus team wants a submission to
+reach the permanent record only after it has been in their database for about three months,
+so that one removed soon after submission never gets there. With `min_age_days` set, an
+entry is eligible only when its `submittedAtTimestamp` is at least that many days before the
+run. Every version has its own submission time, so a revision or a revocation waits its own
+term. The rule is part of eligibility, like the open-terms rule: entries it holds back are
+simply not in the copy, and a published entry it would hold back is withdrawn until it is
+old enough. The default is no delay.
 
 **Accumulator — DECIDED 2026-09-30: hash chain.** Simplest possible contract; verification is
 linear in the number of blobs, which is fine because every consumer does a full recovery.

@@ -45,6 +45,7 @@ class RecordType(IntEnum):
     DICTIONARY = 0x13
     REPROCESSED = 0x14
     WITHDRAW = 0x15
+    REINSTATE = 0x16
 
 
 OUTER_TYPES = {RecordType.HEADER, RecordType.BATCH_BEGIN, RecordType.BODY, RecordType.BATCH_MANIFEST, RecordType.INDEX}

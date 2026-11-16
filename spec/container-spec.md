@@ -66,6 +66,7 @@ Record types:
 | `0x13` | `DICTIONARY` | reserved, inside a body | unused in version 1 |
 | `0x14` | `REPROCESSED` | reserved, inside a body | unused in version 1 |
 | `0x15` | `WITHDRAW` | inside a body | canonical JSON |
+| `0x16` | `REINSTATE` | inside a body | canonical JSON |
 
 Types `0x01`–`0x0f` are **outer** records (they appear directly in the stream) and
 `0x10`–`0x7f` are **inner** records (they appear only inside a decompressed body). A decoder
@@ -139,8 +140,9 @@ The payload is the batch's inner records, concatenated, encoded with `codec`. It
 digest MUST equal `compressedLength` and `bodyDigest` from `BATCH_BEGIN`. Inner records in
 canonical encoder order are: every `SCHEMA` record (sorted by organism), then every `TOOLING`
 record (sorted by path), then every `WITHDRAW` record (sorted by organism), then every
-`ENTRY` record sorted by organism, then accession, then numeric version. Decoders MUST NOT
-depend on that order. A batch MUST contain at least one `ENTRY` or one `WITHDRAW` record.
+`REINSTATE` record (sorted by organism), then every `ENTRY` record sorted by organism, then
+accession, then numeric version. Decoders MUST NOT depend on that order. A batch MUST contain
+at least one `ENTRY`, `WITHDRAW` or `REINSTATE` record.
 
 ### `ENTRY`
 
@@ -201,9 +203,46 @@ entries' bytes stay in the stream, in archives and on every chain node forever, 
 nothing can take them out. What changes is what conforming readers **produce**: withdrawn
 entries MUST be excluded from the materialised output (below) and from every snapshot, and a
 conforming reader MUST NOT provide a means of producing them. That the bytes remain readable
-by other means is a side effect of the medium, not a feature of the format. A withdrawal is
-permanent for the named accessionVersions, applies whether they were published before or
-after it, and an encoder MUST refuse to publish an `ENTRY` for a withdrawn accessionVersion.
+by other means is a side effect of the medium, not a feature of the format.
+
+A withdrawal takes effect with the batch that carries it and holds until a later batch
+reinstates the accessionVersion (below). It applies whether the named accessionVersion was
+published before it or is published after it. An encoder MUST NOT withdraw an
+accessionVersion that is already withdrawn, and MUST refuse to publish an `ENTRY` for an
+accessionVersion that is withdrawn once the batch's own `WITHDRAW` and `REINSTATE` records
+are applied.
+
+### `REINSTATE`
+
+Canonical JSON naming withdrawn entries the publisher puts back into the dataset:
+
+```json
+{
+  "organism": "<organism identifier>",
+  "accessionVersions": ["PP_000123.1"],
+  "note": "in the database again as of 2026-11-13"
+}
+```
+
+The fields are as in `WITHDRAW`. A reinstatement lifts the withdrawal of the named
+accessionVersions from the batch that carries it on. An entry already in the stream returns
+to the materialised output and to snapshots without being published again, and an
+accessionVersion that was withdrawn before it was ever published may be published from then
+on. A reinstated accessionVersion may be withdrawn again by a later batch.
+
+Whether an accessionVersion is withdrawn after a batch is decided by the most recent batch
+that names it in a `WITHDRAW` or a `REINSTATE` record: it is withdrawn if that batch names it
+in a `WITHDRAW`, and not withdrawn if that batch names it in a `REINSTATE` or if no batch
+names it. The order of records inside a body never matters, so a batch MUST NOT name the same
+accessionVersion in both a `WITHDRAW` and a `REINSTATE` record, and a decoder MUST treat a
+batch that does as malformed. An encoder MUST NOT reinstate an accessionVersion that is not
+withdrawn; a decoder that meets such a reinstatement MUST treat it as having no effect.
+
+This is what lets the dataset follow the publisher's database in both directions: an entry
+the database stops serving is withdrawn, and one it serves again is reinstated, at the cost
+of one small record instead of the entry's bytes. `REINSTATE` belongs to version 1.0 because
+it changes what the materialised output is: a later minor version could not have added it,
+since a 1.0 decoder must be able to ignore whatever a later minor version adds.
 
 ### `TOOLING`
 
@@ -244,8 +283,8 @@ it was published in:
 ```
 
 Each accession maps to a list of `[version, batch]` pairs sorted by version; `withdrawn`
-lists, per organism and accession, the sorted versions withdrawn so far (an empty object when
-there are none). An index is inclusive of its own batch. **Encoder rule:** an `INDEX` MUST be emitted in a batch when the
+lists, per organism and accession, the sorted versions that are withdrawn as of this batch (an
+empty object when there are none); a version that has been reinstated is not listed. An index is inclusive of its own batch. **Encoder rule:** an `INDEX` MUST be emitted in a batch when the
 sum of `compressedLength` over this batch and every batch after the last one that carried an
 index reaches 16,777,216 bytes (16 MiB). An encoder MAY emit one more often. Decoders MUST
 accept any placement. A reader that wants the published set reads the most recent `INDEX`
@@ -280,7 +319,10 @@ is `firstBlobSeq` plus the number of blobs the batch occupies. `previousManifest
 `bodyDigest` repeat the values from `BATCH_BEGIN`. `organisms` lists every organism with at
 least one entry published so far, including organisms with no entries in this batch (with
 `entriesInBatch` 0). `entriesTotal` counts the lines of the organism's materialised file,
-that is published entries minus withdrawn ones; `withdrawnTotal` counts the withdrawn ones.
+that is published entries minus the ones withdrawn as of this batch; `withdrawnTotal` counts
+the accessionVersions withdrawn as of this batch, and `withdrawnInBatch` the ones this batch's
+`WITHDRAW` records name. The number a batch reinstates is not stated; it follows from the
+totals of this manifest and the one before.
 `artifactSha256` is the **cumulative** digest: the SHA-256 of that organism's complete
 materialised file after this batch, as defined below. The manifest is
 the last record of the batch; the bytes from its end to the end of the blob are zero.
@@ -324,8 +366,8 @@ needs the published set.
 ## Materialisation (schema `pathoplexus`)
 
 The materialised output of a stream is one file per organism, named `<organism>.ndjson`,
-containing one line per published accessionVersion of that organism **that has not been
-withdrawn**. Each line is the exact `ENTRY` payload bytes followed by a single `0x0a`. Lines are sorted by `metadata.accession`
+containing one line per published accessionVersion of that organism **that is not
+withdrawn** as of the last batch read. Each line is the exact `ENTRY` payload bytes followed by a single `0x0a`. Lines are sorted by `metadata.accession`
 (byte-wise on the UTF-8 string) and then by `metadata.version` (numerically). The file is a
 pure function of the set of entries: no timestamps, counts, or banners. `artifactSha256` in a
 manifest is the SHA-256 of this file's bytes after the manifest's batch.
@@ -349,12 +391,13 @@ whose `metadata.isRevocation` is true revokes the accession.
 | `two_batches_index.json` | two batches, the second carrying an `INDEX` |
 | `torn_batch.json` | a complete batch, a torn batch, and the same batch republished at the next blob boundary |
 | `withdrawal.json` | two batches, the second withdrawing an entry of the first and adding another |
+| `reinstatement.json` | three batches: the second withdraws two entries of the first, the third reinstates one of them and withdraws another |
 
 For codec 0 streams two conforming encoders produce identical bytes for identical input. For
 codec 1 streams they produce identical decoded content, identical manifests except for
 `bodyDigest` and `compressedLength`, and identical materialised files.
 
-Behaviour IDs for this format are `F1`–`F19` in `docs/test-plan.md`.
+Behaviour IDs for this format are `F1`–`F21` in `docs/test-plan.md`.
 
 ## Appendix: the Pathoplexus published-field schema
 

@@ -336,17 +336,161 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
     env.pop(configuration.PUBLISHER_KEY_ENV, None)
     cmd = [sys.executable, "-m", "loculus_eternal.cli", "upload", "--config", str(world["cfg_path"])]
-    missing = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    missing = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert missing.returncode != 0 and configuration.PUBLISHER_KEY_ENV in missing.stderr
     env[configuration.PUBLISHER_KEY_ENV] = world["anvil"].publisher.key.hex()
     checked = subprocess.run(cmd + ["--check"], capture_output=True, text=True, env=env)
     assert checked.returncode == 0 and "planned batch 0" in checked.stdout and "estimated cost" in checked.stdout
-    published = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # A subprocess has no terminal to be asked on, so the publish is confirmed in advance.
+    published = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert published.returncode == 0, published.stderr
     assert "published batch 0" in published.stdout
-    again = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    again = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env)
     assert again.returncode == 0 and "nothing to publish" in again.stdout
     assert world["anvil"].contract.functions.blobCount().call() >= 1
+
+
+def test_U24_command_line_without_a_terminal_sends_a_batch_only_with_yes(world):
+    anvil = world["anvil"]
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
+    env[configuration.PUBLISHER_KEY_ENV] = anvil.publisher.key.hex()
+    cmd = [sys.executable, "-m", "loculus_eternal.cli", "upload", "--config", str(world["cfg_path"])]
+    # There is a batch to send and nobody to ask: it is planned, shown, and not sent.
+    unasked = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert unasked.returncode == 1 and "no terminal" in unasked.stderr and "--yes" in unasked.stderr
+    assert "new entries:  3" in unasked.stderr, "the log shows what --yes would have sent"
+    assert "RESULT: REFUSED (nothing sent)" in unasked.stdout and "Continue?" not in unasked.stdout + unasked.stderr
+    assert anvil.contract.functions.blobCount().call() == 0
+    # A dry run sends nothing, so it has nothing to ask.
+    dry = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert dry.returncode == 0, dry.stderr
+    assert anvil.contract.functions.blobCount().call() == 0
+    published = subprocess.run(cmd + ["--yes"], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert published.returncode == 0 and "published batch 0" in published.stdout
+    # With nothing to send there is nothing to ask, so a scheduled run needs no --yes to
+    # report that all is in order.
+    quiet = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert quiet.returncode == 0 and "nothing to publish" in quiet.stdout
+
+
+def test_U24_with_nobody_to_ask_an_interrupted_batch_is_still_finished(world):
+    from loculus_eternal.upload.upload import NobodyToAsk
+
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(4)])  # two transactions
+    up = uploader(world)
+
+    def crash_after_first(tx):
+        if tx.index == 0:
+            raise KeyboardInterrupt("simulated crash right after the first transaction was sent")
+
+    up.submitter.after_send = crash_after_first
+    with pytest.raises(KeyboardInterrupt):
+        up.run(confirm=lambda text: True)
+    world["backend"].add("zika", released_line("zika", "PP_9", 1))
+
+    def nobody(text):
+        raise NobodyToAsk("there is no terminal to ask on")
+
+    # The run that resumes has no terminal (a service, a remote command). The batch already
+    # confirmed is finished all the same; only the new one waits for a person.
+    resumed = uploader(world).run(confirm=nobody)
+    assert resumed.outcome == "resumed" and len(resumed.transactions) == 2 and not (up.data_dir / "journal.json").exists()
+    assert "interrupted batch was finished" in resumed.message and "no terminal" in resumed.message and "nothing of batch 1 was sent" in resumed.message
+    finished = anvil.contract.functions.blobCount().call()
+    register_in_archive(world, resumed)
+    refused = uploader(world).run(confirm=nobody)
+    assert refused.outcome == "refused" and "no terminal" in refused.message and refused.transactions == []
+    assert anvil.contract.functions.blobCount().call() == finished
+
+
+def test_U24_publish_states_the_batch_and_stops_on_no_before_anything_is_sent(world):
+    anvil, backend = world["anvil"], world["backend"]
+    asked, lines = [], []
+
+    def no(text):
+        asked.append(text)
+        return False
+
+    cfg = configuration.load(world["cfg_path"])
+    up = Uploader(cfg, account=anvil.publisher, log=lines.append, poll_interval=0.1)
+    declined = up.run(confirm=no)
+    assert declined.outcome == "declined" and "nothing of batch 0 was sent" in declined.message
+    assert lines[-1].startswith("RESULT: STOPPED AT THE CONFIRMATION (nothing sent)")
+    assert len(asked) == 1
+    text = asked[0].splitlines()
+    assert text[0] == f"You are publishing a copy of the Loculus database located at {backend.url}"
+    assert text[1] == f"to contract {anvil.contract.address} on chain {anvil.chain_id}."
+    assert [line.split("(")[0].split() for line in text[2:]] == [["new", "entries:", "3"], ["withdrawn:", "0"], ["reinstated:", "0"]]
+    # The batch was planned, which is how its numbers are known; nothing of it was sent or kept.
+    assert declined.batch["batch"] == 0 and declined.new_entries == 3
+    assert anvil.contract.functions.blobCount().call() == 0 and not (up.data_dir / "journal.json").exists()
+    assert not list(up.data_dir.rglob("*.blob"))
+    assert list((up.data_dir / "reports").glob("*-publish-declined.json"))
+
+    def never(text):
+        raise AssertionError("nothing is about to be sent, so nobody must be asked")
+
+    assert Uploader(cfg, log=lambda s: None).run("check", confirm=never).outcome == "checked"
+    assert uploader(world).run("dry-run", confirm=never).outcome == "dry-run-ok"
+
+    published = uploader(world).run(confirm=lambda text: True)
+    assert published.outcome == "published" and published.new_entries == 3
+    register_in_archive(world, published)
+    # With the record already matching the database there is no batch and no question.
+    assert uploader(world).run(confirm=never).outcome == "nothing-to-publish"
+
+
+def test_U24_confirmation_counts_what_the_batch_adds_withdraws_and_reinstates(world):
+    anvil, backend = world["anvil"], world["backend"]
+    first = uploader(world).run()
+    register_in_archive(world, first)
+    # This copy lacks one published entry and has one new one.
+    backend.set_lines("zika", [released_line("zika", "PP_2", 1), released_line("zika", "PP_7", 1)])
+    asked = []
+    declined = uploader(world).run(confirm=lambda text: asked.append(text) or False)
+    assert declined.outcome == "declined" and declined.withdrawn == {"zika": ["PP_1.1"]}
+    counts = {line.split(":")[0].strip(): line.split(":")[1].split("(")[0].strip() for line in asked[0].splitlines()[2:]}
+    assert counts == {"new entries": "1", "withdrawn": "1", "reinstated": "0"}
+    assert "published, not in this copy" in asked[0] and "withdrawn, in this copy again" in asked[0]
+    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"], "a no leaves the record as it was"
+    # A yes makes the record follow the copy; going back to the first copy then says so too.
+    second = uploader(world).run(confirm=lambda text: True)
+    register_in_archive(world, second)
+    backend.set_lines("zika", [released_line("zika", "PP_1", 1), released_line("zika", "PP_2", 1)])
+    uploader(world).run(confirm=lambda text: asked.append(text) or False)
+    counts = {line.split(":")[0].strip(): line.split(":")[1].split("(")[0].strip() for line in asked[-1].splitlines()[2:]}
+    assert counts == {"new entries": "0", "withdrawn": "1", "reinstated": "1"}
+
+
+def test_U24_interrupted_batch_is_finished_before_anyone_is_asked(world):
+    anvil = world["anvil"]
+    world["backend"].set_lines("mpox", [bulky_line("mpox", f"PP_B{i}") for i in range(4)])  # more than two blobs: two transactions
+    up = uploader(world)
+
+    def crash_after_first(tx):
+        if tx.index == 0:
+            raise KeyboardInterrupt("simulated crash right after the first transaction was sent")
+
+    up.submitter.after_send = crash_after_first
+    with pytest.raises(KeyboardInterrupt):
+        up.run(confirm=lambda text: True)
+    assert (up.data_dir / "journal.json").exists()
+    # More data arrives meanwhile, so the run that resumes also has a batch of its own to plan.
+    world["backend"].add("zika", released_line("zika", "PP_9", 1))
+    seen = []
+
+    def no(text):
+        # By the time the question comes, the batch that was already confirmed is complete,
+        # and the question is about the next one.
+        seen.append((anvil.contract.functions.blobCount().call(), (up.data_dir / "journal.json").exists(), text))
+        return False
+
+    resumed = uploader(world).run(confirm=no)
+    assert resumed.outcome == "resumed" and len(resumed.transactions) == 2
+    assert "interrupted batch was finished" in resumed.message and "stopped at the confirmation" in resumed.message
+    assert len(seen) == 1 and seen[0][0] > 2 and seen[0][1] is False and "new entries:  1" in seen[0][2]
+    assert anvil.contract.functions.blobCount().call() == seen[0][0], "nothing new was sent after the no"
 
 
 def test_U11_tooling_is_republished_when_the_version_changes(world):
@@ -509,31 +653,132 @@ def test_U13_chain_id_mismatch_is_a_configuration_error(world):
         uploader(world)
 
 
-def test_U14_vanished_entries_are_reported_and_withdrawn_only_on_confirmation(world, tmp_path):
+def test_U14_published_entries_missing_from_the_copy_are_withdrawn(world, tmp_path):
     anvil = world["anvil"]
     first = uploader(world).run()
     assert first.outcome == "published" and first.new_entries == 3
     register_in_archive(world, first)
     # The backend removes one published entry outright.
     world["backend"].set_lines("zika", [released_line("zika", "PP_2", 1), released_line("zika", "PP_3", 1, open_terms=False)])
-    quiet = uploader(world).run()
-    assert quiet.outcome == "nothing-to-publish" and quiet.vanished == {"zika": ["PP_1.1"]} and "withdraw-vanished" in quiet.message
-    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"], "nothing was published without confirmation"
+    # A check says what a publish would do, and sends nothing.
     checked = Uploader(configuration.load(world["cfg_path"]), log=lambda s: None).run("check")
-    assert checked.vanished == {"zika": ["PP_1.1"]}
+    assert checked.outcome == "checked" and checked.withdrawn == {"zika": ["PP_1.1"]} and checked.batch["withdrawn"] == 1
+    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"]
 
-    confirmed = uploader(world).run(withdraw_vanished=True)
-    assert confirmed.outcome == "published", confirmed.message
-    assert confirmed.withdrawn == {"zika": ["PP_1.1"]} and confirmed.batch["withdrawn"] == 1 and confirmed.new_entries == 0
-    register_in_archive(world, confirmed)
+    second = uploader(world).run()
+    assert second.outcome == "published", second.message
+    assert second.withdrawn == {"zika": ["PP_1.1"]} and second.reinstated == {} and second.batch["withdrawn"] == 1 and second.new_entries == 0
+    register_in_archive(world, second)
     report = recover(world, tmp_path)
     assert report.missing == [] and report.decode["allArtifactsMatch"]
     zika = [json.loads(l)["metadata"]["accessionVersion"] for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
     assert zika == ["PP_2.1"] and report.decode["withdrawn"] == {"zika": {"PP_1": [1]}}
     assert report.decode["files"]["zika"]["withdrawn"] == 1
-    # Once withdrawn, the entry is no longer "vanished": a further run has nothing to say.
+    # The record now holds what the copy holds: a further run has nothing to do.
     again = uploader(world).run()
-    assert again.outcome == "nothing-to-publish" and again.vanished == {}
+    assert again.outcome == "nothing-to-publish" and again.withdrawn == {}
+
+
+def test_U14_a_published_entry_that_is_no_longer_eligible_is_withdrawn(world, tmp_path):
+    first = uploader(world).run()
+    register_in_archive(world, first)
+    # Still in the feed, but its terms are no longer open: it is not in the copy.
+    world["backend"].set_lines("zika", [released_line("zika", "PP_1", 1, open_terms=False), released_line("zika", "PP_2", 1)])
+    second = uploader(world).run()
+    assert second.outcome == "published" and second.withdrawn == {"zika": ["PP_1.1"]}
+
+
+def test_U25_the_record_follows_the_latest_copy_through_alternating_uploads(world, tmp_path):
+    """After every upload, recovery produces exactly the eligible entries of the copy that
+    upload read, however the copies alternate; an entry that returns costs a record, not its
+    bytes; and an entry keeps the content it was first published with."""
+    backend = world["backend"]
+    small = [released_line("zika", "PP_2", 1)]
+    full = [released_line("zika", "PP_1", 1)] + small
+    bigger = full + [released_line("zika", "PP_5", 1)]
+
+    def upload(lines):
+        backend.set_lines("zika", lines)
+        report = uploader(world).run()
+        if report.outcome == "published":
+            register_in_archive(world, report)
+        recovered = recover(world, tmp_path)
+        assert recovered.missing == [] and recovered.decode["allArtifactsMatch"]
+        return report, (tmp_path / "rec-out" / "zika.ndjson").read_bytes().splitlines()
+
+    def names(recovered_lines):
+        return [json.loads(l)["metadata"]["accessionVersion"] for l in recovered_lines]
+
+    first, lines = upload(full)
+    assert names(lines) == ["PP_1.1", "PP_2.1"]
+    pp1_as_first_published = lines[0]
+
+    second, lines = upload(small)
+    assert second.withdrawn == {"zika": ["PP_1.1"]} and names(lines) == ["PP_2.1"]
+
+    third, lines = upload(bigger)
+    assert third.reinstated == {"zika": ["PP_1.1"]} and third.withdrawn == {} and third.new_entries == 1
+    assert names(lines) == ["PP_1.1", "PP_2.1", "PP_5.1"] and lines[0] == pp1_as_first_published
+
+    fourth, lines = upload(small)
+    assert fourth.withdrawn == {"zika": ["PP_1.1", "PP_5.1"]} and names(lines) == ["PP_2.1"]
+
+    fifth, lines = upload(bigger)
+    assert fifth.reinstated == {"zika": ["PP_1.1", "PP_5.1"]} and fifth.new_entries == 0 and fifth.batch["reinstated"] == 2
+    assert names(lines) == ["PP_1.1", "PP_2.1", "PP_5.1"]
+    # Two entries came back in a batch that carries only their names.
+    assert fifth.batch["blobs"] == 1 and fifth.batch["lastBlobChunkCount"] < 40
+
+    same, lines = upload(bigger)
+    assert same.outcome == "nothing-to-publish" and same.withdrawn == {} and same.reinstated == {}
+
+    # The record follows which entries the copy holds, not later edits to one of them.
+    edited = [released_line("zika", "PP_1", 1, extra={"clade": "edited-later"})] + bigger[1:]
+    after_edit, lines = upload(edited)
+    assert after_edit.outcome == "nothing-to-publish" and lines[0] == pp1_as_first_published
+
+
+def test_U26_entries_wait_for_the_minimum_age_and_are_published_once_old_enough(world, tmp_path):
+    backend = world["backend"]
+    cfg = world["cfg_path"]
+    cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]\nmin_age_days = 90'))
+    now, day = 1_800_000_000, 86_400
+
+    def submitted(accession, days_ago, version=1):
+        return released_line("zika", accession, version, extra={"submittedAtTimestamp": now - days_ago * day})
+
+    # Every version has its own submission time: the revision of PP_1 is ten days old.
+    backend.set_lines("zika", [submitted("PP_1", 200), submitted("PP_1", 10, version=2), submitted("PP_2", 90), submitted("PP_3", 89)])
+
+    def upload(at, lines=None):
+        report = uploader(world, clock=lambda: at).run(confirm=lambda text: (lines.append(text) if lines is not None else None) or True)
+        if report.outcome == "published":
+            register_in_archive(world, report)
+        recovered = recover(world, tmp_path)
+        assert recovered.missing == [] and recovered.decode["allArtifactsMatch"]
+        return report, [json.loads(l)["metadata"]["accessionVersion"] for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
+
+    asked = []
+    first, recovered = upload(now, asked)
+    assert recovered == ["PP_1.1", "PP_2.1"], "exactly ninety days is old enough, eighty-nine is not"
+    assert first.sync[0]["held_back"] == 2 and first.sync[0]["new"] == 2
+    assert "held back:    2  (submitted less than 90 days ago)" in asked[0]
+
+    # A day later the next entry has aged in; nothing was lost by waiting.
+    second, recovered = upload(now + day)
+    assert second.new_entries == 1 and recovered == ["PP_1.1", "PP_2.1", "PP_3.1"]
+    assert upload(now + day)[0].outcome == "nothing-to-publish"
+
+    # The rule is part of what the copy holds. Raised, it withdraws what it would now hold
+    # back, and those entries return when they are old enough.
+    cfg.write_text(cfg.read_text().replace("min_age_days = 90", "min_age_days = 120"))
+    third, recovered = upload(now + day)
+    assert third.withdrawn == {"zika": ["PP_2.1", "PP_3.1"]} and recovered == ["PP_1.1"]
+    fourth, recovered = upload(now + 31 * day)
+    assert fourth.reinstated == {"zika": ["PP_2.1", "PP_3.1"]} and fourth.new_entries == 0
+    assert recovered == ["PP_1.1", "PP_2.1", "PP_3.1"]
+    fifth, recovered = upload(now + 111 * day)
+    assert fifth.new_entries == 1 and recovered == ["PP_1.1", "PP_1.2", "PP_2.1", "PP_3.1"]
 
 
 def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
@@ -564,7 +809,7 @@ def test_U15_batch_transactions_are_pipelined_and_final_once(world, tmp_path):
     assert rec.missing == [] and rec.decode["allArtifactsMatch"]
 
 
-def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, tmp_path):
+def test_U16_all_organisms_follows_the_backend_and_withdraws_a_dropped_one(world, tmp_path):
     cfg = world["cfg_path"]
     cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = "all"'))
     first = uploader(world).run()
@@ -575,26 +820,34 @@ def test_U16_all_organisms_follows_the_backend_and_reports_a_dropped_one(world, 
     second = uploader(world).run()
     assert second.outcome == "published" and second.new_entries == 1 and "hmpv" in {s["organism"] for s in second.sync}
     register_in_archive(world, second)
-    # The backend drops an organism: its published entries are reported as vanished.
+    # The backend drops an organism: none of its entries is in the copy, so they are withdrawn.
     with world["backend"]._lock:
-        del world["backend"].lines["mpox"]
+        mpox = world["backend"].lines.pop("mpox")
     third = uploader(world).run()
-    assert third.outcome == "nothing-to-publish" and third.vanished == {"mpox": ["PP_4.1"]}
+    assert third.outcome == "published" and third.withdrawn == {"mpox": ["PP_4.1"]} and third.new_entries == 0
+    register_in_archive(world, third)
+    # It serves the organism again: the entries return.
+    world["backend"].set_lines("mpox", mpox)
+    fourth = uploader(world).run()
+    assert fourth.outcome == "published" and fourth.reinstated == {"mpox": ["PP_4.1"]} and fourth.new_entries == 0
+    register_in_archive(world, fourth)
+    rec = recover(world, tmp_path)
+    assert rec.missing == [] and rec.decode["allArtifactsMatch"] and rec.decode["files"]["mpox"]["entries"] == 1
     # A backend that cannot enumerate organisms is a plain error before anything is read.
     world["backend"].enumerate_organisms = False
-    fourth = uploader(world).run()
-    assert fourth.outcome == "failed" and "list them in the config" in fourth.message
+    fifth = uploader(world).run()
+    assert fifth.outcome == "failed" and "list them in the config" in fifth.message
 
 
-def test_U16_an_organism_left_out_of_a_configured_list_is_not_reported_vanished(world, tmp_path):
+def test_U16_an_organism_left_out_of_a_configured_list_is_not_withdrawn(world, tmp_path):
     first = uploader(world).run()
     assert first.outcome == "published" and sorted(s["organism"] for s in first.sync) == ["mpox", "zika"]
     register_in_archive(world, first)
     cfg = world["cfg_path"]
     cfg.write_text(cfg.read_text().replace('organisms = ["zika", "mpox"]', 'organisms = ["zika"]'))
     # mpox is still served and still published; the maintainer simply chose not to sync it.
-    second = uploader(world).run(withdraw_vanished=True)
-    assert second.outcome == "nothing-to-publish" and second.vanished == {} and second.withdrawn == {}
+    second = uploader(world).run()
+    assert second.outcome == "nothing-to-publish" and second.withdrawn == {}
     assert [s["organism"] for s in second.sync] == ["zika"]
 
 
@@ -712,3 +965,35 @@ def test_U18_the_gas_headroom_covers_the_first_batch_end_ever():
     # still empty, so the mid-batch estimate is at its lowest and the batch end at its highest.
     warm_mid_batch_call = 16_500 + 21_000 + 700
     assert _gas_limit(warm_mid_batch_call) >= first_batch_end_call
+
+
+def test_U27_a_feed_that_arrived_short_stops_the_run_and_withdraws_nothing(world, tmp_path):
+    """Entries missing from a feed are withdrawn, so a feed holding fewer entries than the
+    backend said it would must not be mistaken for a database that lost them."""
+    import zstandard
+
+    anvil, backend = world["anvil"], world["backend"]
+    first = uploader(world).run()
+    assert first.outcome == "published"
+    register_in_archive(world, first)
+    # The backend still says three entries; one line of the response went missing on the way.
+    short = tmp_path / "zika-short.ndjson.zst"
+    short.write_bytes(zstandard.ZstdCompressor().compress(json.dumps(released_line("zika", "PP_2", 1)).encode() + b"\n"))
+    backend.set_file("zika", short, 3)
+    lines = []
+    up = Uploader(configuration.load(world["cfg_path"]), account=anvil.publisher, log=lines.append, poll_interval=0.1)
+    stopped = up.run()
+    assert stopped.outcome == "failed" and "holds 3 released entries and 1 arrived" in stopped.message
+    assert lines[-1].startswith("RESULT: FAILED") and stopped.withdrawn == {} and stopped.batch is None
+    assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"]
+    assert not (up.data_dir / "journal.json").exists()
+    # The short copy is not kept: the next run downloads again and does not trip on it.
+    assert not (up.data_dir / "feeds" / "zika.ndjson.zst").exists() and "zika" not in json.loads((up.data_dir / "feeds" / "etags.json").read_text())
+    with backend._lock:
+        del backend.files["zika"]
+    again = uploader(world).run()
+    assert again.outcome == "nothing-to-publish" and again.withdrawn == {}
+    # A feed that really is that short, and says so, is the database's word: it is followed.
+    backend.set_file("zika", short, 1)
+    followed = uploader(world).run()
+    assert followed.outcome == "published" and followed.withdrawn == {"zika": ["PP_1.1"]}

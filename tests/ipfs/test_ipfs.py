@@ -267,7 +267,7 @@ def test_I8_refused_batch_takes_its_snapshot_and_blob_objects_back(world):
     assert a.is_pinned(manifest["blobs"][0]["cid"]) and b.is_pinned(manifest["blobs"][0]["cid"])
     assert anvil.contract.functions.appPointer().call() == "", "a refused batch leaves the contract naming no snapshot"
     # And a fee refusal happens before any IPFS work at all.
-    world["cfg_path"].write_text(world["cfg_path"].read_text().replace("[ipfs]", "[upload.extra]\n[ipfs]").replace("inclusion_timeout_blocks = 3", "inclusion_timeout_blocks = 3\nmax_blob_fee_gwei = 0"))
+    world["cfg_path"].write_text(world["cfg_path"].read_text().replace("inclusion_timeout_blocks = 3", "inclusion_timeout_blocks = 3\nmax_blob_fee_gwei = 0"))
     cheap = uploader(world).run()
     assert cheap.outcome == "refused" and "blob base fee" in cheap.message and cheap.ipfs is None
 

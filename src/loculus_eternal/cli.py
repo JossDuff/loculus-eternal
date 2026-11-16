@@ -71,18 +71,85 @@ def cmd_recover(args: argparse.Namespace) -> int:
     return 0
 
 
+def discard_typed_ahead(terminal) -> None:
+    """Throw away whatever was typed at the terminal before the question was shown. A publish
+    can plan for an hour before it asks, and an Enter pressed in that time to see whether the
+    terminal is alive would otherwise be read as the answer, and Enter alone means yes."""
+    if not terminal.isatty():
+        return
+    try:
+        import termios
+    except ImportError:
+        # Windows has no termios; its console keeps the keys typed ahead in its own buffer.
+        import msvcrt
+
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+        return
+    termios.tcflush(terminal.fileno(), termios.TCIFLUSH)
+
+
+def ask_to_continue(statement: str, answers, shown) -> bool:
+    """Put a statement to a person and ask whether to go on: `shown` is where they read it,
+    `answers` where they type. Enter alone means yes; anything that is neither yes nor no is
+    asked again; only what is typed after the question appeared counts."""
+    discard_typed_ahead(answers)
+    print(statement, file=shown)
+    while True:
+        print("Continue? (Y/n) ", end="", file=shown, flush=True)
+        answer = answers.readline()
+        if not answer:
+            # The input ended without an answer: nobody said yes.
+            print(file=shown)
+            return False
+        answer = answer.strip().lower()
+        if answer in ("", "y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+
+
+def confirm_at_terminal(statement: str) -> bool:
+    """The question a publish asks before it sends its batch, put to the person at the
+    terminal. Answers are typed on standard input, so that must be a terminal. The question
+    is written where it will be seen: on standard error when that is the terminal, and
+    otherwise (standard error going to a log file or a pipe) on the terminal itself, because
+    a question that lands in a log leaves the command waiting on someone who cannot see it.
+    With nobody to ask it says so and stops the batch, having shown what was not sent."""
+    from loculus_eternal.upload.upload import NobodyToAsk
+
+    nobody = NobodyToAsk("publishing asks for confirmation and there is no terminal to ask on; run it in a terminal, or pass --yes to confirm in advance")
+    if sys.stdin is None or not sys.stdin.isatty():
+        print(statement, file=sys.stderr)
+        raise nobody
+    if sys.stderr is not None and sys.stderr.isatty():
+        return ask_to_continue(statement, sys.stdin, sys.stderr)
+    try:
+        terminal = open("/dev/tty", "w")
+    except OSError:
+        print(statement, file=sys.stderr)
+        raise nobody from None
+    with terminal:
+        return ask_to_continue(statement, sys.stdin, terminal)
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     from loculus_eternal.upload.upload import Uploader
 
     cfg = configuration.load(args.config)
     mode = "check" if args.check else "dry-run" if args.dry_run else "publish"
+    # A publish asks the maintainer to confirm the batch it has planned, unless --yes
+    # answered in advance. Whether there is a terminal to ask on is found out only when the
+    # question comes up: a run that finishes an interrupted batch, or finds nothing to
+    # publish, never asks and so needs neither a terminal nor --yes.
+    confirm = None if args.yes or mode != "publish" else confirm_at_terminal
     try:
         # Construction already talks to the endpoint (for the chain id), so it is inside the try.
         if mode == "check" and not args.with_key:
             uploader = Uploader(cfg)
         else:
             uploader = Uploader.with_key(cfg, configuration.publisher_key())
-        report = uploader.run(mode, withdraw_vanished=args.withdraw_vanished)
+        report = uploader.run(mode, confirm=confirm)
     except (RequestException, ChainError) as e:
         # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
         # in the journal; the next run resumes from it.
@@ -129,12 +196,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loculus-eternal", description="Permanent, verifiable backup of Pathoplexus released data in Ethereum blobs.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    up = sub.add_parser("upload", help="publish every newly eligible entry as one batch; a no-op when there is nothing new")
+    up = sub.add_parser("upload", help="make the published record hold exactly the eligible entries of the database, as one batch; a no-op when it already does")
     up.add_argument("--config", type=Path, required=True, help="TOML config file (see the README)")
     up.add_argument("--check", action="store_true", help="report how many entries await publication and the estimated cost; send nothing")
     up.add_argument("--dry-run", action="store_true", help="do everything except send: encode, simulate, check fees and balance")
     up.add_argument("--with-key", action="store_true", help="with --check, also read the key so the wallet balance is reported")
-    up.add_argument("--withdraw-vanished", action="store_true", help="confirm that every published entry the backend no longer serves should be withdrawn in this batch (see --check first)")
+    up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks before it sends its batch (see --check first for what the batch would do); needed when there is no terminal")
     up.set_defaults(func=cmd_upload)
 
     health = sub.add_parser("health", help="serve a one-page health check of the published record for anyone to verify")

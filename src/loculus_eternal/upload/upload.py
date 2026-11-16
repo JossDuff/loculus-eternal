@@ -1,11 +1,12 @@
 """The upload command: one idempotent run that publishes whatever is newly eligible.
 
     learn what is published (chain + stream)  →  finish an interrupted batch if there is one
-    →  sync the backend  →  select eligible, unpublished entries  →  nothing new? stop
-    →  encode a batch  →  journal it  →  dry run  →  send with finality  →  store own blobs
-    →  report
+    →  sync the backend  →  select what to publish, withdraw and reinstate  →  nothing? stop
+    →  encode a batch  →  have the maintainer confirm it  →  journal it  →  dry run
+    →  send with finality  →  store own blobs  →  report
 
-Every step is safe to repeat. The lock on the data directory keeps two runs on one machine
+The record follows the latest copy of the database: after a run, recovery produces exactly
+the entries that were eligible in the feeds that run read. Every step is safe to repeat. The lock on the data directory keeps two runs on one machine
 apart; the contract's sequence guard keeps two runs on different machines apart.
 """
 
@@ -32,18 +33,21 @@ from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
 from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
-from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_vanished, iter_new_entries
+from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_changes, iter_new_entries
 
 
 @dataclass
 class UploadReport:
     mode: str
-    outcome: str                         # "published", "nothing-to-publish", "refused", "checked", "dry-run-ok", "resumed"
+    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "checked", "dry-run-ok", "resumed"
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
-    vanished: dict = field(default_factory=dict)      # organism -> accessionVersions published but gone from the feed
-    withdrawn: dict = field(default_factory=dict)     # organism -> accessionVersions withdrawn by this run
+    # organism -> accessionVersions this run's batch withdraws (published, no longer eligible
+    # in the copy) and reinstates (withdrawn, eligible in it again); a check or a dry run
+    # reports what a publish would do
+    withdrawn: dict = field(default_factory=dict)
+    reinstated: dict = field(default_factory=dict)
     tooling_published: bool = False
     batch: dict | None = None
     ipfs: dict | None = None            # the new batch's snapshot and blob objects
@@ -57,12 +61,18 @@ class UploadReport:
         return self.__dict__
 
 
+class NobodyToAsk(RuntimeError):
+    """Raised by a confirm callback that has nobody to put the question to. The batch is not
+    sent, and the run says why instead of reporting that somebody answered no."""
+
+
 class Uploader:
-    def __init__(self, config: Config, *, w3: Web3 | None = None, account=None, log: Callable[[str], None] = print, sleep=time.sleep, poll_interval: float | None = None):
+    def __init__(self, config: Config, *, w3: Web3 | None = None, account=None, log: Callable[[str], None] = print, sleep=time.sleep, poll_interval: float | None = None, clock: Callable[[], float] = time.time):
         if config.backend is None or config.upload is None:
             raise SystemExit("configuration error: the upload command needs [backend] and [upload] sections")
         self.cfg = config
         self.log = log
+        self.clock = clock
         self.w3 = w3 or connect(config.chain.rpc_url, max_rps=config.chain.max_requests_per_second, timeout=120)
         self.account = account
         self.data_dir = config.upload.data_dir
@@ -111,6 +121,8 @@ class Uploader:
         """A generator over every new entry of every organism, filling `stats` as it runs and
         logging each organism's numbers once its feed has been read. Entries are never held."""
         n = len(organisms)
+        # What the stream holds does not change while the feeds are read.
+        published, withdrawn = view.decoded.published(), view.decoded.withdrawn()
         for k, organism in enumerate(organisms, 1):
             feed = client.fetch(organism)
             st = SyncStats(organism)
@@ -121,21 +133,31 @@ class Uploader:
             def progress(read, total, o=organism, k=k):
                 self.log(f"[{k}/{n}] {o}: {read:,}/{total:,} read, {st.new:,} new so far" if total else f"[{k}/{n}] {o}: {read:,} read, {st.new:,} new so far")
 
-            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st, progress)
-            gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
-            self.log(f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, {st.already_published:,} already published, {st.new:,} new" + (f", {len(gone)} published but no longer in the feed" if gone else ""))
-        # An organism that is in the stream but that the backend no longer serves at all: every
-        # one of its published entries has vanished, and the maintainer should hear about it.
-        # Only when the backend chose the list: an organism left out of a configured list was
-        # left out on purpose, and reporting it vanished could lead to withdrawing it.
+            yield from iter_new_entries(organism, feed, lambda acc, ver, o=organism: view.is_published(o, acc, ver), st, progress, submitted_cutoff=self._submitted_cutoff)
+            # An entry that is not in the feed is withdrawn, so a feed that arrived short must
+            # not be mistaken for a database that no longer holds the rest.
+            client.check_complete(feed, st.total)
+            gone, back = find_changes(st, published.get(organism, {}), withdrawn.get(organism, {}))
+            days = self.cfg.backend.min_age_days
+            self.log(
+                f"[{k}/{n}] {organism}: done. {st.total:,} released, {st.open:,} open, "
+                + (f"{st.held_back:,} held back (submitted less than {days} days ago), " if days else "")
+                + f"{st.already_published:,} already published, {st.new:,} new"
+                + (f", {len(gone):,} to withdraw (published, not in this copy)" if gone else "")
+                + (f", {len(back):,} to reinstate (withdrawn, in this copy again)" if back else "")
+            )
+        # An organism that is in the stream but that the backend no longer serves at all: none
+        # of its entries is in this copy, so every published one is withdrawn. Only when the
+        # backend chose the list: an organism left out of a configured list was left out on
+        # purpose, is not synced, and stays in the record as it is.
         for organism in view.decoded.organisms() if self.cfg.backend.organisms is None else []:
             if organism in organisms:
                 continue
             st = SyncStats(organism)
             stats.append(st)
-            gone = find_vanished(organism, st, view.decoded.published().get(organism, {}), view.decoded.withdrawn().get(organism, {}))
+            gone, _ = find_changes(st, published.get(organism, {}), withdrawn.get(organism, {}))
             if gone:
-                self.log(f"{organism}: the backend no longer serves this organism; its {len(gone)} published entries are no longer in any feed")
+                self.log(f"{organism}: the backend no longer serves this organism; its {len(gone):,} published entries are to be withdrawn")
 
     def _tooling(self, view: PublishedView) -> list[tuple[str, bytes]]:
         """The spec and source files, when none are in the stream yet or the version changed."""
@@ -207,14 +229,23 @@ class Uploader:
 
     # --- the run --------------------------------------------------------------------------------
 
-    def run(self, mode: str = "publish", withdraw_vanished: bool = False) -> UploadReport:
+    def run(self, mode: str = "publish", confirm: Callable[[str], bool] | None = None) -> UploadReport:
         """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only).
 
-        `withdraw_vanished` is the maintainer's explicit confirmation that every published
-        entry the backend no longer serves should be withdrawn in this batch."""
+        `confirm` is asked once a publish has planned its batch and before anything of it is
+        sent: it is handed a few lines naming the database, the contract, and how many
+        entries the batch adds, withdraws and reinstates, and the run stops unless it returns
+        True. It raises NobodyToAsk when it cannot put the question to anyone, which also
+        stops the run. None means nobody is asked."""
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
-        self._withdraw_vanished = withdraw_vanished
+        self._confirm = confirm
+        # One reading of the clock decides every entry's age for the whole run, so an entry
+        # cannot be old enough for one organism's feed and too young for the next.
+        now = int(self.clock())
+        self._today = time.strftime("%Y-%m-%d", time.gmtime(now))
+        days = self.cfg.backend.min_age_days
+        self._submitted_cutoff = now - days * 86_400 if days else None
         self._client = BackendClient(self.cfg.backend.url, self.data_dir / "feeds")
         try:
             return self._run(mode, report, started)
@@ -267,29 +298,29 @@ class Uploader:
         try:
             # The entries flow from the backend feeds straight into the encoder's sorted
             # runs on disk; the whole batch is never in memory. The encoder reads the
-            # withdrawals only after the entries, so by then every feed has been seen and
-            # the vanished entries are known.
-            batch = encoder.encode_batch(self._sync(view, stats, self._client, self._organism_list), previous_entries=view.previous_entries, tooling=tooling, codec=CODEC_ZSTD, withdrawals=_WithdrawalsLater(lambda: self._withdrawals(stats, report)))
+            # withdrawals and reinstatements only after the entries, so by then every feed
+            # has been read and it is known what the copy holds.
+            batch = encoder.encode_batch(
+                self._sync(view, stats, self._client, self._organism_list),
+                previous_entries=view.previous_entries,
+                tooling=tooling,
+                codec=CODEC_ZSTD,
+                withdrawals=_Later(lambda: self._records(stats, "to_withdraw", report.withdrawn, f"not among the entries eligible for publication in the database on {self._today}")),
+                reinstatements=_Later(lambda: self._records(stats, "to_reinstate", report.reinstated, f"among the entries eligible for publication in the database again on {self._today}")),
+            )
         except EmptyBatch:
             report.sync = [_stats_json(s) for s in stats]
-            report.vanished = {s.organism: s.vanished for s in stats if s.vanished}
             report.outcome = "nothing-to-publish" if not report.transactions else "resumed"
-            report.message = "nothing to publish: every eligible entry is already in the stream" + ("; new tooling will be included with the next batch that has new entries" if tooling else "")
-            if report.vanished:
-                n = sum(len(v) for v in report.vanished.values())
-                report.message += f"; {n} published entries are no longer in the backend feed (run with --withdraw-vanished to withdraw them)"
+            report.message = "nothing to publish: the stream already holds exactly the eligible entries of the database" + ("; new tooling will be included with the next batch that changes the record" if tooling else "")
             report.tooling_published = False
             self.log(report.message)
             return self._done(report, started)
         report.sync = [_stats_json(s) for s in stats]
-        report.vanished = {s.organism: s.vanished for s in stats if s.vanished}
         report.new_entries = batch.entry_count
-        if report.vanished and not self._withdraw_vanished:
-            n = sum(len(v) for v in report.vanished.values())
-            self.log(f"{n} published entries are no longer in the backend feed; they stay in the record until a run with --withdraw-vanished confirms their withdrawal")
         report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // self.policy.max_blobs_per_transaction), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
         report.batch["withdrawn"] = batch.withdrawn_count
-        self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
+        report.batch["reinstated"] = batch.reinstated_count
+        self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + (f", {batch.reinstated_count} reinstatement(s)" if batch.reinstated_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
         if mode == "check":
             fees = current_fees(self.w3, self.policy)
@@ -307,6 +338,24 @@ class Uploader:
 
         if self.submitter is None:
             raise SystemExit("configuration error: publishing needs the publisher private key")
+        # The maintainer confirms the batch before anything of it leaves this machine: which
+        # database it was read from, where it goes, and how many entries it adds, withdraws
+        # and reinstates. The record will hold exactly what that copy holds, so a copy with
+        # entries missing withdraws them, and this is where that is seen in time. An
+        # interrupted batch was finished above without asking: the run that planned it had
+        # it confirmed, and its transactions could not wait on a person. A check or a dry
+        # run sends nothing and asks nothing.
+        if mode == "publish" and self._confirm is not None:
+            try:
+                stopped = None if self._confirm(self._confirmation_text(batch, stats)) else ("declined", "stopped at the confirmation")
+            except NobodyToAsk as e:
+                stopped = ("refused", str(e))
+            if stopped:
+                report.outcome = "resumed" if report.transactions else stopped[0]
+                report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"{stopped[1]}: nothing of batch {batch.batch} was sent"
+                if stopped[0] == "refused":
+                    self.log(f"refused: {report.message}")
+                return self._done(report, started)
         # The snapshot of the stream as it will stand after this batch goes to IPFS first,
         # because the batch-end transaction carries its CID as the pointer. Without IPFS, or
         # if no endpoint takes it, the existing pointer is carried forward: a batch end always
@@ -399,17 +448,33 @@ class Uploader:
         self._finish(journal, store, report)
         return True
 
-    def _withdrawals(self, stats: list[SyncStats], report: UploadReport) -> list[dict]:
-        """Called by the encoder once every feed has been read. Withdraws nothing unless the
-        maintainer confirmed it for this run."""
-        if not self._withdraw_vanished:
-            return []
+    def _confirmation_text(self, batch, stats: list[SyncStats]) -> str:
+        """What the maintainer agrees to before a batch is sent: where the data comes from,
+        where it goes, and what the batch does to the record."""
+        lines = [
+            f"You are publishing a copy of the Loculus database located at {self.cfg.backend.url}",
+            f"to contract {self.cfg.chain.contract} on chain {self.w3.eth.chain_id}.",
+            f"  new entries:  {batch.entry_count:,}",
+            f"  withdrawn:    {batch.withdrawn_count:,}  (published, not in this copy)",
+            f"  reinstated:   {batch.reinstated_count:,}  (withdrawn, in this copy again)",
+        ]
+        days = self.cfg.backend.min_age_days
+        if days:
+            lines.append(f"  held back:    {sum(s.held_back for s in stats):,}  (submitted less than {days} days ago)")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _records(stats: list[SyncStats], which: str, reported: dict, note: str) -> list[dict]:
+        """The withdrawal or reinstatement records of a batch, one per organism that has any,
+        called by the encoder once every feed has been read. `which` is the list in the
+        organism's statistics (what to withdraw, or what to reinstate); the same lists go
+        into the run report under `reported`."""
         out = []
         for st in stats:
-            if st.vanished:
-                out.append({"organism": st.organism, "accessionVersions": st.vanished, "note": f"no longer served by the Pathoplexus backend as of {time.strftime('%Y-%m-%d')}; withdrawn by the maintainer"})
-                report.withdrawn[st.organism] = list(st.vanished)
-                self.log(f"{st.organism}: withdrawing {len(st.vanished)} entries the backend no longer serves")
+            named = getattr(st, which)
+            if named:
+                out.append({"organism": st.organism, "accessionVersions": named, "note": note})
+                reported[st.organism] = list(named)
         return out
 
     def _snapshots_held(self) -> dict[str, str]:
@@ -458,6 +523,7 @@ class Uploader:
             "checked": "CHECK COMPLETE (nothing sent)",
             "dry-run-ok": "DRY RUN PASSED (nothing sent)",
             "refused": "REFUSED (nothing sent)",
+            "declined": "STOPPED AT THE CONFIRMATION (nothing sent)",
             "failed": "FAILED",
         }
         self.log(f"RESULT: {verdicts.get(report.outcome, report.outcome.upper())}" + (f": {report.message}" if report.message else ""))
@@ -487,11 +553,14 @@ def _installed_version() -> str | None:
 
 def _stats_json(st: SyncStats) -> dict:
     d = dict(st.__dict__)
-    d.pop("seen", None)
+    # The eligible set is the whole feed's worth of names, and the names withdrawn and
+    # reinstated are already in the report under their own keys.
+    for key in ("eligible", "to_withdraw", "to_reinstate"):
+        d.pop(key, None)
     return d
 
 
-class _WithdrawalsLater:
+class _Later:
     """An iterable the encoder consumes only after it has read every entry, so the list can
     depend on what the feeds contained."""
 

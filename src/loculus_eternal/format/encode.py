@@ -138,7 +138,7 @@ class EncoderState:
     schemas: dict[str, dict] = field(default_factory=dict)
     # organism -> lines in the materialised file so far (published minus withdrawn)
     entries_total: dict[str, int] = field(default_factory=dict)
-    # organism -> accession -> sorted withdrawn versions
+    # organism -> accession -> sorted versions that are withdrawn now (reinstated ones are gone)
     withdrawn: dict[str, dict[str, list[int]]] = field(default_factory=dict)
     bytes_since_index: int = 0
 
@@ -167,10 +167,14 @@ class EncodedBatch:
     schemas_published: list[str]
     entry_count: int
     withdrawn_count: int = 0
+    reinstated_count: int = 0
 
 
-# previous_entries(organism) yields (accession, version, payload) in materialisation order
-PreviousEntries = Callable[[str], Iterable[Record]]
+# previous_entries(organism, reinstated) yields (accession, version, payload) in
+# materialisation order: every entry of the organism published so far that is not withdrawn,
+# and also the withdrawn ones whose (accession, version) is in `reinstated`, the set the
+# batch being encoded puts back (empty for most batches).
+PreviousEntries = Callable[[str, set], Iterable[Record]]
 
 
 class StreamEncoder:
@@ -191,21 +195,24 @@ class StreamEncoder:
         codec: int = CODEC_ZSTD,
         force_index: bool = False,
         withdrawals: Iterable[dict] = (),
+        reinstatements: Iterable[dict] = (),
     ) -> EncodedBatch:
         """Encode one batch from a stream of entries and advance the state.
 
-        `previous_entries(organism)` must yield `(accession, version, payload)` for every
-        entry of that organism published in earlier batches and not withdrawn, in
-        materialisation order; it is needed for the cumulative artifact digests and may be
-        omitted only when nothing has been published yet.
+        `previous_entries(organism, reinstated)` must yield `(accession, version, payload)`
+        for every entry of that organism published in earlier batches and not withdrawn, and
+        for the withdrawn ones named in the set `reinstated`, in materialisation order; it is
+        needed for the cumulative artifact digests and may be omitted only when nothing has
+        been published yet.
 
-        `withdrawals` are `{"organism", "accessionVersions", "note"}` dicts; withdrawn
-        entries leave the materialised output from this batch on.
+        `withdrawals` and `reinstatements` are `{"organism", "accessionVersions", "note"}`
+        dicts; withdrawn entries leave the materialised output from this batch on, and
+        reinstated ones return to it.
         """
         with tempfile.TemporaryDirectory(prefix="loculus-eternal-encode-", dir=self.work_dir) as tmp:
-            return self._encode(Path(tmp), entries, previous_entries, list(tooling), codec, force_index, withdrawals)
+            return self._encode(Path(tmp), entries, previous_entries, list(tooling), codec, force_index, withdrawals, reinstatements)
 
-    def _encode(self, work: Path, entries, previous_entries, tooling, codec, force_index, withdrawals) -> EncodedBatch:
+    def _encode(self, work: Path, entries, previous_entries, tooling, codec, force_index, withdrawals, reinstatements) -> EncodedBatch:
         st = self.state
 
         # Pass 1: validate, canonicalise, and spill every entry into a sorted run per organism.
@@ -221,8 +228,6 @@ class StreamEncoder:
             seen.add(k)
             if st.is_published(*k):
                 raise FormatError(f"entry already published: {k}")
-            if st.is_withdrawn(*k):
-                raise FormatError(f"entry is withdrawn and cannot be published: {k}")
             schema = Entry.schema(e)
             if st.schemas.get(k[0]) != schema and schemas_now.get(k[0]) != schema:
                 schemas_now[k[0]] = schema
@@ -231,36 +236,32 @@ class StreamEncoder:
                 sorters[org] = ExternalSorter(work / "sort" / org, buffer_bytes=self.sort_buffer_bytes)
             sorters[org].add(k[1], k[2], Entry.payload(e))
             count += 1
-        # Withdrawals are read only after every entry, so a caller may decide them from what
-        # the entries turned out to be (the upload command withdraws what vanished from the
-        # feeds). An entry that is withdrawn in this very batch is then refused.
-        withdraw_now: dict[str, dict[str, list[int]]] = {}
-        withdraw_records: list[tuple[str, bytes]] = []
-        for w in withdrawals:
-            org = w.get("organism")
-            if not isinstance(org, str) or not org or not isinstance(w.get("accessionVersions"), list) or not w["accessionVersions"]:
-                raise FormatError("a withdrawal names an organism and a non-empty list of accessionVersions")
-            versions = sorted(set(w["accessionVersions"]))
-            for av in versions:
-                acc, _, ver = av.rpartition(".")
-                if not acc or not ver.isdigit() or int(ver) < 1:
-                    raise FormatError(f"withdrawal names a malformed accessionVersion {av!r}")
-                if st.is_withdrawn(org, acc, int(ver)) or int(ver) in withdraw_now.get(org, {}).get(acc, []):
-                    raise FormatError(f"{org} {av} is already withdrawn")
-                withdraw_now.setdefault(org, {}).setdefault(acc, []).append(int(ver))
-            note = w.get("note")
-            if note is not None and not isinstance(note, str):
-                raise FormatError("a withdrawal note is a string or null")
-            withdraw_records.append((org, canonical.dumps({"organism": org, "accessionVersions": versions, "note": note})))
-        for accs in withdraw_now.values():
-            for vs in accs.values():
-                vs.sort()
+        # Withdrawals and reinstatements are read only after every entry, so a caller may
+        # decide them from what the entries turned out to be (the upload command withdraws
+        # what is missing from the feeds and reinstates what is back in them).
+        withdraw_now, withdraw_records = _named(withdrawals, "withdrawal")
+        reinstate_now, reinstate_records = _named(reinstatements, "reinstatement")
+        for org, accs in withdraw_now.items():
+            for acc, vs in accs.items():
+                for ver in vs:
+                    if st.is_withdrawn(org, acc, ver):
+                        raise FormatError(f"{org} {acc}.{ver} is already withdrawn")
+        # Only a withdrawn entry can be reinstated and only one that is not can be withdrawn,
+        # so these two checks also keep any accessionVersion from being named by both.
+        for org, accs in reinstate_now.items():
+            for acc, vs in accs.items():
+                for ver in vs:
+                    if not st.is_withdrawn(org, acc, ver):
+                        raise FormatError(f"{org} {acc}.{ver} is not withdrawn and cannot be reinstated")
+        withdrawn_after = _withdrawn_after(st.withdrawn, withdraw_now, reinstate_now)
 
+        # An entry is refused if it is withdrawn once this batch's own records are applied:
+        # one withdrawn earlier and not reinstated here, or one withdrawn in this very batch.
         for org, acc, ver in seen:
-            if ver in withdraw_now.get(org, {}).get(acc, []):
+            if ver in withdrawn_after.get(org, {}).get(acc, []):
                 raise FormatError(f"entry is withdrawn and cannot be published: {(org, acc, ver)}")
-        if count == 0 and not withdraw_records:
-            raise EmptyBatch("a batch must contain at least one entry or one withdrawal")
+        if count == 0 and not withdraw_records and not reinstate_records:
+            raise EmptyBatch("a batch must contain at least one entry, withdrawal or reinstatement")
         self.progress(f"encoding: {count:,} entries read; sorting {len(sorters)} organism run(s) on disk")
         runs: dict[str, Path] = {}
         for org, sorter in sorters.items():
@@ -280,6 +281,8 @@ class StreamEncoder:
             uncompressed_length += sink.write(frame(RecordType.TOOLING, encode_tooling(p, c)))
         for _, payload in sorted(withdraw_records, key=lambda t: t[0]):
             uncompressed_length += sink.write(frame(RecordType.WITHDRAW, payload))
+        for _, payload in sorted(reinstate_records, key=lambda t: t[0]):
+            uncompressed_length += sink.write(frame(RecordType.REINSTATE, payload))
         for org in sorted(runs):
             for _, _, payload in iter_run(runs[org]):
                 uncompressed_length += sink.write(frame(RecordType.ENTRY, payload))
@@ -289,21 +292,19 @@ class StreamEncoder:
         self.progress(f"encoding: body is {uncompressed_length:,} bytes, {len(compressed_bytes):,} compressed; computing cumulative digests")
 
         # Pass 3: cumulative artifact digests by merging previous entries with the new run,
-        # leaving out anything withdrawn so far or in this batch.
-        withdrawn_after = {o: {a: list(v) for a, v in accs.items()} for o, accs in st.withdrawn.items()}
-        for org, accs in withdraw_now.items():
-            for acc, vs in accs.items():
-                withdrawn_after.setdefault(org, {}).setdefault(acc, []).extend(vs)
-        for accs in withdrawn_after.values():
-            for vs in accs.values():
-                vs.sort()
+        # leaving out anything that is withdrawn once this batch is applied. The entries this
+        # batch reinstates are not in the output so far, so they are asked for by name.
         organisms = sorted(set(st.entries_total) | set(runs) | set(withdraw_now) | set(st.withdrawn))
         artifacts: dict[str, dict] = {}
         for org in organisms:
-            if st.entries_total.get(org, 0) > 0:
+            reinstated = {(acc, ver) for acc, vs in reinstate_now.get(org, {}).items() for ver in vs}
+            # Earlier batches matter when the output so far has lines, or when an entry this
+            # batch reinstates is in the stream. One withdrawn before it was ever published
+            # has nothing earlier to read.
+            if st.entries_total.get(org, 0) > 0 or any(st.is_published(org, acc, ver) for acc, ver in reinstated):
                 if previous_entries is None:
                     raise FormatError(f"previous entries of {org} are needed for the cumulative digest")
-                prev: Iterable[Record] = previous_entries(org)
+                prev: Iterable[Record] = previous_entries(org, reinstated)
             else:
                 prev = ()
             new: Iterable[Record] = iter_run(runs[org]) if org in runs else ()
@@ -398,7 +399,59 @@ class StreamEncoder:
             schemas_published=sorted(schemas_now),
             entry_count=count,
             withdrawn_count=sum(len(v) for accs in withdraw_now.values() for v in accs.values()),
+            reinstated_count=sum(len(v) for accs in reinstate_now.values() for v in accs.values()),
         )
+
+
+def _named(records: Iterable[dict], what: str) -> tuple[dict[str, dict[str, list[int]]], list[tuple[str, bytes]]]:
+    """Check withdrawal or reinstatement records, which share one shape. Returns what they
+    name as organism -> accession -> sorted versions, and each record's organism with its
+    canonical payload."""
+    named: dict[str, dict[str, list[int]]] = {}
+    payloads: list[tuple[str, bytes]] = []
+    for w in records:
+        org = w.get("organism")
+        if not isinstance(org, str) or not org or not isinstance(w.get("accessionVersions"), list) or not w["accessionVersions"]:
+            raise FormatError(f"a {what} names an organism and a non-empty list of accessionVersions")
+        versions = sorted(set(w["accessionVersions"]))
+        for av in versions:
+            acc, _, ver = av.rpartition(".")
+            if not acc or not ver.isdigit() or int(ver) < 1:
+                raise FormatError(f"{what} names a malformed accessionVersion {av!r}")
+            if int(ver) in named.get(org, {}).get(acc, []):
+                raise FormatError(f"{org} {av} is named by more than one {what} in the batch")
+            named.setdefault(org, {}).setdefault(acc, []).append(int(ver))
+        note = w.get("note")
+        if note is not None and not isinstance(note, str):
+            raise FormatError(f"a {what} note is a string or null")
+        payloads.append((org, canonical.dumps({"organism": org, "accessionVersions": versions, "note": note})))
+    for accs in named.values():
+        for vs in accs.values():
+            vs.sort()
+    return named, payloads
+
+
+def _withdrawn_after(before: dict[str, dict[str, list[int]]], withdraw_now: dict[str, dict[str, list[int]]], reinstate_now: dict[str, dict[str, list[int]]]) -> dict[str, dict[str, list[int]]]:
+    """What is withdrawn once a batch's withdrawals and reinstatements are applied, as
+    organism -> accession -> sorted versions with nothing empty left in it, which is the form
+    the index carries and a decoder rebuilds."""
+    after = {o: {a: list(v) for a, v in accs.items()} for o, accs in before.items()}
+    for org, accs in withdraw_now.items():
+        for acc, vs in accs.items():
+            after.setdefault(org, {}).setdefault(acc, []).extend(vs)
+    for org, accs in reinstate_now.items():
+        for acc, vs in accs.items():
+            left = [v for v in after[org][acc] if v not in vs]
+            if left:
+                after[org][acc] = left
+            else:
+                del after[org][acc]
+        if not after[org]:
+            del after[org]
+    for accs in after.values():
+        for vs in accs.values():
+            vs.sort()
+    return after
 
 
 class _Compressor:
