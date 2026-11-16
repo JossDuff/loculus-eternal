@@ -251,8 +251,8 @@ def test_H5_the_server_serves_the_page_and_runs_checks(world):
         idle = httpx.get(f"{server.url}/api/report").json()
         assert idle["verdict"] == "idle" and idle["config"]["contract"] == world["anvil"].contract.address
         # The page is handed the recovery command for this very contract, starting block included.
-        clone, command = idle["config"]["recoverCommand"]
-        assert clone.startswith("git clone https://github.com/JossDuff/loculus-eternal") and command.startswith(f"uv run loculus-eternal recover {world['anvil'].contract.address} --rpc ") and command.endswith("--from-block 1")
+        clone, enter, command = idle["config"]["recoverCommand"]
+        assert clone == "git clone https://github.com/JossDuff/loculus-eternal" and enter == "cd loculus-eternal" and command.startswith(f"uv run loculus-eternal recover {world['anvil'].contract.address} --rpc ") and command.endswith("--from-block 1")
         assert httpx.post(f"{server.url}/api/check").status_code == 202
         deadline = time.time() + 120
         while time.time() < deadline:

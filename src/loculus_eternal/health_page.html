@@ -118,8 +118,8 @@
   <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
   <section class="card" style="margin-top:14px"><h2>Recover</h2>
-    <div class="recover"><pre class="quick" id="recover-command"><span class="line">git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal</span><span class="line">uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;</span></pre><button type="button" class="copy" id="copy-recover" title="copy both lines" data-copy="git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal&#10;uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;">copy</button></div>
-    <p class="sub" style="margin:10px 0 0">Run these two lines to rebuild and verify this whole dataset from Ethereum yourself, with no key and no account. They need git and <a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv</a>. The RPC in the command is a public example: swap in one you trust, because it is the one input the result depends on. Blob bytes come from public archives and every one is checked against the contract; add your own with <span class="mono">--source</span>.</p>
+    <div class="recover"><pre class="quick" id="recover-command"><span class="line">git clone https://github.com/JossDuff/loculus-eternal</span><span class="line">cd loculus-eternal</span><span class="line">uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;</span></pre><button type="button" class="copy" id="copy-recover" title="copy the commands" data-copy="git clone https://github.com/JossDuff/loculus-eternal&#10;cd loculus-eternal&#10;uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;">copy</button></div>
+    <p class="sub" style="margin:10px 0 0">Run the above to recover the latest dataset locally, directly from Ethereum. The RPC is a public example, feel free to swap in a more reliable one.</p>
   </section>
 
   <footer>

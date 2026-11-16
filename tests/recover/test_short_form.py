@@ -83,16 +83,19 @@ def test_H8_the_health_page_writes_out_the_recovery_command_for_its_dataset(tmp_
         cfg.write_text(f'[chain]\nrpc_url = "https://rpc.example/v3/SECRET-KEY"\ncontract = "{ADDRESS}"\n{chain_lines}')
         return public_config(configuration.load(cfg))["recoverCommand"]
 
-    clone, command = load("chain_id = 11155111\ndeployment_block = 11903469\n")
-    assert clone == f"git clone {REPOSITORY} && cd loculus-eternal"
+    # One command to a line: fetch the tool, step into it, recover.
+    clone, enter, command = load("chain_id = 11155111\ndeployment_block = 11903469\n")
+    assert clone == f"git clone {REPOSITORY}" and enter == "cd loculus-eternal"
     assert command == f"uv run loculus-eternal recover {ADDRESS} --rpc {PUBLIC_RPC_EXAMPLE[11155111]} --from-block 11903469"
     # The operator's own RPC, which may carry a key, never appears; a public one for the chain does.
     assert "SECRET-KEY" not in command and "rpc.example" not in command
-    assert load("chain_id = 1\n")[1] == f"uv run loculus-eternal recover {ADDRESS} --rpc {PUBLIC_RPC_EXAMPLE[1]}", "no starting block is claimed when none is configured"
+    assert load("chain_id = 1\n")[-1] == f"uv run loculus-eternal recover {ADDRESS} --rpc {PUBLIC_RPC_EXAMPLE[1]}", "no starting block is claimed when none is configured"
     # A chain with no public example gets a placeholder the reader must fill in.
-    assert load("chain_id = 31337\nbeacon_genesis_time = 0\n")[1].endswith("--rpc https://your-ethereum-rpc")
+    assert load("chain_id = 31337\nbeacon_genesis_time = 0\n")[-1].endswith("--rpc https://your-ethereum-rpc")
     page = (Path(cli.__file__).parent / "health_page.html").read_text()
     assert 'id="recover-command"' in page and 'id="copy-recover"' in page
+    assert "&amp;&amp;" not in page.split('id="recover-command"')[1].split("</pre>")[0], "no two commands share a line"
+    assert "Run the above to recover the latest dataset locally, directly from Ethereum." in page and "feel free to swap in a more reliable one" in page
     # The command has a section of its own, below the blob check and above the general examples.
     assert page.index("<h2>Blob check</h2>") < page.index("<h2>Recover</h2>") < page.index('id="recover-command"') < page.index("<footer>")
     assert page.index("<footer>") < page.index("Backup and recover your Loculus database to Ethereum!")
