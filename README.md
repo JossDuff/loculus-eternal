@@ -120,7 +120,8 @@ For anyone to run. No key and no account. You need git, [uv](https://docs.astral
 the dataset's contract address, and an Ethereum RPC endpoint:
 
 ```
-git clone https://github.com/JossDuff/loculus-eternal && cd loculus-eternal
+git clone https://github.com/JossDuff/loculus-eternal
+cd loculus-eternal
 uv run loculus-eternal recover 0x… --rpc https://ethereum.publicnode.com
 ```
 
