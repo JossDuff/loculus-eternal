@@ -24,6 +24,8 @@ from eth_account import Account
 from web3 import Web3
 
 from loculus_eternal.config import Config
+from loculus_eternal.format.chunks import BLOB_BYTES
+from loculus_eternal.human import human_duration, human_size
 from loculus_eternal.format.encode import EmptyBatch, StreamEncoder
 from loculus_eternal.format.records import CODEC_ZSTD
 from loculus_eternal.sources.base import SourceChain
@@ -32,20 +34,20 @@ from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
-from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
+from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, planned_transaction, preflight, publish_contract
 from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_changes, iter_new_entries
 
 
 @dataclass
 class UploadReport:
     mode: str
-    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "checked", "dry-run-ok", "resumed"
+    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "dry-run-ok", "resumed"
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
     # organism -> accessionVersions this run's batch withdraws (published, no longer eligible
-    # in the copy) and reinstates (withdrawn, eligible in it again); a check or a dry run
-    # reports what a publish would do
+    # in the copy) and reinstates (withdrawn, eligible in it again); a dry run reports what
+    # a publish would do
     withdrawn: dict = field(default_factory=dict)
     reinstated: dict = field(default_factory=dict)
     tooling_published: bool = False
@@ -55,10 +57,24 @@ class UploadReport:
     dry_run: dict | None = None
     transactions: list[dict] = field(default_factory=list)
     message: str = ""
-    duration_seconds: float = 0.0
+    duration_seconds: float = 0.0        # the work the run did; time spent waiting at the question is left out
+    waited_seconds: float = 0.0          # how long the question waited for its answer
 
     def to_json(self) -> dict:
         return self.__dict__
+
+
+# The time a batch takes to send is estimated for the operator's planning and for nothing
+# else. Transactions go out several at a time; a block has taken one or two of them in the
+# runs so far, and one per block is assumed. A block is final two epochs after its own ends,
+# so between two and three epochs after it is made; two and a half are assumed.
+SLOTS_PER_EPOCH = 32
+EPOCHS_TO_FINALITY_ASSUMED = 2.5
+
+
+def estimated_seconds(transactions: int, seconds_per_slot: float) -> tuple[float, float]:
+    """Roughly how long a batch takes: (to include its transactions, then to finality)."""
+    return transactions * seconds_per_slot, EPOCHS_TO_FINALITY_ASSUMED * SLOTS_PER_EPOCH * seconds_per_slot
 
 
 class NobodyToAsk(RuntimeError):
@@ -112,7 +128,7 @@ class Uploader:
         """The organisms to sync: every organism the backend serves, asked at the start of each
         run, so a newly added organism is picked up by the next run with nothing to configure."""
         organisms = client.organisms()
-        self.log(f"backend serves {len(organisms)} organisms: {', '.join(organisms)}")
+        self.log(f"backend at {self.cfg.backend.url} serves {len(organisms)} organisms: {', '.join(organisms)}")
         return organisms
 
     def _sync(self, view: PublishedView, stats: list[SyncStats], client: BackendClient, organisms: list[str]):
@@ -226,13 +242,21 @@ class Uploader:
     # --- the run --------------------------------------------------------------------------------
 
     def run(self, mode: str = "publish", confirm: Callable[[str], bool] | None = None) -> UploadReport:
-        """mode: "publish" (default), "dry-run" (everything but sending), "check" (counts and cost only).
+        """mode: "publish" (default) or "dry-run", which sends nothing and writes no journal.
+        A dry run plans the batch, simulates its first transaction and checks the fees and
+        the balance. With the publisher's account it does so as that account, which also
+        shows whether the key is the contract's publisher; without one it does so as the
+        contract's publisher, and says so.
 
         `confirm` is asked once a publish has planned its batch and before anything of it is
         sent: it is handed a few lines naming the database, the contract, and how many
         entries the batch adds, withdraws and reinstates, and the run stops unless it returns
         True. It raises NobodyToAsk when it cannot put the question to anyone, which also
         stops the run. None means nobody is asked."""
+        if mode not in ("publish", "dry-run"):
+            # Every later step asks "is this a publish?" or "is this a dry run?", so a name
+            # that is neither would pass each test and end up sending. Refuse it here.
+            raise ValueError(f"unknown upload mode {mode!r}: it is \"publish\" or \"dry-run\"")
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._confirm = confirm
@@ -274,7 +298,7 @@ class Uploader:
             # their inclusion window, and finishing it must not wait on a backend outage.
             # It still comes before the chain read, which is the expensive step.
             self._organism_list = self._organisms(self._client)
-            self.log("reading the contract and the published stream")
+            self.log(f"reading the contract at {self.cfg.chain.contract} and the published stream")
             view = self._view(store)
             self.log(f"contract holds {view.state.blob_count} blob(s) in {len(view.decoded.batches)} complete batch(es)")
             report.chain = {"contract": self.cfg.chain.contract, "blockNumber": view.state.block_number, "blobCount": view.state.blob_count, "head": "0x" + view.state.head.hex(), "publisher": view.state.publisher, "batches": len(view.decoded.batches), "tornBlobs": view.torn_blobs}
@@ -316,36 +340,57 @@ class Uploader:
         report.batch = {"batch": batch.batch, "firstBlobSeq": batch.first_blob_seq, "blobCountAfter": batch.blob_count_after, "blobs": len(batch.blobs), "transactions": -(-len(batch.blobs) // self.policy.max_blobs_per_transaction), "lastBlobChunkCount": batch.last_blob_chunk_count, "bodyDigest": batch.body_digest.hex(), "manifestDigest": batch.manifest_digest.hex(), "hasIndex": batch.index is not None, "organisms": batch.manifest["organisms"], "schemasPublished": batch.schemas_published}
         report.batch["withdrawn"] = batch.withdrawn_count
         report.batch["reinstated"] = batch.reinstated_count
+        to_include, to_finality = estimated_seconds(report.batch["transactions"], self.cfg.chain.seconds_per_slot)
+        report.batch.update({"uncompressedBytes": batch.uncompressed_bytes, "compressedBytes": batch.compressed_bytes, "blobBytes": len(batch.blobs) * BLOB_BYTES, "estimatedSeconds": round(to_include + to_finality)})
         self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + (f", {batch.reinstated_count} reinstatement(s)" if batch.reinstated_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
-        if mode == "check":
-            fees = current_fees(self.w3, self.policy)
-            likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
-            at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
-            report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
-            line = f"estimated cost at current fees: {likely / 10**18:.6f} ETH, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
-            if self.account is not None:
-                balance = self.w3.eth.get_balance(self.account.address)
-                report.dry_run["balanceWei"] = balance
-                line += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
-            self.log(line)
-            report.outcome = "checked"
-            return self._done(report, started)
-
-        if self.submitter is None:
+        if mode == "publish" and self.submitter is None:
             raise SystemExit("configuration error: publishing needs the publisher private key")
+        # A first look at sending the batch, before the summary: the fees are under the
+        # limit, the first transaction would be accepted, and the wallet covers the most the
+        # batch can cost. It needs no key, because a simulation needs no signature: without
+        # one it is run as the contract's publisher. Nothing is written for it, so a dry run
+        # can be interrupted at any point and leave nothing a later publish could pick up.
+        transactions = report.batch["transactions"]
+        per_tx = self.policy.max_blobs_per_transaction
+        sender = self.account.address if self.account is not None else view.state.publisher
+        rows = [("transactions", f"{transactions}")]
+        time_row = ("estimated time", f"about {human_duration(to_include + to_finality)}: {human_duration(to_include)} to include {transactions} transaction(s) at about one per block, then {human_duration(to_finality)} until the last is final")
+        try:
+            first = planned_transaction(batch, batch.blobs, view.state.app_pointer, per_tx, 0)
+            look = preflight(self.w3, publish_contract(self.w3, self.cfg.chain.contract), sender, self.policy, first, [len(batch.blobs[i : i + per_tx]) for i in range(0, len(batch.blobs), per_tx)])
+        except Refused as e:
+            self._summarise(batch, stats, "planned", rows + [time_row])
+            report.outcome = "refused"
+            report.message = str(e)
+            self.log(f"refused: {e}")
+            return self._done(report, started)
+        whose = "wallet" if self.account is not None else "the publisher's wallet"
+        cost = f"{look['likelyCostWei'] / 10**18:.6f} ETH at current fees, at most {look['maxCostWei'] / 10**18:.6f} ETH (blob base fee {look['fees']['blobBaseFee'] / GWEI:.4f} gwei); {whose} {sender} holds {look['balanceWei'] / 10**18:.6f} ETH"
+        self._summarise(batch, stats, "planned", rows + [("estimated cost", cost), time_row])
+
+        if mode == "dry-run":
+            report.dry_run = look
+            self.log(f"dry run passed: up to {look['maxCostWei'] / 10**18:.6f} ETH, likely {look['likelyCostWei'] / 10**18:.6f} ETH, {whose} holds {look['balanceWei'] / 10**18:.6f} ETH")
+            if self.account is None:
+                self.log(f"the publisher key is not in the environment, so the first transaction was simulated as the contract's publisher {sender}; with the key, a dry run also checks that the key is that publisher's")
+            report.outcome = "dry-run-ok"
+            return self._done(report, started)
         # The maintainer confirms the batch before anything of it leaves this machine: which
         # database it was read from, where it goes, and how many entries it adds, withdraws
         # and reinstates. The record will hold exactly what that copy holds, so a copy with
         # entries missing withdraws them, and this is where that is seen in time. An
         # interrupted batch was finished above without asking: the run that planned it had
-        # it confirmed, and its transactions could not wait on a person. A check or a dry
-        # run sends nothing and asks nothing.
+        # it confirmed, and its transactions could not wait on a person. A dry run sends
+        # nothing and asks nothing.
         if mode == "publish" and self._confirm is not None:
+            asked = time.time()
             try:
                 stopped = None if self._confirm(self._confirmation_text(batch, stats)) else ("declined", "stopped at the confirmation")
             except NobodyToAsk as e:
                 stopped = ("refused", str(e))
+            finally:
+                report.waited_seconds = round(time.time() - asked, 2)
             if stopped:
                 report.outcome = "resumed" if report.transactions else stopped[0]
                 report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"{stopped[1]}: nothing of batch {batch.batch} was sent"
@@ -395,11 +440,8 @@ class Uploader:
             self._abandon(journal)
             return self._done(report, started)
         self.log(f"dry run passed: up to {report.dry_run['maxCostWei'] / 10**18:.6f} ETH, likely {report.dry_run['likelyCostWei'] / 10**18:.6f} ETH, wallet holds {report.dry_run['balanceWei'] / 10**18:.6f} ETH")
-        if mode == "dry-run":
-            report.outcome = "dry-run-ok"
-            self._abandon(journal)
-            return self._done(report, started)
 
+        sending_started = time.time()
         try:
             self.submitter.run(journal)
         except (Refused, RevertedOnChain) as e:
@@ -415,7 +457,18 @@ class Uploader:
             report.message = str(e)
             self.log(f"publishing stopped: {e}")
             return self._done(report, started)
+        sending_seconds = time.time() - sending_started
         self._finish(journal, store, report)
+        # What it took, now that it is known: the summary shown before sending gave estimates.
+        sent = report.transactions[-len(journal.txs):]
+        paid = sum((t.get("gasUsed") or 0) * (t.get("effectiveGasPrice") or 0) + len(t["seqs"]) * BLOB_GAS_PER_BLOB * (t.get("blobGasPrice") or 0) for t in sent)
+        blocks = [t["block"] for t in sent if t.get("block") is not None]
+        report.batch.update({"costWei": paid, "sendingSeconds": round(sending_seconds)})
+        self._summarise(batch, stats, "published", [
+            ("transactions", f"{len(sent)}" + (f", in blocks {min(blocks):,} to {max(blocks):,}" if blocks else "")),
+            ("cost", f"{paid / 10**18:.6f} ETH paid"),
+            ("time", f"{human_duration(time.time() - started - report.waited_seconds)} in all; {human_duration(sending_seconds)} from the first transaction sent until the last was final"),
+        ])
         report.outcome = "published"
         report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f", {view.torn_blobs} of them from an abandoned upload that readers skip" if view.torn_blobs else "") + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
         self.log(report.message)
@@ -443,6 +496,23 @@ class Uploader:
             return False
         self._finish(journal, store, report)
         return True
+
+    def _summarise(self, batch, stats: list[SyncStats], state: str, rows: list[tuple[str, str]]) -> None:
+        """The few numbers that describe a batch, together in one place near the end of what a
+        run logs: what it changes in the record and how large it is, followed by what the
+        caller knows about its transactions, cost and time (estimates before it is sent,
+        what it took afterwards)."""
+        days = self.cfg.backend.min_age_days
+        entries = f"{batch.entry_count:,} new, {batch.withdrawn_count:,} withdrawn, {batch.reinstated_count:,} reinstated"
+        if days:
+            entries += f"; {sum(s.held_back for s in stats):,} held back as submitted less than {days} days ago"
+        blob_bytes = len(batch.blobs) * BLOB_BYTES
+        size = f"{human_size(batch.uncompressed_bytes)} of records, {human_size(batch.compressed_bytes)} compressed, in {len(batch.blobs):,} blob(s) that take {human_size(blob_bytes)} on chain"
+        lines = [("entries", entries), ("size", size), *rows]
+        width = max(len(name) for name, _ in lines)
+        self.log(f"summary of batch {batch.batch} ({state}):")
+        for name, text in lines:
+            self.log(f"  {name.ljust(width)}  {text}")
 
     def _confirmation_text(self, batch, stats: list[SyncStats]) -> str:
         """What the maintainer agrees to before a batch is sent: where the data comes from,
@@ -509,14 +579,14 @@ class Uploader:
             blobs_dir.rmdir()
 
     def _done(self, report: UploadReport, started: float) -> UploadReport:
-        report.duration_seconds = round(time.time() - started, 2)
+        # The time a run takes is the work it did, not how long it sat at the question.
+        report.duration_seconds = round(time.time() - started - report.waited_seconds, 2)
         # The last line of every run says plainly how it ended, in words a maintainer who
         # only reads the end of a log can act on.
         verdicts = {
             "published": "SUCCESS",
             "resumed": "SUCCESS",
             "nothing-to-publish": "NOTHING TO DO",
-            "checked": "CHECK COMPLETE (nothing sent)",
             "dry-run-ok": "DRY RUN PASSED (nothing sent)",
             "refused": "REFUSED (nothing sent)",
             "declined": "STOPPED AT THE CONFIRMATION (nothing sent)",

@@ -54,7 +54,7 @@ def load_published_view(w3: Web3, contract: str, sources: SourceChain, store: Bl
 
     # Fill the store with whatever is not already there, verifying every byte.
     _, _, missing = fill_store(store, sources, refs, log=log)
-    decoded = StreamDecoder(store.blobs(state.blob_count), spill_dir=spill_dir).decode()
+    decoded = StreamDecoder(store.blobs(state.blob_count), spill_dir=spill_dir, progress=log).decode()
     if missing:
         # A blob of an abandoned upload that a later batch skips is dead bytes and may be
         # gone from every source; any other missing blob makes the published set unknowable.

@@ -302,8 +302,12 @@ def load(path: str | Path) -> Config:
     return Config(path=path, chain=chain, sources=sources, backend=backend, upload=upload, ipfs=ipfs, recover=recover, raw=raw)
 
 
-def publisher_key() -> str:
+def publisher_key(required: bool = True) -> str | None:
+    """The publisher private key from the environment. Without one this is a configuration
+    error, unless the caller can do without it, in which case it gets None."""
     key = os.environ.get(PUBLISHER_KEY_ENV)
     if not key:
+        if not required:
+            return None
         raise ConfigError(f"the publisher private key must be in the environment variable {PUBLISHER_KEY_ENV}; it is never read from a file")
     return key

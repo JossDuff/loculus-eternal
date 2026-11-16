@@ -118,8 +118,8 @@
   <section class="card" style="margin-top:14px"><h2>Blob check</h2><div id="sources" class="empty">No check yet.</div></section>
 
   <section class="card" style="margin-top:14px"><h2>Recover</h2>
-    <div class="recover"><pre class="quick" id="recover-command"><span class="line">git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal</span><span class="line">uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;</span></pre><button type="button" class="copy" id="copy-recover" title="copy both lines" data-copy="git clone https://github.com/JossDuff/loculus-eternal &amp;&amp; cd loculus-eternal&#10;uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;">copy</button></div>
-    <p class="sub" style="margin:10px 0 0">Run these two lines to rebuild and verify this whole dataset from Ethereum yourself, with no key and no account. They need git and <a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv</a>. The RPC in the command is a public example: swap in one you trust, because it is the one input the result depends on. Blob bytes come from public archives and every one is checked against the contract; add your own with <span class="mono">--source</span>.</p>
+    <div class="recover"><pre class="quick" id="recover-command"><span class="line">git clone https://github.com/JossDuff/loculus-eternal</span><span class="line">cd loculus-eternal</span><span class="line">uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;</span></pre><button type="button" class="copy" id="copy-recover" title="copy the commands" data-copy="git clone https://github.com/JossDuff/loculus-eternal&#10;cd loculus-eternal&#10;uv run loculus-eternal recover &lt;contract address&gt; --rpc &lt;your Ethereum RPC&gt;">copy</button></div>
+    <p class="sub" style="margin:10px 0 0">Run the above to recover the latest dataset locally, directly from Ethereum. The RPC is a public example, feel free to swap in a more reliable one.</p>
   </section>
 
   <footer>
@@ -134,7 +134,9 @@ uv run loculus-eternal recover 0x… --rpc https://your-ethereum-rpc   # anyone 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const n = v => v === null || v === undefined ? "—" : Number(v).toLocaleString();
-  const size = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b >= 1e3 ? `${Math.round(b / 1e3)} kB` : `${b} bytes`;
+  // The unit is chosen after rounding, so a count just under a thousand of one unit reads
+  // as one of the next. The upload and recovery commands write sizes by the same rule.
+  const size = b => b < 1e3 ? (b === 1 ? "1 byte" : `${b} bytes`) : Math.round(b / 1e3) < 1000 ? `${Math.round(b / 1e3)} kB` : Math.round(b / 1e6) < 1000 ? `${Math.round(b / 1e6)} MB` : `${(b / 1e9).toFixed(1)} GB`;
   const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;

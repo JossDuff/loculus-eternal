@@ -340,3 +340,28 @@ manifest_sources = ["logs", "ipfs"]
     ipfs_sources = [m.ipfs for m in rc.manifest_sources[1:]]
     assert ipfs_sources == [s for s in cfg.sources if isinstance(s, IpfsSource)] and len(ipfs_sources) == 2
     assert [s.endpoints for s in ipfs_sources] == [["http://127.0.0.1:5001"], ["http://127.0.0.1:5002"]]
+
+
+def test_R18_fetching_reports_progress_with_or_without_block_numbers(tmp_path):
+    from loculus_eternal.chain import BlobRef
+    from loculus_eternal.store import fill_store
+
+    pairs = make_blobs(3)
+    source = _local_dir_with(pairs[:2], tmp_path)  # the third blob is nowhere to be had
+    # A list from a snapshot or a file may carry no block numbers at all.
+    for label, blocks in (("without", [None, None, None]), ("with", [7, 7, 9])):
+        refs = [BlobRef(seq=i, versioned_hash=vh, block_number=b, block_timestamp=None if b is None else 1700 + b) for i, ((vh, _), b) in enumerate(zip(pairs, blocks))]
+        lines = []
+        with BlobStore(tmp_path / f"store-{label}") as store:
+            fetched, _, missing = fill_store(store, SourceChain([source]), refs, log=lines.append)
+            assert fetched == 2 and [m["seq"] for m in missing] == [2]
+            progress = [l for l in lines if " blobs verified" in l]
+            if label == "without":
+                assert lines[0] == "0 of 3 blobs already held; fetching the other 3, which were published in 1 block(s)"
+                assert progress == [f"2/3 blobs verified (from {source.name}); 1 missing so far"]
+            else:
+                assert progress == [f"2/3 blobs verified (block 7, from {source.name})", "2/3 blobs verified (block 9); 1 missing so far"]
+            # What is already held is counted as such by the next run, which fetches only the rest.
+            lines.clear()
+            fill_store(store, SourceChain([source]), refs, log=lines.append)
+            assert lines[0] == "2 of 3 blobs already held; fetching the other 1, which were published in 1 block(s)"

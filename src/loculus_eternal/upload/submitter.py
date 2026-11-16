@@ -152,7 +152,7 @@ class Submitter:
     def __init__(self, w3: Web3, account, contract_address: str, journal_path: Path, pending_dir: Path, policy: FeePolicy, *, log: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep):
         self.w3 = w3
         self.account = account
-        self.contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=ABI + [_PUBLISH_ABI])
+        self.contract = publish_contract(w3, contract_address)
         self.journal_path = journal_path
         self.pending_dir = pending_dir
         self.policy = policy
@@ -178,22 +178,11 @@ class Submitter:
         blobs_dir.mkdir(parents=True, exist_ok=True)
         txs = []
         per_tx = self.policy.max_blobs_per_transaction
-        for i, start in enumerate(range(0, len(blobs), per_tx)):
-            group = blobs[start : start + per_tx]
-            last = start + len(group) == len(blobs)
-            seqs = [batch.first_blob_seq + start + j for j in range(len(group))]
-            for seq, blob in zip(seqs, group):
+        for i in range(-(-len(blobs) // per_tx)):
+            tx = planned_transaction(batch, blobs, app_pointer, per_tx, i)
+            for seq, blob in zip(tx.seqs, blobs[i * per_tx : (i + 1) * per_tx]):
                 (blobs_dir / f"{seq}.blob").write_bytes(blob)
-            txs.append(
-                PlannedTx(
-                    index=i,
-                    seqs=seqs,
-                    versioned_hashes=["0x" + kzg.blob_to_versioned_hash(b).hex() for b in group],
-                    last_blob_chunk_count=batch.last_blob_chunk_count if last else ELEMENTS_PER_BLOB,
-                    is_batch_end=last,
-                    app_pointer=app_pointer if last else "",
-                )
-            )
+            txs.append(tx)
         journal = Journal(
             batch=batch.batch,
             first_blob_seq=batch.first_blob_seq,
@@ -225,61 +214,18 @@ class Submitter:
     def simulate(self, tx: PlannedTx, fees: dict) -> int:
         """Run the call with the blob hashes attached; return the gas estimate or raise Refused
         with the contract's reason."""
-        call = {
-            "from": self.account.address,
-            "to": self.contract.address,
-            "data": "0x" + self.calldata(tx).hex(),
-            "type": "0x3",
-            "blobVersionedHashes": tx.versioned_hashes,
-            "maxFeePerBlobGas": hex(fees["maxFeePerBlobGas"]),
-            "maxFeePerGas": hex(fees["maxFeePerGas"]),
-            "maxPriorityFeePerGas": hex(fees["maxPriorityFeePerGas"]),
-        }
-        response = self.w3.provider.make_request("eth_estimateGas", [call])
-        if "error" in response:
-            err = response["error"]
-            data = err.get("data") or ""
-            if isinstance(data, dict):
-                data = data.get("data", "")
-            selector = data[2:10] if isinstance(data, str) and data.startswith("0x") else ""
-            sig, text = ERROR_BY_SELECTOR.get(selector, (None, None))
-            reason = f"{text} ({sig})" if sig else err.get("message", str(err))
-            raise Refused(f"transaction {tx.index + 1} of the batch would revert: {reason}")
-        return int(response["result"], 16)
+        return simulate(self.w3, self.contract, self.account.address, tx, fees)
 
     def check_fees(self) -> dict:
         """Refuse when blob space is pricier than the configured ceiling. Cheap; run first."""
-        fees = self.fees()
-        if fees["blobBaseFee"] > self.policy.max_blob_fee_gwei * GWEI:
-            raise Refused(f"the blob base fee is {fees['blobBaseFee'] / GWEI:.3f} gwei, above the configured limit of {self.policy.max_blob_fee_gwei} gwei; wait for a quieter period or raise upload.max_blob_fee_gwei")
-        return fees
+        return check_fees(self.w3, self.policy)
 
     def dry_run(self, journal: Journal) -> dict:
         """Check fees, simulate the next transaction, and check the balance covers the batch."""
-        fees = self.check_fees()
         pending = [t for t in journal.txs if t.status == "planned"]
-        balance = self.w3.eth.get_balance(self.account.address)
         if not pending:
-            return {"fees": fees, "transactions": 0, "maxCostWei": 0, "balanceWei": balance}
-
-        def max_cost_for(gas_limit: int) -> int:
-            return sum(gas_limit * fees["maxFeePerGas"] + len(t.seqs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] for t in pending)
-
-        def too_poor(max_cost: int) -> Refused:
-            return Refused(f"the publisher wallet {self.account.address} holds {balance / 10**18:.6f} ETH but the batch needs up to {max_cost / 10**18:.6f} ETH at current fees")
-
-        # A node caps a gas estimate by what the sender can pay, so an empty wallet would
-        # surface as a confusing out-of-gas message; check the balance against a nominal
-        # gas allowance first.
-        if balance < max_cost_for(NOMINAL_GAS_LIMIT):
-            raise too_poor(max_cost_for(NOMINAL_GAS_LIMIT))
-        gas = self.simulate(pending[0], fees)
-        gas_limit = _gas_limit(gas)
-        max_cost = max_cost_for(gas_limit)
-        likely_cost = sum(gas * fees["baseFeePerGas"] + len(t.seqs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] for t in pending)
-        if balance < max_cost:
-            raise too_poor(max_cost)
-        return {"fees": fees, "transactions": len(pending), "blobs": sum(len(t.seqs) for t in pending), "gasEstimate": gas, "maxCostWei": max_cost, "likelyCostWei": likely_cost, "balanceWei": balance}
+            return {"fees": self.check_fees(), "transactions": 0, "maxCostWei": 0, "balanceWei": self.w3.eth.get_balance(self.account.address)}
+        return preflight(self.w3, self.contract, self.account.address, self.policy, pending[0], [len(t.seqs) for t in pending], simulate_call=self.simulate)
 
     # --- sending ---------------------------------------------------------------------------
 
@@ -522,6 +468,95 @@ class Submitter:
             if receipt is not None:
                 return receipt
         return None
+
+
+def publish_contract(w3: Web3, address: str):
+    """The contract with its publish function, which the read-only interface leaves out."""
+    return w3.eth.contract(address=Web3.to_checksum_address(address), abi=ABI + [_PUBLISH_ABI])
+
+
+def planned_transaction(batch, blobs: list[bytes], app_pointer: str, per_tx: int, index: int) -> PlannedTx:
+    """Transaction `index` of a batch: its blobs' sequence numbers and versioned hashes and the
+    arguments of its publish call. The last one ends the batch and carries the pointer."""
+    start = index * per_tx
+    group = blobs[start : start + per_tx]
+    last = start + len(group) == len(blobs)
+    return PlannedTx(
+        index=index,
+        seqs=[batch.first_blob_seq + start + j for j in range(len(group))],
+        versioned_hashes=["0x" + kzg.blob_to_versioned_hash(b).hex() for b in group],
+        last_blob_chunk_count=batch.last_blob_chunk_count if last else ELEMENTS_PER_BLOB,
+        is_batch_end=last,
+        app_pointer=app_pointer if last else "",
+    )
+
+
+def simulate(w3: Web3, contract, sender: str, tx: PlannedTx, fees: dict) -> int:
+    """Run a publish call as `sender` with the blob hashes attached; return the gas estimate
+    or raise Refused with the contract's reason. A simulation needs no signature, so the
+    sender may be any address: the publisher's own, to see what the publisher would meet."""
+    calldata = contract.encode_abi("publish", args=[tx.seqs[0], tx.last_blob_chunk_count, tx.is_batch_end, tx.app_pointer])
+    call = {
+        "from": sender,
+        "to": contract.address,
+        "data": calldata,
+        "type": "0x3",
+        "blobVersionedHashes": tx.versioned_hashes,
+        "maxFeePerBlobGas": hex(fees["maxFeePerBlobGas"]),
+        "maxFeePerGas": hex(fees["maxFeePerGas"]),
+        "maxPriorityFeePerGas": hex(fees["maxPriorityFeePerGas"]),
+    }
+    response = w3.provider.make_request("eth_estimateGas", [call])
+    if "error" in response:
+        err = response["error"]
+        data = err.get("data") or ""
+        if isinstance(data, dict):
+            data = data.get("data", "")
+        selector = data[2:10] if isinstance(data, str) and data.startswith("0x") else ""
+        sig, text = ERROR_BY_SELECTOR.get(selector, (None, None))
+        reason = f"{text} ({sig})" if sig else err.get("message", str(err))
+        raise Refused(f"transaction {tx.index + 1} of the batch would revert: {reason}")
+    return int(response["result"], 16)
+
+
+def check_fees(w3: Web3, policy: FeePolicy) -> dict:
+    """Current fees, or Refused when blob space is pricier than the configured ceiling."""
+    fees = current_fees(w3, policy)
+    if fees["blobBaseFee"] > policy.max_blob_fee_gwei * GWEI:
+        raise Refused(f"the blob base fee is {fees['blobBaseFee'] / GWEI:.3f} gwei, above the configured limit of {policy.max_blob_fee_gwei} gwei; wait for a quieter period or raise upload.max_blob_fee_gwei")
+    return fees
+
+
+def preflight(w3: Web3, contract, sender: str, policy: FeePolicy, first: PlannedTx, blobs_per_transaction: list[int], *, simulate_call=None) -> dict:
+    """Everything that can be known about sending a batch without sending it: the fees are
+    under the configured limit, the batch's first transaction would be accepted from
+    `sender`, and that wallet covers the most the batch can cost. Returns the figures; raises
+    Refused with a sentence for the maintainer otherwise.
+
+    It needs neither a journal nor a key, only the first transaction (`first`) and how many
+    blobs each transaction of the batch carries. The dry run before sending uses it, and so
+    does the look a run takes before it shows its summary, so both state the same cost.
+    """
+    fees = check_fees(w3, policy)
+    balance = w3.eth.get_balance(sender)
+
+    def max_cost_for(gas_limit: int) -> int:
+        return sum(gas_limit * fees["maxFeePerGas"] + n * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] for n in blobs_per_transaction)
+
+    def too_poor(max_cost: int) -> Refused:
+        return Refused(f"the publisher wallet {sender} holds {balance / 10**18:.6f} ETH but the batch needs up to {max_cost / 10**18:.6f} ETH at current fees")
+
+    # A node caps a gas estimate by what the sender can pay, so an empty wallet would
+    # surface as a confusing out-of-gas message; check the balance against a nominal
+    # gas allowance first.
+    if balance < max_cost_for(NOMINAL_GAS_LIMIT):
+        raise too_poor(max_cost_for(NOMINAL_GAS_LIMIT))
+    gas = simulate_call(first, fees) if simulate_call is not None else simulate(w3, contract, sender, first, fees)
+    max_cost = max_cost_for(_gas_limit(gas))
+    likely_cost = sum(gas * fees["baseFeePerGas"] + n * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] for n in blobs_per_transaction)
+    if balance < max_cost:
+        raise too_poor(max_cost)
+    return {"fees": fees, "transactions": len(blobs_per_transaction), "blobs": sum(blobs_per_transaction), "gasEstimate": gas, "maxCostWei": max_cost, "likelyCostWei": likely_cost, "balanceWei": balance}
 
 
 def _gas_limit(estimate: int) -> int:

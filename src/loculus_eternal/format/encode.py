@@ -25,6 +25,7 @@ from typing import Callable, Iterable
 import zstandard
 
 from loculus_eternal.format import canonical
+from loculus_eternal.human import human_size
 from loculus_eternal.format.chunks import BLOB_DATA_BYTES, blobs_needed, last_blob_chunk_count, pack_blobs
 from loculus_eternal.format.records import (
     CODEC_RAW,
@@ -168,6 +169,8 @@ class EncodedBatch:
     entry_count: int
     withdrawn_count: int = 0
     reinstated_count: int = 0
+    uncompressed_bytes: int = 0   # the batch body as records, before the codec
+    compressed_bytes: int = 0     # the batch body as it is written into the stream
 
 
 # previous_entries(organism, reinstated) yields (accession, version, payload) in
@@ -289,7 +292,7 @@ class StreamEncoder:
         sink.close()
         compressed_bytes = compressed.getvalue()
         body_digest = sha256(compressed_bytes)
-        self.progress(f"encoding: body is {uncompressed_length:,} bytes, {len(compressed_bytes):,} compressed; computing cumulative digests")
+        self.progress(f"encoding: body is {human_size(uncompressed_length)}, {human_size(len(compressed_bytes))} compressed; computing cumulative digests")
 
         # Pass 3: cumulative artifact digests by merging previous entries with the new run,
         # leaving out anything that is withdrawn once this batch is applied. The entries this
@@ -400,6 +403,8 @@ class StreamEncoder:
             entry_count=count,
             withdrawn_count=sum(len(v) for accs in withdraw_now.values() for v in accs.values()),
             reinstated_count=sum(len(v) for accs in reinstate_now.values() for v in accs.values()),
+            uncompressed_bytes=uncompressed_length,
+            compressed_bytes=len(compressed_bytes),
         )
 
 

@@ -250,11 +250,20 @@ def test_I8_refused_batch_takes_its_snapshot_and_blob_objects_back(world):
     anvil = world["anvil"]
     a, b = world["kubo"]
     saved = anvil.w3.eth.get_balance(anvil.publisher.address)
-    anvil.fund(anvil.publisher.address, 10**12)
-    try:
-        report = uploader(world).run()
-    finally:
-        anvil.fund(anvil.publisher.address, saved)
+    up = uploader(world)
+    real_dry_run = up.submitter.dry_run
+
+    def drained_meanwhile(journal):
+        # The wallet covered the batch when the run first looked, before the snapshot was
+        # built, and no longer does at the dry run that comes right before sending.
+        anvil.fund(anvil.publisher.address, 10**12)
+        try:
+            return real_dry_run(journal)
+        finally:
+            anvil.fund(anvil.publisher.address, saved)
+
+    up.submitter.dry_run = drained_meanwhile
+    report = up.run()
     assert report.outcome == "refused" and "holds" in report.message
     assert report.ipfs["snapshotCid"], "the snapshot was built and added before the refusal"
     orphan = report.ipfs["snapshotCid"]

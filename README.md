@@ -73,7 +73,7 @@ Then, with the publisher private key in the environment:
 
 ```
 export LOCULUS_ETERNAL_PUBLISHER_PRIVATE_KEY=0x…
-uv run loculus-eternal upload --config loculus-eternal.toml --check   # Check what would be published and the cost.  Nothing gets uploaded
+uv run loculus-eternal upload --config loculus-eternal.toml --dry-run   # See what would be published, its size, cost and time.  Nothing gets uploaded
 uv run loculus-eternal upload --config loculus-eternal.toml           # publish it
 ```
 
@@ -120,7 +120,8 @@ For anyone to run. No key and no account. You need git, [uv](https://docs.astral
 the dataset's contract address, and an Ethereum RPC endpoint:
 
 ```
-git clone https://github.com/JossDuff/loculus-eternal && cd loculus-eternal
+git clone https://github.com/JossDuff/loculus-eternal
+cd loculus-eternal
 uv run loculus-eternal recover 0x… --rpc https://ethereum.publicnode.com
 ```
 
