@@ -164,27 +164,69 @@ def test_U2_genesis_then_noop_then_delta_published_from_chain_derived_set(world,
     assert [b["batch"] for b in report.decode["batches"]] == [0, 1]
 
 
-def test_U3_a_dry_run_sends_nothing_and_goes_as_far_as_the_key_allows(world):
+def test_U3_a_dry_run_sends_nothing_and_leaves_nothing_with_or_without_the_key(world):
     anvil = world["anvil"]
-    data_dir = Path(configuration.load(world["cfg_path"]).upload.data_dir)
-    # Without the key: the batch is planned and costed, and the run says what it left out.
+    cfg = configuration.load(world["cfg_path"])
+    data_dir = Path(cfg.upload.data_dir)
+
+    def nothing_left_or_sent():
+        assert anvil.contract.functions.blobCount().call() == 0
+        assert not (data_dir / "journal.json").exists() and not (data_dir / "abandoned").exists() and not (data_dir / "pending").exists()
+        assert not list(data_dir.rglob("*.blob"))
+
+    # Without the key: the first transaction is simulated as the contract's publisher, whose
+    # wallet is the one checked, and the run says that this is what it did.
     lines = []
-    planned = Uploader(configuration.load(world["cfg_path"]), log=lines.append).run("dry-run")
-    assert planned.outcome == "planned" and planned.new_entries == 3 and planned.batch["blobs"] >= 1
-    assert planned.dry_run["likelyCostWei"] <= planned.dry_run["maxCostWei"] and "gasEstimate" not in planned.dry_run
-    assert any("publisher key is not in the environment, so no transaction was simulated" in l for l in lines)
-    assert lines[-1] == "RESULT: DRY RUN WITHOUT THE KEY (batch planned, nothing simulated or sent)"
+    keyless = Uploader(cfg, log=lines.append).run("dry-run")
+    assert keyless.outcome == "dry-run-ok" and keyless.new_entries == 3 and keyless.batch["blobs"] >= 1
+    assert keyless.dry_run["gasEstimate"] > 21000 and keyless.dry_run["likelyCostWei"] <= keyless.dry_run["maxCostWei"] <= keyless.dry_run["balanceWei"]
+    assert keyless.dry_run["balanceWei"] == anvil.w3.eth.get_balance(anvil.publisher.address)
+    assert any(f"simulated as the contract's publisher {anvil.publisher.address}" in l and "with the key, a dry run also checks that the key is that publisher's" in l for l in lines)
+    assert lines[-1] == "RESULT: DRY RUN PASSED (nothing sent)"
+    nothing_left_or_sent()
+    # With the key: the same checks as that key, and still nothing written.
+    lines = []
+    keyed = Uploader(cfg, account=anvil.publisher, log=lines.append, poll_interval=0.1).run("dry-run")
+    assert keyed.outcome == "dry-run-ok" and keyed.dry_run["transactions"] == 1 and keyed.dry_run["gasEstimate"] == keyless.dry_run["gasEstimate"]
+    assert not any("simulated as the contract's publisher" in l for l in lines)
+    nothing_left_or_sent()
+    # A key that is not the publisher's is told so, which the keyless form cannot find out.
+    stranger = dev_account(5)
+    anvil.fund(stranger.address, 10**20)
+    wrong = Uploader(cfg, account=stranger, log=lambda s: None, poll_interval=0.1).run("dry-run")
+    assert wrong.outcome == "refused" and "not the contract's publisher" in wrong.message
+    nothing_left_or_sent()
+
+
+def test_U3_an_interrupted_dry_run_leaves_nothing_a_publish_could_send_unasked(world, monkeypatch):
+    from loculus_eternal.upload import upload as upload_module
+
+    anvil = world["anvil"]
+    real = upload_module.preflight
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("stopped in the middle of the simulation")
+
+    monkeypatch.setattr(upload_module, "preflight", interrupted)
+    up = uploader(world)
+    with pytest.raises(KeyboardInterrupt):
+        up.run("dry-run")
+    assert not (up.data_dir / "journal.json").exists() and not (up.data_dir / "pending").exists()
+    monkeypatch.setattr(upload_module, "preflight", real)
+    # The publish that follows has no batch to resume: it plans its own and asks about it.
+    asked = []
+    declined = uploader(world).run(confirm=lambda text: asked.append(text) or False)
+    assert declined.outcome == "declined" and len(asked) == 1 and declined.transactions == []
     assert anvil.contract.functions.blobCount().call() == 0
-    assert not (data_dir / "journal.json").exists() and not (data_dir / "abandoned").exists() and not (data_dir / "pending").exists()
-    assert list((data_dir / "reports").glob("*-dry-run-planned.json"))
-    # With the key: the same, and every transaction is simulated against the contract.
-    dry = uploader(world).run("dry-run")
-    assert dry.outcome == "dry-run-ok" and dry.dry_run["transactions"] == 1
-    assert dry.dry_run["gasEstimate"] > 21000 and dry.dry_run["maxCostWei"] <= dry.dry_run["balanceWei"]
-    assert anvil.contract.functions.blobCount().call() == 0
-    assert not (data_dir / "journal.json").exists() and list((data_dir / "abandoned").glob("*.json"))
-    # A dry run sent nothing, so its blob files are not kept: only the journal of what it planned.
-    assert not list((data_dir / "abandoned").rglob("*.blob"))
+
+
+def test_U3_an_unknown_mode_is_refused_before_anything_happens(world):
+    anvil = world["anvil"]
+    # The retired mode name, or a typo, must not slip past the checks and publish.
+    for mode in ("check", "dryrun", ""):
+        with pytest.raises(ValueError, match="unknown upload mode"):
+            uploader(world).run(mode)
+    assert anvil.contract.functions.blobCount().call() == 0 and world["backend"].requests == []
 
 
 def test_U4_dry_run_refuses_wrong_key_low_balance_and_high_blob_fee(world):
@@ -348,9 +390,9 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
     # Without the key a dry run still plans the batch and estimates its cost.
     keyless = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env)
     assert keyless.returncode == 0, keyless.stderr
-    assert "planned batch 0" in keyless.stdout and "estimated cost" in keyless.stdout and "RESULT: DRY RUN WITHOUT THE KEY" in keyless.stdout
+    assert "planned batch 0" in keyless.stdout and "estimated cost" in keyless.stdout and "RESULT: DRY RUN PASSED" in keyless.stdout and "simulated as the contract's publisher" in keyless.stdout
     env[configuration.PUBLISHER_KEY_ENV] = world["anvil"].publisher.key.hex()
-    # With it, the same flag also simulates the transactions. The two older spellings are gone.
+    # With it, the same flag checks as that key. The two older spellings are gone.
     checked = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env)
     assert checked.returncode == 0 and "planned batch 0" in checked.stdout and "estimated cost" in checked.stdout and "RESULT: DRY RUN PASSED" in checked.stdout
     for retired in ("--check", "--with-key"):
@@ -369,12 +411,17 @@ def test_U10_command_line_publishes_with_the_key_from_the_environment(world, tmp
 def test_U22_the_log_names_the_backend_and_the_contract_a_run_works_with(world):
     lines = []
     checked = Uploader(configuration.load(world["cfg_path"]), log=lines.append).run("dry-run")
-    assert checked.outcome == "planned"
+    assert checked.outcome == "dry-run-ok"
     # Which database is read and which contract is written to are said in the run's own
     # output, so a log read later answers both without the config beside it.
     assert f"backend at {world['backend'].url} serves 2 organisms: mpox, zika" in lines
     assert f"reading the contract at {world['anvil'].contract.address} and the published stream" in lines
     assert lines.index(f"backend at {world['backend'].url} serves 2 organisms: mpox, zika") < lines.index(f"reading the contract at {world['anvil'].contract.address} and the published stream")
+    # Once something is published, reading it back is announced batch by batch, as in a recovery.
+    register_in_archive(world, uploader(world).run())
+    lines.clear()
+    Uploader(configuration.load(world["cfg_path"]), log=lines.append).run("dry-run")
+    assert any(l.startswith("decoding batch 0: its body is ") for l in lines) and any(l.startswith("batch 0 verified: 3 entries") for l in lines)
 
 
 def test_U28_a_run_ends_with_a_summary_of_size_cost_and_time(world):
@@ -397,13 +444,18 @@ def test_U28_a_run_ends_with_a_summary_of_size_cost_and_time(world):
     lines = []
     checked = Uploader(cfg, log=lines.append).run("dry-run")
     start, rows = summary(lines, "planned")
-    assert lines.index(next(l for l in lines if l.startswith("planned batch 0"))) < start and lines[-1].startswith("RESULT: DRY RUN WITHOUT THE KEY")
+    assert lines.index(next(l for l in lines if l.startswith("planned batch 0"))) < start and lines[-1].startswith("RESULT: DRY RUN PASSED")
     assert list(rows) == ["entries", "size", "transactions", "estimated cost", "estimated time"]
     assert rows["entries"] == "6 new, 0 withdrawn, 0 reinstated"
     b = checked.batch
     assert b["blobs"] == 4 and b["blobBytes"] == 4 * 131_072 and 0 < b["compressedBytes"] < b["uncompressedBytes"]
     assert rows["size"] == f"{human_size(b['uncompressedBytes'])} of records, {human_size(b['compressedBytes'])} compressed, in 4 blob(s) that take 524 kB on chain"
-    assert rows["transactions"] == "2" and rows["estimated cost"].endswith("gwei)") and "ETH at current fees, at most" in rows["estimated cost"]
+    # The cost is the simulation's own: what the summary says is what a publish would reserve.
+    look = checked.dry_run
+    assert rows["transactions"] == "2" and look["gasEstimate"] > 21000
+    assert rows["estimated cost"].startswith(f"{look['likelyCostWei'] / 10**18:.6f} ETH at current fees, at most {look['maxCostWei'] / 10**18:.6f} ETH (blob base fee ")
+    assert look["maxCostWei"] == sum(_gas_limit(look["gasEstimate"]) * look["fees"]["maxFeePerGas"] + n * 131_072 * look["fees"]["maxFeePerBlobGas"] for n in (2, 2))
+    assert rows["estimated cost"].endswith(f"; the publisher's wallet {anvil.publisher.address} holds {look['balanceWei'] / 10**18:.6f} ETH")
     # One transaction per block of one second here, then two and a half epochs to finality.
     assert b["estimatedSeconds"] == 2 + 80 and rows["estimated time"] == "about 82 seconds: 2 seconds to include 2 transaction(s) at about one per block, then 80 seconds until the last is final"
 
@@ -486,12 +538,17 @@ def test_U24_publish_states_the_batch_and_stops_on_no_before_anything_is_sent(wo
 
     def no(text):
         asked.append(text)
+        time.sleep(1.5)  # someone reading the numbers before answering
         return False
 
     cfg = configuration.load(world["cfg_path"])
     up = Uploader(cfg, account=anvil.publisher, log=lines.append, poll_interval=0.1)
+    began = time.time()
     declined = up.run(confirm=no)
+    elapsed = time.time() - began
     assert declined.outcome == "declined" and "nothing of batch 0 was sent" in declined.message
+    # The time spent waiting for the answer is recorded apart and is not the run's own.
+    assert 1.5 <= declined.waited_seconds <= elapsed and declined.duration_seconds <= elapsed - 1.4
     assert lines[-1].startswith("RESULT: STOPPED AT THE CONFIRMATION (nothing sent)")
     assert len(asked) == 1
     text = asked[0].splitlines()
@@ -507,7 +564,7 @@ def test_U24_publish_states_the_batch_and_stops_on_no_before_anything_is_sent(wo
     def never(text):
         raise AssertionError("nothing is about to be sent, so nobody must be asked")
 
-    assert Uploader(cfg, log=lambda s: None).run("dry-run", confirm=never).outcome == "planned"
+    assert Uploader(cfg, log=lambda s: None).run("dry-run", confirm=never).outcome == "dry-run-ok"
     assert uploader(world).run("dry-run", confirm=never).outcome == "dry-run-ok"
 
     published = uploader(world).run(confirm=lambda text: True)
@@ -738,7 +795,7 @@ def test_U14_published_entries_missing_from_the_copy_are_withdrawn(world, tmp_pa
     world["backend"].set_lines("zika", [released_line("zika", "PP_2", 1), released_line("zika", "PP_3", 1, open_terms=False)])
     # A check says what a publish would do, and sends nothing.
     checked = Uploader(configuration.load(world["cfg_path"]), log=lambda s: None).run("dry-run")
-    assert checked.outcome == "planned" and checked.withdrawn == {"zika": ["PP_1.1"]} and checked.batch["withdrawn"] == 1
+    assert checked.outcome == "dry-run-ok" and checked.withdrawn == {"zika": ["PP_1.1"]} and checked.batch["withdrawn"] == 1
     assert anvil.contract.functions.blobCount().call() == first.batch["blobCountAfter"]
 
     second = uploader(world).run()
@@ -838,7 +895,7 @@ def test_U26_entries_wait_for_the_minimum_age_and_are_published_once_old_enough(
         return report, [json.loads(l)["metadata"]["accessionVersion"] for l in (tmp_path / "rec-out" / "zika.ndjson").read_text().splitlines()]
 
     logged = []
-    assert Uploader(configuration.load(cfg), log=logged.append, clock=lambda: now).run("dry-run").outcome == "planned"
+    assert Uploader(configuration.load(cfg), log=logged.append, clock=lambda: now).run("dry-run").outcome == "dry-run-ok"
     assert "  entries         2 new, 0 withdrawn, 0 reinstated; 2 held back as submitted less than 90 days ago" in logged
     asked = []
     first, recovered = upload(now, asked)

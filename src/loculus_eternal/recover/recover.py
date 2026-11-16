@@ -164,8 +164,9 @@ class Recovery:
                 with open(path, "wb", buffering=1 << 20) as f:
                     digests[org] = decoded.materialise_to(org, f)
                 matches = last.get(org, {}).get("artifactSha256") == digests[org]
-                self.cfg.log(f"[{n}/{len(organisms)}] wrote {path.name}: {decoded.count(org):,} entries, " + ("matching the publisher's digest" if matches else "which does NOT match the publisher's digest"))
-                files[org] = {"path": str(path), "entries": decoded.count(org), "withdrawn": sum(len(v) for v in withdrawn.get(org, {}).values()), "sha256": digests[org], "matchesManifest": last.get(org, {}).get("artifactSha256") == digests[org]}
+                entries = decoded.count(org)
+                self.cfg.log(f"[{n}/{len(organisms)}] wrote {path.name}: {entries:,} entries, " + ("matching the publisher's digest" if matches else "which does NOT match the publisher's digest"))
+                files[org] = {"path": str(path), "entries": entries, "withdrawn": sum(len(v) for v in withdrawn.get(org, {}).values()), "sha256": digests[org], "matchesManifest": matches}
             verified = {o: last.get(o, {}).get("artifactSha256") == digests.get(o) for o in sorted(set(last) | set(digests))}
         report = {
             "header": None if decoded.header is None else {"chainId": decoded.header.chain_id, "contract": "0x" + decoded.header.contract.hex(), "schemaId": decoded.header.schema_id, "version": f"{decoded.header.major}.{decoded.header.minor}"},

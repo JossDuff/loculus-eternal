@@ -134,7 +134,9 @@ uv run loculus-eternal recover 0x… --rpc https://your-ethereum-rpc   # anyone 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const n = v => v === null || v === undefined ? "—" : Number(v).toLocaleString();
-  const size = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b >= 1e3 ? `${Math.round(b / 1e3)} kB` : `${b} bytes`;
+  // The unit is chosen after rounding, so a count just under a thousand of one unit reads
+  // as one of the next. The upload and recovery commands write sizes by the same rule.
+  const size = b => b < 1e3 ? (b === 1 ? "1 byte" : `${b} bytes`) : Math.round(b / 1e3) < 1000 ? `${Math.round(b / 1e3)} kB` : Math.round(b / 1e6) < 1000 ? `${Math.round(b / 1e6)} MB` : `${(b / 1e9).toFixed(1)} GB`;
   const ago = s => s === null || s === undefined ? "—" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s/60)} min ago` : s < 172800 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} days ago`;
   const dl = rows => `<dl>${rows.filter(r => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const mono = v => `<span class="mono">${esc(v)}</span>`;

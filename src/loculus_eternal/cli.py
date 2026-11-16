@@ -210,20 +210,18 @@ def cmd_upload(args: argparse.Namespace) -> int:
     confirm = None if args.yes or mode != "publish" else confirm_at_terminal
     try:
         # Construction already talks to the endpoint (for the chain id), so it is inside the try.
-        # A dry run goes as far as the key lets it: without the key it plans the batch and
-        # estimates its cost, which is all a machine that only watches for pending entries
-        # needs and which lets it do so without holding the key that can publish.
-        if mode == "dry-run" and not os.environ.get(configuration.PUBLISHER_KEY_ENV):
-            uploader = Uploader(cfg)
-        else:
-            uploader = Uploader.with_key(cfg, configuration.publisher_key())
+        # A dry run needs no key: a simulation needs no signature, so without one it is run
+        # as the contract's publisher. That lets a machine that only watches for pending
+        # entries do so without holding the key that can publish.
+        key = configuration.publisher_key(required=mode != "dry-run")
+        uploader = Uploader.with_key(cfg, key) if key else Uploader(cfg)
         report = uploader.run(mode, confirm=confirm)
     except (RequestException, ChainError) as e:
         # The endpoint stayed down or rate-limited through every retry. Whatever was sent is
         # in the journal; the next run resumes from it.
         print(f"the RPC endpoint failed: {e}\nnothing is lost: run the same command again to resume", file=sys.stderr)
         return 3
-    if report.outcome in ("published", "nothing-to-publish", "planned", "dry-run-ok", "resumed"):
+    if report.outcome in ("published", "nothing-to-publish", "dry-run-ok", "resumed"):
         return 0
     if report.outcome == "failed":
         print(f"publishing stopped: {report.message}", file=sys.stderr)
@@ -266,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
 
     up = sub.add_parser("upload", help="make the published record hold exactly the eligible entries of the database, as one batch; a no-op when it already does")
     up.add_argument("--config", type=Path, required=True, help="TOML config file (see the README)")
-    up.add_argument("--dry-run", action="store_true", help="send nothing: plan the batch and report what it would change, its size, cost and time. With the publisher key in the environment, also simulate every transaction and check the key, the fees and the wallet's balance")
+    up.add_argument("--dry-run", action="store_true", help="send nothing and leave nothing behind: plan the batch, simulate its first transaction, check the fees and the wallet's balance, and report what the batch would change, its size, cost and time. Works without the publisher key; with it, also checks that the key is the contract's publisher")
     up.add_argument("--yes", action="store_true", help="answer yes in advance to the question a publish asks before it sends its batch (see --dry-run first for what the batch would do); needed when there is no terminal")
     up.set_defaults(func=cmd_upload)
 

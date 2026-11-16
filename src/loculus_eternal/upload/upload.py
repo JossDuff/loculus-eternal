@@ -34,14 +34,14 @@ from loculus_eternal.ipfs import IpfsError, KuboClient
 from loculus_eternal.rpc import connect
 from loculus_eternal.upload.published import PublishedView, load_published_view
 from loculus_eternal.upload.snapshot import build_and_publish, unpin_orphans
-from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, NOMINAL_GAS_LIMIT, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, current_fees
+from loculus_eternal.upload.submitter import BLOB_GAS_PER_BLOB, GWEI, FeePolicy, Journal, Refused, RevertedOnChain, SubmitError, Submitter, planned_transaction, preflight, publish_contract
 from loculus_eternal.upload.sync import BackendClient, SyncError, SyncStats, find_changes, iter_new_entries
 
 
 @dataclass
 class UploadReport:
     mode: str
-    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "planned", "dry-run-ok", "resumed"
+    outcome: str                         # "published", "nothing-to-publish", "refused", "declined", "dry-run-ok", "resumed"
     chain: dict = field(default_factory=dict)
     sync: list[dict] = field(default_factory=list)
     new_entries: int = 0
@@ -57,7 +57,8 @@ class UploadReport:
     dry_run: dict | None = None
     transactions: list[dict] = field(default_factory=list)
     message: str = ""
-    duration_seconds: float = 0.0
+    duration_seconds: float = 0.0        # the work the run did; time spent waiting at the question is left out
+    waited_seconds: float = 0.0          # how long the question waited for its answer
 
     def to_json(self) -> dict:
         return self.__dict__
@@ -241,16 +242,21 @@ class Uploader:
     # --- the run --------------------------------------------------------------------------------
 
     def run(self, mode: str = "publish", confirm: Callable[[str], bool] | None = None) -> UploadReport:
-        """mode: "publish" (default) or "dry-run", which sends nothing. A dry run goes as far
-        as it can: built with the publisher's account it plans the batch, simulates every
-        transaction and checks the key, the fees and the balance; built without one it plans
-        the batch and estimates its cost, and says the simulation was left out.
+        """mode: "publish" (default) or "dry-run", which sends nothing and writes no journal.
+        A dry run plans the batch, simulates its first transaction and checks the fees and
+        the balance. With the publisher's account it does so as that account, which also
+        shows whether the key is the contract's publisher; without one it does so as the
+        contract's publisher, and says so.
 
         `confirm` is asked once a publish has planned its batch and before anything of it is
         sent: it is handed a few lines naming the database, the contract, and how many
         entries the batch adds, withdraws and reinstates, and the run stops unless it returns
         True. It raises NobodyToAsk when it cannot put the question to anyone, which also
         stops the run. None means nobody is asked."""
+        if mode not in ("publish", "dry-run"):
+            # Every later step asks "is this a publish?" or "is this a dry run?", so a name
+            # that is neither would pass each test and end up sending. Refuse it here.
+            raise ValueError(f"unknown upload mode {mode!r}: it is \"publish\" or \"dry-run\"")
         started = time.time()
         report = UploadReport(mode=mode, outcome="")
         self._confirm = confirm
@@ -338,27 +344,37 @@ class Uploader:
         report.batch.update({"uncompressedBytes": batch.uncompressed_bytes, "compressedBytes": batch.compressed_bytes, "blobBytes": len(batch.blobs) * BLOB_BYTES, "estimatedSeconds": round(to_include + to_finality)})
         self.log(f"planned batch {batch.batch}: {batch.entry_count} entries" + (f", {batch.withdrawn_count} withdrawal(s)" if batch.withdrawn_count else "") + (f", {batch.reinstated_count} reinstatement(s)" if batch.reinstated_count else "") + f" in {len(batch.blobs)} blob(s), {report.batch['transactions']} transaction(s)")
 
-        # What the batch would cost at this moment, before anything is simulated: shown with
-        # the summary so the size, the cost and the time are seen together, and before a
-        # publish asks its question.
-        fees = current_fees(self.w3, self.policy)
-        likely = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["blobBaseFee"] + report.batch["transactions"] * 60_000 * fees["baseFeePerGas"]
-        at_most = len(batch.blobs) * BLOB_GAS_PER_BLOB * fees["maxFeePerBlobGas"] + report.batch["transactions"] * NOMINAL_GAS_LIMIT * fees["maxFeePerGas"]
-        cost = f"{likely / 10**18:.6f} ETH at current fees, at most {at_most / 10**18:.6f} ETH (blob base fee {fees['blobBaseFee'] / GWEI:.4f} gwei)"
-        balance = self.w3.eth.get_balance(self.account.address) if self.account is not None else None
-        if balance is not None:
-            cost += f"; wallet {self.account.address} holds {balance / 10**18:.6f} ETH"
-        time_line = f"about {human_duration(to_include + to_finality)}: {human_duration(to_include)} to include {report.batch['transactions']} transaction(s) at about one per block, then {human_duration(to_finality)} until the last is final"
-        self._summarise(batch, stats, "planned", [("transactions", f"{report.batch['transactions']}"), ("estimated cost", cost), ("estimated time", time_line)])
+        if mode == "publish" and self.submitter is None:
+            raise SystemExit("configuration error: publishing needs the publisher private key")
+        # A first look at sending the batch, before the summary: the fees are under the
+        # limit, the first transaction would be accepted, and the wallet covers the most the
+        # batch can cost. It needs no key, because a simulation needs no signature: without
+        # one it is run as the contract's publisher. Nothing is written for it, so a dry run
+        # can be interrupted at any point and leave nothing a later publish could pick up.
+        transactions = report.batch["transactions"]
+        per_tx = self.policy.max_blobs_per_transaction
+        sender = self.account.address if self.account is not None else view.state.publisher
+        rows = [("transactions", f"{transactions}")]
+        time_row = ("estimated time", f"about {human_duration(to_include + to_finality)}: {human_duration(to_include)} to include {transactions} transaction(s) at about one per block, then {human_duration(to_finality)} until the last is final")
+        try:
+            first = planned_transaction(batch, batch.blobs, view.state.app_pointer, per_tx, 0)
+            look = preflight(self.w3, publish_contract(self.w3, self.cfg.chain.contract), sender, self.policy, first, [len(batch.blobs[i : i + per_tx]) for i in range(0, len(batch.blobs), per_tx)])
+        except Refused as e:
+            self._summarise(batch, stats, "planned", rows + [time_row])
+            report.outcome = "refused"
+            report.message = str(e)
+            self.log(f"refused: {e}")
+            return self._done(report, started)
+        whose = "wallet" if self.account is not None else "the publisher's wallet"
+        cost = f"{look['likelyCostWei'] / 10**18:.6f} ETH at current fees, at most {look['maxCostWei'] / 10**18:.6f} ETH (blob base fee {look['fees']['blobBaseFee'] / GWEI:.4f} gwei); {whose} {sender} holds {look['balanceWei'] / 10**18:.6f} ETH"
+        self._summarise(batch, stats, "planned", rows + [("estimated cost", cost), time_row])
 
-        if self.submitter is None:
-            if mode != "dry-run":
-                raise SystemExit("configuration error: publishing needs the publisher private key")
-            # A dry run without the key ends here: the batch is planned and costed, and the
-            # part that needs the key is named, so nobody takes this for a full rehearsal.
-            report.dry_run = {"fees": fees, "likelyCostWei": likely, "maxCostWei": at_most}
-            self.log("the publisher key is not in the environment, so no transaction was simulated: with the key, a dry run also checks that the key is the contract's publisher, that the wallet covers the cost, and that every transaction would be accepted")
-            report.outcome = "planned"
+        if mode == "dry-run":
+            report.dry_run = look
+            self.log(f"dry run passed: up to {look['maxCostWei'] / 10**18:.6f} ETH, likely {look['likelyCostWei'] / 10**18:.6f} ETH, {whose} holds {look['balanceWei'] / 10**18:.6f} ETH")
+            if self.account is None:
+                self.log(f"the publisher key is not in the environment, so the first transaction was simulated as the contract's publisher {sender}; with the key, a dry run also checks that the key is that publisher's")
+            report.outcome = "dry-run-ok"
             return self._done(report, started)
         # The maintainer confirms the batch before anything of it leaves this machine: which
         # database it was read from, where it goes, and how many entries it adds, withdraws
@@ -368,10 +384,13 @@ class Uploader:
         # it confirmed, and its transactions could not wait on a person. A dry run sends
         # nothing and asks nothing.
         if mode == "publish" and self._confirm is not None:
+            asked = time.time()
             try:
                 stopped = None if self._confirm(self._confirmation_text(batch, stats)) else ("declined", "stopped at the confirmation")
             except NobodyToAsk as e:
                 stopped = ("refused", str(e))
+            finally:
+                report.waited_seconds = round(time.time() - asked, 2)
             if stopped:
                 report.outcome = "resumed" if report.transactions else stopped[0]
                 report.message = ("the interrupted batch was finished; " if report.transactions else "") + f"{stopped[1]}: nothing of batch {batch.batch} was sent"
@@ -421,10 +440,6 @@ class Uploader:
             self._abandon(journal)
             return self._done(report, started)
         self.log(f"dry run passed: up to {report.dry_run['maxCostWei'] / 10**18:.6f} ETH, likely {report.dry_run['likelyCostWei'] / 10**18:.6f} ETH, wallet holds {report.dry_run['balanceWei'] / 10**18:.6f} ETH")
-        if mode == "dry-run":
-            report.outcome = "dry-run-ok"
-            self._abandon(journal)
-            return self._done(report, started)
 
         sending_started = time.time()
         try:
@@ -452,7 +467,7 @@ class Uploader:
         self._summarise(batch, stats, "published", [
             ("transactions", f"{len(sent)}" + (f", in blocks {min(blocks):,} to {max(blocks):,}" if blocks else "")),
             ("cost", f"{paid / 10**18:.6f} ETH paid"),
-            ("time", f"{human_duration(time.time() - started)} in all; {human_duration(sending_seconds)} from the first transaction sent until the last was final"),
+            ("time", f"{human_duration(time.time() - started - report.waited_seconds)} in all; {human_duration(sending_seconds)} from the first transaction sent until the last was final"),
         ])
         report.outcome = "published"
         report.message = f"published batch {batch.batch}: {batch.entry_count} entries in {len(batch.blobs)} blob(s); contract now holds {batch.blob_count_after} blobs" + (f", {view.torn_blobs} of them from an abandoned upload that readers skip" if view.torn_blobs else "") + (f"; snapshot {snap.snapshot_cid}" if snap and snap.snapshot_cid else "")
@@ -564,14 +579,14 @@ class Uploader:
             blobs_dir.rmdir()
 
     def _done(self, report: UploadReport, started: float) -> UploadReport:
-        report.duration_seconds = round(time.time() - started, 2)
+        # The time a run takes is the work it did, not how long it sat at the question.
+        report.duration_seconds = round(time.time() - started - report.waited_seconds, 2)
         # The last line of every run says plainly how it ended, in words a maintainer who
         # only reads the end of a log can act on.
         verdicts = {
             "published": "SUCCESS",
             "resumed": "SUCCESS",
             "nothing-to-publish": "NOTHING TO DO",
-            "planned": "DRY RUN WITHOUT THE KEY (batch planned, nothing simulated or sent)",
             "dry-run-ok": "DRY RUN PASSED (nothing sent)",
             "refused": "REFUSED (nothing sent)",
             "declined": "STOPPED AT THE CONFIRMATION (nothing sent)",

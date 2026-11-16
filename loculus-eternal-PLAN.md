@@ -445,7 +445,7 @@ vectors to byte-identical NDJSON with every source but one disabled.
 
 **Upload command.** Published-set acquisition from the chain and stream, sync from a Loculus
 backend (recorded fixtures, and a local Loculus dev instance if available), eligibility
-filter, batch planner, dry-run, journaled submitter with finality wait, run report, `--dry-run`,
+filter, batch planner, journaled submitter with finality wait, run report, `--dry-run`,
 runbook. Round-trip test: upload on anvil → recover → digests match. Deliverable:
 `loculus-eternal upload` publishes a real delta on anvil end-to-end.
 
@@ -510,10 +510,14 @@ stream by roughly a full dataset each time.
 **One dry run — DECIDED 2026-11-16: `--check` is folded into `--dry-run`.** The two
 overlapped: both planned the batch and sent nothing, and only the dry run simulated the
 transactions. What `--check` alone offered was running without the publisher key, which a
-machine that only watches for pending entries should not have to hold. So `--dry-run` goes
-as far as the key allows: with the key in the environment it simulates every transaction
-and checks the key, the fees and the balance; without it, it plans the batch, estimates its
-cost, and says the simulation was left out. `--check` and `--with-key` are removed.
+machine that only watches for pending entries should not have to hold. A simulation needs
+no signature, so `--dry-run` needs no key either: it plans the batch, simulates its first
+transaction, and checks the fees and the wallet's balance. With the key in the environment
+it does so as that key, which also shows whether the key is the contract's publisher;
+without it, it does so as the contract's publisher and says so. A dry run writes no journal
+and no blob files, so one that is interrupted leaves nothing a later publish could send
+without asking, and its cost is the simulation's own, the same figure a publish reserves.
+`--check` and `--with-key` are removed.
 
 **Recovery in one command — DECIDED 2026-11-16: `recover <contract address> --rpc <url>`,
 run from a clone.** Recovery is for anyone, and a config file to write first was the largest
