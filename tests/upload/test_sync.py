@@ -312,3 +312,25 @@ def test_U23_the_shipped_example_config_uses_only_known_keys(monkeypatch):
     monkeypatch.setenv("RPC_API", "http://127.0.0.1:1")
     example = Path(__file__).resolve().parents[2] / "config" / "sepolia.example.toml"
     assert configuration.load(example).backend.min_age_days == 0
+
+
+@pytest.mark.parametrize("name", ["PP_1.2", "PP_1.01", "PP_2.1", "PP_1", ""])
+def test_U1_a_line_whose_name_is_not_its_accession_and_version_stops_the_run(backend, tmp_path, name):
+    line = released_line("zika", "PP_1", 1)
+    line["metadata"]["accessionVersion"] = name
+    backend.set_lines("zika", [released_line("zika", "PP_7", 1), line])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    # Already published or not, the line is refused: had it been let through as published,
+    # PP_1.1 would have looked absent from the feed and been withdrawn.
+    for published in (True, False):
+        with pytest.raises(SyncError, match="zika: released line names itself .* but carries accession 'PP_1' and version 1"):
+            select_new_entries("zika", feed, lambda acc, ver: published)
+
+
+def test_U1_a_version_that_is_not_a_whole_number_fails_the_name_check(backend, tmp_path):
+    line = released_line("zika", "PP_1", 1)
+    line["metadata"]["version"] = 1.0
+    backend.set_lines("zika", [line])
+    feed = BackendClient(backend.url, tmp_path / "feeds").fetch("zika")
+    with pytest.raises(SyncError, match="names itself 'PP_1.1' but carries accession 'PP_1' and version 1.0"):
+        select_new_entries("zika", feed, lambda acc, ver: True)

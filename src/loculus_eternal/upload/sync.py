@@ -133,7 +133,8 @@ def iter_lines(feed: OrganismFeed) -> Iterator[dict]:
 
 
 def check_shape(organism: str, line: dict) -> None:
-    """Refuse a line whose top-level shape differs from the pinned schema."""
+    """Refuse a line whose top-level shape differs from the pinned schema, or whose
+    accessionVersion is not its accession and version."""
     keys = tuple(line)
     if set(keys) != set(EXPECTED_TOP_LEVEL):
         unexpected = sorted(set(keys) - set(EXPECTED_TOP_LEVEL))
@@ -143,6 +144,11 @@ def check_shape(organism: str, line: dict) -> None:
     for k in ("accession", "version", "accessionVersion", "dataUseTerms"):
         if k not in m:
             raise SyncError(f"{organism}: released line lacks metadata.{k}")
+    # The stream knows an entry by its accession and version; the feed is matched against it
+    # by the accessionVersion text. If a line's text said something else, a published entry
+    # would look absent from the feed and be withdrawn, so such a line stops the run.
+    if m["accessionVersion"] != f"{m['accession']}.{m['version']}":
+        raise SyncError(f"{organism}: released line names itself {m['accessionVersion']!r} but carries accession {m['accession']!r} and version {m['version']!r}; the backend's data is inconsistent, so nothing is published from it")
 
 
 def is_eligible(line: dict) -> bool:
